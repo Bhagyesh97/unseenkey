@@ -1,0 +1,29 @@
+# Rust
+/target/
+**/target/
+Cargo.lock.bak
+
+# Node / desktop UI
+node_modules/
+dist/
+.vite/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local env and secrets — never commit real values
+.env
+.env.*
+*.uskx
+*.pem
+*.key
+
+# Build and test output
+/coverage/
+/sbom/
+*.log
