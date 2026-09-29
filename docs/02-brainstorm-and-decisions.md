@@ -44,7 +44,7 @@ Legend: **D-nn** = decision. **Open** = intentionally left open with a default.
 3. **Forward proxy (HTTP CONNECT / MITM).** Transparent but requires installing a CA certificate; fragile with pinning; heavy.
 4. **Env injection.** `usk run -- cmd`; the process gets plaintext.
 
-**Decision:** 1 and 2 are the primary mechanisms. 4 is supported as an explicitly weaker "injection mode" (off by default per secret). 3 is rejected: CA installation is a bigger attack surface than the problem it solves.
+**Decision:** 1 and 2 are the primary mechanisms. 4 is supported as an explicitly weaker "injection mode" (off by default per secret). 3 is rejected: CA installation is a bigger attack surface than the problem it solves. *(Partly superseded by D-23: an opt-in transparent mode with an ephemeral, non-installed CA.)*
 
 ## D-06 Handles will leak; make them worthless
 
@@ -125,6 +125,35 @@ SSO/SCIM, browser autofill, HSM, Kubernetes operator, WebSocket proxying, spend 
 **Decision:** Endpoint-level allow/deny, request caps and approvals are first-class in the grant UI, with provider presets ("Stripe: read-only", "OpenAI: chat only, no fine-tuning, no billing"). Without this, delegation protects the string but not the money.
 
 ---
+
+## Decisions from competitive research (2026-09-30, see [16](16-competitive-research.md))
+
+## D-23 Opt-in transparent proxy mode (partly supersedes D-05)
+
+**Context:** Infisical Agent Vault, OneCLI and Veil all use an HTTPS MITM proxy because CLIs such as `gh`, `git`, `aws` and `gcloud` ignore base-URL variables. nono offers it as an option. A reverse proxy alone leaves those tools uncovered.
+**Decision:** Add `usk run --transparent -- <cmd>` in Phase 2. It generates a **per-session CA** in memory, writes a temporary bundle (system roots + session CA) to a session directory, and points only the child process at it via `HTTPS_PROXY`, `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `GIT_SSL_CAINFO`. The CA is never installed in the OS trust store, is deleted when the session ends, and signs only for hosts that appear in some secret's `upstreams`; every other CONNECT is tunnelled untouched. Injection rules are the same as the reverse proxy (host lock, policy, egress guard, scrubbing, audit). Default remains the reverse proxy; the UI explains the trade-off. Not offered for delegation mode (the grantee controls the machine anyway; they use the local relay).
+
+## D-24 Interoperability: sources, importers, sandboxes
+
+**Decision:**
+- **Importers** (Phase 2): OS keychain, 1Password (`op` CLI), Bitwarden (`bw` / `bws`), Infisical Agent Vault, OneCLI, Veil and `pass`, in addition to `.env` and CSV/JSON exports.
+- **Unseenkey as a credential source** (Phase 3): expose a `usk://<name>` resolver and a small local endpoint so nono, OneCLI and similar proxies can fetch a *session-scoped handle* (never the plaintext) from Unseenkey; document the nono profile.
+- **Sandbox stance:** we do not build a kernel sandbox. For the "hostile agent with code execution" threat the docs recommend nono (or OS-level isolation) and `usk` integrates with it.
+- **Optional broker isolation** (Phase 2, Linux/Windows): run `uskd` as a dedicated OS user with peer-credential checks on the socket, as BlindVault does, so a same-user agent cannot read broker memory. Off by default; one-command setup.
+
+## D-25 Positioning and roadmap shifts
+
+**Context:** "Agent uses the key but never sees it" is now offered by ten projects; three are well funded. Delegation, owner-first UX, assurance and Windows are uncontested.
+**Decision:**
+- Lead with delegation ("hire a developer without handing over your keys") and leak-harmless handles; the agent proxy becomes a proof point.
+- Windows is a first-class target from Phase 1 (CI, installer, keychain via DPAPI, named pipes), not a port.
+- Agent-framework plugins and one-line setup for OpenClaw, NanoClaw, Hermes, Claude Code, Cursor, Codex and Windsurf move from Phase 4 to Phase 2.
+- Delegation user research (five agencies, five freelancers) is a gate before Phase 3 starts.
+
+## D-26 Camouflage handles
+
+**Context:** Some SDKs validate key shape (prefix or length) before sending. Veil avoids this with realistic-looking placeholders.
+**Decision:** Each preset may define a `handle_format` (e.g. OpenAI `sk-usk-<32 chars>`, Stripe `sk_live_usk_<24 chars>`). `usk handle create` uses the preset format when the preset declares it is needed; otherwise the canonical `usk_h_` form. All formats contain the `usk` marker, are registered with secret scanners, and are looked up by hash exactly like canonical handles. The canonical form remains the default.
 
 ## Open items (defaults chosen; revisit when data arrives)
 

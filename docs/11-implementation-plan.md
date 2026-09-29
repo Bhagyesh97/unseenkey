@@ -73,6 +73,13 @@ Assumes one experienced developer full-time (with AI assistance), or a two-perso
 ### M2.3 Provider adapters (Weeks 16–17)
 - AWS SigV4, OAuth2 refresh, GCP service-account token exchange.
 - More presets (community contributions via `presets/`).
+- Transparent mode with per-session ephemeral CA (D-23); tests: CA never in OS store, deleted on exit, non-upstream hosts tunnelled untouched.
+- Importers: OS keychain, 1Password, Bitwarden, Infisical Agent Vault, OneCLI, Veil, `pass` (D-24).
+- Agent-framework plugins: OpenClaw, NanoClaw, Hermes; one-line setup for Codex (D-25).
+- Camouflage handle formats per preset (D-26).
+- Optional dedicated-OS-user broker with peer-credential checks, Linux and Windows (D-24).
+
+**Gate before Phase 3:** delegation interviews with five agencies and five freelancers (D-25).
 
 **Done:** `v0.5.0` public beta; launch post; collect the 30 interviews.
 

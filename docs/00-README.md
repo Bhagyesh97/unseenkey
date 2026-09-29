@@ -23,6 +23,7 @@ Name chosen 2026-09-30 after availability checks (see D-01 in [02](02-brainstorm
 | 13 | [Operations](13-operations.md) | You are deploying, running or responding to incidents |
 | 14 | [UX flows](14-ux-flows.md) | You are designing screens or the CLI experience |
 | 15 | [Business model and go-to-market](15-business-and-gtm.md) | You are thinking about pricing, launch and growth |
+| 16 | [Competitive research](16-competitive-research.md) (internal) | You want to know who else is building this, how, and where we are ahead or behind |
 
 ## One-paragraph summary
 

@@ -59,6 +59,11 @@ OpenAI, Anthropic, Google AI, Mistral, Groq, OpenRouter, Stripe, GitHub, Supabas
 - **MCP server** (stdio + streamable HTTP): `list_secrets`, `call_api`, `request_access`, `explain_policy`. Works with Claude Desktop/Code, Cursor, Windsurf, any MCP client.
 - **Desktop app** (Tauri): vault UI, handle/policy editor, approval prompts, audit viewer, tray icon showing broker status.
 - **Agent setup wizard**: one click writes MCP config for detected tools; one click prints the env vars for a project (`OPENAI_BASE_URL`, `OPENAI_API_KEY=usk_h_...`).
+- **Transparent mode** (`usk run --transparent`, D-23): per-session ephemeral CA scoped to the child process, for CLIs that ignore base URLs (`gh`, `git`, `aws`, `gcloud`). Same policy, egress guard, scrubbing and audit as the reverse proxy.
+- **Agent-framework plugins** (D-25): OpenClaw, NanoClaw, Hermes plugins/presets; one-line setup for Claude Code, Cursor, Codex, Windsurf.
+- **Importers** (D-24): OS keychain, 1Password, Bitwarden, Infisical Agent Vault, OneCLI, Veil, `pass`.
+- **Camouflage handles** (D-26) for presets whose SDKs validate key format.
+- **Optional broker isolation** (D-24): run `uskd` as a dedicated OS user with peer-credential checks (Linux/Windows).
 - Approval prompts (desktop notification with allow/deny).
 - OAuth2 refresh, AWS SigV4, GCP token exchange in broker.
 - `.env` guard: detect real keys in the project's `.env` and offer to move them into the vault and replace with handles.

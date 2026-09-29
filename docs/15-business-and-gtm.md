@@ -2,7 +2,9 @@
 
 ## Positioning (one line)
 
-**Unseenkey — the key your AI and your developer can use but never see.**
+**Unseenkey — hire a developer, run an agent, never hand over your keys.**
+
+Supporting lines, in order (D-25): *Leaks become harmless* (handles, not keys) · *Made for the person who owns the keys* (plain-English policies, approvals on your phone, Windows too) · *Verify, don't trust* (open core, public threat model, attested broker). "Your AI can use the key but never see it" remains true and stays in the copy as a proof point; it is no longer the headline because ten other projects say it (see [16](16-competitive-research.md)).
 
 ## Pricing (Open-1: validate before launch)
 
@@ -23,7 +25,9 @@ Unit economics: hosted broker cost per call is tiny (stateless Rust, ~µs of CPU
 ### Phase 1–2: developer-led, local, free
 - Launch on GitHub with the threat model as the README's centrepiece; Hacker News "Show HN"; X/Twitter thread with the *paste-into-chat* demo (before/after).
 - Content: "How your API key leaks through your AI agent (and the fix)"; "Handles: what if leaked keys were harmless?"; "The power problem: why encrypting your Stripe key isn't enough."
-- Integrations day one: Claude Desktop/Code, Cursor, Windsurf MCP install; snippets for OpenAI/Anthropic/Stripe SDKs.
+- Integrations day one: Claude Desktop/Code, Cursor, Codex, Windsurf MCP install; snippets for OpenAI/Anthropic/Stripe SDKs.
+- Agent frameworks are the distribution channel (OneCLI became NanoClaw's default credential layer): ship OpenClaw, NanoClaw and Hermes plugins in Phase 2 and get listed in their docs; publish a nono credential-source profile.
+- Windows-first content ("the only agent vault with a real Windows app") because the field is Mac/Linux.
 - Community presets repo; recognition for contributors.
 
 ### Phase 3: the delegation loop
