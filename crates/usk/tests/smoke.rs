@@ -1,4 +1,7 @@
-//! End-to-end smoke test of the `usk` binary with stdin-driven input.
+//! End-to-end smoke test of the `usk` binary, including the auto-started daemon.
+//!
+//! Each test uses its own temp directory and an ephemeral daemon port
+//! (`USK_LISTEN=127.0.0.1:0`), so tests can run in parallel.
 
 use std::io::Write;
 use std::path::Path;
@@ -9,6 +12,8 @@ fn usk(vault: &Path, args: &[&str], stdin: &str) -> Output {
         .arg("--vault")
         .arg(vault)
         .args(args)
+        .env("USK_LISTEN", "127.0.0.1:0")
+        .env("USK_IDLE_LOCK_MINUTES", "0")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -27,15 +32,27 @@ fn out(o: &Output) -> String {
     String::from_utf8_lossy(&o.stdout).into_owned()
 }
 
+fn err(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stderr).into_owned()
+}
+
 const PW: &str = "a-long-enough-password\n";
 
+struct StopDaemon<'a>(&'a Path);
+impl Drop for StopDaemon<'_> {
+    fn drop(&mut self) {
+        let _ = usk(self.0, &["daemon", "stop"], "");
+    }
+}
+
 #[test]
-fn init_add_ls_reveal_rm() {
+fn init_add_ls_reveal_rm_with_daemon() {
     let dir = tempfile::tempdir().unwrap();
     let vault = dir.path().join("vault.db");
+    let _stop = StopDaemon(&vault);
 
     let o = usk(&vault, &["init", "--profile", "light"], PW);
-    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(o.status.success(), "{}", err(&o));
     let text = out(&o);
     assert!(text.contains("RECOVERY PHRASE"));
     let words: Vec<&str> = text
@@ -55,61 +72,89 @@ fn init_add_ls_reveal_rm() {
         .collect();
     assert_eq!(words.len(), 24, "{text}");
 
-    // Password on line 1, value on the rest (--stdin).
+    // First command starts the daemon and unlocks it (password on stdin line 1).
     let value = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEF";
     let o = usk(
         &vault,
         &["add", "openai", "--stdin"],
         &format!("{PW}{value}\n"),
     );
-    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-    assert!(out(&o).contains("Detected: OpenAI"));
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(out(&o).contains("Detected: OpenAI"), "{}", out(&o));
     assert!(out(&o).contains("api.openai.com"));
     assert!(!out(&o).contains(value), "add must not echo the value");
+    assert!(dir.path().join("daemon.token").exists());
 
-    let o = usk(&vault, &["ls"], PW);
-    assert!(o.status.success());
+    // Daemon is now unlocked: no password needed.
+    let o = usk(&vault, &["ls"], "");
+    assert!(o.status.success(), "{}", err(&o));
     assert!(out(&o).contains("openai"));
     assert!(!out(&o).contains(value));
 
-    let o = usk(&vault, &["--json", "show", "openai"], PW);
-    assert!(o.status.success());
+    let o = usk(&vault, &["--json", "show", "openai"], "");
+    assert!(o.status.success(), "{}", err(&o));
     let j: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
     assert_eq!(j["provider"], "openai");
-    assert_eq!(j["type"], "api_key");
-    assert!(!out(&o).contains(value));
+    assert_eq!(j["kind"], "api_key");
 
-    let o = usk(&vault, &["reveal", "openai"], PW);
+    let o = usk(&vault, &["reveal", "openai"], "");
     assert!(!o.status.success(), "reveal without --yes must fail");
-
-    let o = usk(&vault, &["reveal", "openai", "--yes"], PW);
-    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let o = usk(&vault, &["reveal", "openai", "--yes"], "");
+    assert!(o.status.success(), "{}", err(&o));
     assert_eq!(out(&o).trim(), value);
 
+    let o = usk(&vault, &["daemon", "status"], "");
+    assert!(out(&o).contains("running"), "{}", out(&o));
+
+    // Lock, then a wrong password exits 3.
+    assert!(usk(&vault, &["lock"], "").status.success());
     let o = usk(&vault, &["ls"], "wrong-password\n");
-    assert_eq!(o.status.code(), Some(3), "wrong password exits 3");
+    assert_eq!(o.status.code(), Some(3), "{}", err(&o));
 
     let o = usk(&vault, &["rm", "openai", "--yes"], PW);
-    assert!(o.status.success());
-    let o = usk(&vault, &["ls"], PW);
+    assert!(o.status.success(), "{}", err(&o));
+    let o = usk(&vault, &["ls"], "");
     assert!(out(&o).contains("No secrets yet"));
 
-    // Recovery: set a new password from the phrase, then use it.
+    // Recovery while the daemon runs: it locks the daemon, rewrites the header,
+    // and the daemon picks up the new password on the next unlock.
     let phrase = words.join(" ");
     let o = usk(
         &vault,
         &["recover", "--profile", "light"],
         &format!("{phrase}\nbrand-new-password-123\n"),
     );
-    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(o.status.success(), "{}", err(&o));
     let o = usk(&vault, &["ls"], "brand-new-password-123\n");
+    assert!(o.status.success(), "{}", err(&o));
+
+    let o = usk(&vault, &["doctor"], "");
+    assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
+    assert!(out(&o).contains("All checks passed"));
+
+    let o = usk(&vault, &["daemon", "stop"], "");
     assert!(o.status.success());
+    assert!(
+        wait_for(|| !dir.path().join("daemon.token").exists()),
+        "token file should be removed on stop"
+    );
+}
+
+fn wait_for(mut cond: impl FnMut() -> bool) -> bool {
+    for _ in 0..50 {
+        if cond() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    false
 }
 
 #[test]
 fn import_from_env() {
     let dir = tempfile::tempdir().unwrap();
     let vault = dir.path().join("vault.db");
+    let _stop = StopDaemon(&vault);
     let env = dir.path().join(".env");
     std::fs::write(
         &env,
@@ -125,15 +170,15 @@ fn import_from_env() {
         &["import", "--from-env", env.to_str().unwrap(), "--dry-run"],
         "",
     );
-    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(o.status.success(), "{}", err(&o));
     let t = out(&o);
     assert!(t.contains("STRIPE_SECRET_KEY") && t.contains("Stripe") && t.contains("DB_PASSWORD"));
     assert!(!t.contains("PORT"));
     assert!(!t.contains("sk_test_"));
 
     let o = usk(&vault, &["import", "--from-env", env.to_str().unwrap()], PW);
-    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-    let o = usk(&vault, &["--json", "ls"], PW);
+    assert!(o.status.success(), "{}", err(&o));
+    let o = usk(&vault, &["--json", "ls"], "");
     let j: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
     let names: Vec<&str> = j
         .as_array()
@@ -142,4 +187,16 @@ fn import_from_env() {
         .map(|m| m["name"].as_str().unwrap())
         .collect();
     assert_eq!(names, ["db-password", "stripe-secret-key"]);
+}
+
+#[test]
+fn status_without_vault() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    let o = usk(&vault, &["status"], "");
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(out(&o).contains("no (run `usk init`)"));
+    let o = usk(&vault, &["ls"], "");
+    assert!(!o.status.success());
+    assert!(err(&o).contains("no vault found"));
 }

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/usk"]
+members = ["crates/core", "crates/daemon", "crates/usk"]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,11 +19,19 @@ blake3 = "1"
 ed25519-dalek = { version = "2", default-features = false, features = ["alloc", "zeroize"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 subtle = { version = "2", default-features = false }
-zeroize = { version = "1", features = ["zeroize_derive"] }
+zeroize = { version = "1", features = ["zeroize_derive", "serde"] }
 bip39 = { version = "3", default-features = false, features = ["alloc"] }
 
 # storage
 rusqlite = { version = "0.40", features = ["bundled"] }
+
+# daemon
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "matched-path"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "fs", "signal"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+toml = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 
 # general
 thiserror = "2"
@@ -35,6 +43,8 @@ hex = { version = "0.4", default-features = false, features = ["alloc"] }
 clap = { version = "4", features = ["derive", "env"] }
 rpassword = "7"
 dirs = "7"
+# Loopback only: no TLS feature, so no second crypto stack (rustls/ring) in the tree.
+ureq = { version = "2", default-features = false, features = ["json"] }
 
 # dev
 tempfile = "3"

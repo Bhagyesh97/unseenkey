@@ -31,6 +31,8 @@ Assumes one experienced developer full-time (with AI assistance), or a two-perso
 
 **Done:** Malicious-page test (a headless browser hitting localhost) gets 403 on every route; peer-token test passes.
 
+> **As built (2026-09-30):** the daemon is the `unseenkey-daemon` library, run in-process by `usk daemon run` (auto-spawned, detached, on first use) with `uskd` as a thin second binary from the same crate, so there is one executable to distribute. Runtime files `daemon.token` (0600), `daemon.addr`, `daemon.pid` live next to the vault; `USK_LISTEN` / `USK_IDLE_LOCK_MINUTES` override `config.toml`. Browser-origin rejection is tested with header-based requests and a raw-socket spoofed `Host`; the headless-browser (Playwright) variant moves to M1.5 hardening. Deferred: Unix socket / named pipe transport and sleep/screen-lock hooks (M2.2, where the desktop app has the platform hooks anyway). Windows gotcha: a spawned daemon inherits inheritable pipe handles, so the CLI clears the inherit flag on its std handles first (`usk::platform`, the crate's only `unsafe`).
+
 ### M1.3 Policy engine (Week 5)
 - Schema parse/validate, glob matcher, limits, schedule, approval modes, `explain` renderer.
 - Presets for 17 providers with default policies.

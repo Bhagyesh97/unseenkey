@@ -184,6 +184,18 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         self.header.argon2
     }
 
+    /// Re-read the header from storage. A long-running daemon calls this before
+    /// each unlock so a password reset done by another process (e.g. `usk recover`)
+    /// takes effect without a restart.
+    pub fn reload_header(&mut self) -> Result<(), VaultError> {
+        let hdr = self.storage.load_header()?.ok_or(VaultError::NoVault)?;
+        if hdr.format_version > header::FORMAT_VERSION {
+            return Err(VaultError::UnsupportedFormat(hdr.format_version));
+        }
+        self.header = hdr;
+        Ok(())
+    }
+
     /// Unlock with the password.
     pub fn unlock_with_password(&mut self, password: &SecretBytes) -> Result<(), VaultError> {
         if !self.header.argon2.is_acceptable() {

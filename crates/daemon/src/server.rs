@@ -1,0 +1,218 @@
+//! Start and stop the daemon.
+
+use crate::api;
+use crate::guard::{ingress_guard, require_token};
+use crate::paths::VaultPaths;
+use crate::state::{AppState, Event};
+use crate::token::{self, SessionToken};
+use axum::middleware::from_fn_with_state;
+use axum::routing::{get, post};
+use axum::Router;
+use std::collections::HashSet;
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::net::TcpListener;
+use tokio::sync::{broadcast, watch, Mutex};
+use tokio::task::JoinHandle;
+use unseenkey_core::storage::sqlite::SqliteStorage;
+use unseenkey_core::time::SystemClock;
+use unseenkey_core::vault::Vault;
+
+/// Startup failures.
+#[derive(Debug, thiserror::Error)]
+pub enum ServeError {
+    /// Refusing to listen anywhere but loopback.
+    #[error("refusing to listen on non-loopback address {0}")]
+    NotLoopback(String),
+    /// Bad listen string.
+    #[error("invalid listen address {0}")]
+    BadAddress(String),
+    /// Socket error.
+    #[error("cannot bind {0}: {1}")]
+    Bind(String, std::io::Error),
+    /// Vault problems.
+    #[error(transparent)]
+    Vault(#[from] unseenkey_core::vault::VaultError),
+    /// Storage problems.
+    #[error(transparent)]
+    Storage(#[from] unseenkey_core::storage::StorageError),
+    /// Runtime file problems.
+    #[error("cannot write {0}: {1}")]
+    File(PathBuf, std::io::Error),
+}
+
+/// How to start.
+#[derive(Debug, Clone)]
+pub struct ServeOptions {
+    /// The vault file (must exist).
+    pub vault_path: PathBuf,
+    /// Loopback `host:port`; port 0 for ephemeral.
+    pub listen: String,
+    /// Idle lock in minutes; 0 disables.
+    pub idle_lock_minutes: u64,
+    /// Write `daemon.token`, `daemon.addr`, `daemon.pid` next to the vault.
+    pub write_runtime_files: bool,
+}
+
+/// A running daemon.
+pub struct Running {
+    /// Bound address.
+    pub addr: SocketAddr,
+    token: SessionToken,
+    state: Arc<AppState>,
+    handle: JoinHandle<()>,
+    paths: Option<VaultPaths>,
+}
+
+impl Running {
+    /// Plaintext session token (tests and in-process clients).
+    pub fn token(&self) -> &str {
+        self.token.plain()
+    }
+
+    /// Request shutdown and wait for the server to finish.
+    pub async fn shutdown(self) {
+        self.state.request_shutdown();
+        self.wait().await;
+    }
+
+    /// Resolves once a shutdown has been requested (by the API or [`Running::shutdown`]).
+    pub async fn shutdown_requested(&self) {
+        let mut rx = self.state.shutdown.subscribe();
+        let _ = rx.wait_for(|v| *v).await;
+    }
+
+    /// Wait until the server stops (after a shutdown request).
+    pub async fn wait(self) {
+        let _ = self.handle.await;
+        self.state.vault.lock().await.lock();
+        if let Some(p) = &self.paths {
+            let _ = std::fs::remove_file(&p.token);
+            let _ = std::fs::remove_file(&p.addr);
+            let _ = std::fs::remove_file(&p.pid);
+        }
+        tracing::info!("daemon stopped");
+    }
+}
+
+fn allowed_hosts(addr: SocketAddr) -> HashSet<String> {
+    let port = addr.port();
+    [
+        format!("127.0.0.1:{port}"),
+        format!("localhost:{port}"),
+        format!("[::1]:{port}"),
+    ]
+    .into_iter()
+    .collect()
+}
+
+/// Open the vault (locked), bind the loopback socket and start serving.
+pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
+    let requested: SocketAddr = opts
+        .listen
+        .parse()
+        .map_err(|_| ServeError::BadAddress(opts.listen.clone()))?;
+    if !requested.ip().is_loopback() {
+        return Err(ServeError::NotLoopback(opts.listen.clone()));
+    }
+    let storage = SqliteStorage::open(&opts.vault_path)?;
+    let vault = Vault::open(storage, SystemClock)?;
+
+    let listener = TcpListener::bind(requested)
+        .await
+        .map_err(|e| ServeError::Bind(opts.listen.clone(), e))?;
+    let addr = listener
+        .local_addr()
+        .map_err(|e| ServeError::Bind(opts.listen.clone(), e))?;
+
+    let token = SessionToken::generate();
+    let (events, _) = broadcast::channel(64);
+    let state = Arc::new(AppState {
+        vault: Mutex::new(vault),
+        token_hash: token.hash(),
+        allowed_hosts: allowed_hosts(addr),
+        last_activity: Mutex::new(Instant::now()),
+        unlock_attempts: Mutex::new(Vec::new()),
+        events,
+        started: Instant::now(),
+        idle_lock: Duration::from_secs(opts.idle_lock_minutes * 60),
+        shutdown: watch::channel(false).0,
+    });
+
+    let paths = if opts.write_runtime_files {
+        let p = VaultPaths::from_vault_file(&opts.vault_path);
+        token::write_token_file(&p.token, &token)
+            .map_err(|e| ServeError::File(p.token.clone(), e))?;
+        std::fs::write(&p.addr, addr.to_string())
+            .map_err(|e| ServeError::File(p.addr.clone(), e))?;
+        std::fs::write(&p.pid, std::process::id().to_string())
+            .map_err(|e| ServeError::File(p.pid.clone(), e))?;
+        Some(p)
+    } else {
+        None
+    };
+
+    let v1 = Router::new()
+        .route("/status", get(api::status))
+        .route("/unlock", post(api::unlock))
+        .route("/lock", post(api::lock))
+        .route("/secrets", get(api::list_secrets).post(api::create_secret))
+        .route(
+            "/secrets/{r}",
+            get(api::get_secret)
+                .patch(api::patch_secret)
+                .delete(api::delete_secret),
+        )
+        .route("/secrets/{r}/reveal", post(api::reveal_secret))
+        .route("/events", get(api::events))
+        .route("/shutdown", post(api::shutdown))
+        .route_layer(from_fn_with_state(state.clone(), require_token));
+
+    let app = Router::new()
+        .route("/healthz", get(api::healthz))
+        .nest("/v1", v1)
+        .fallback(api::not_found)
+        .layer(from_fn_with_state(state.clone(), ingress_guard))
+        .with_state(state.clone());
+
+    // Idle lock timer.
+    if !state.idle_lock.is_zero() {
+        let s = state.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(15));
+            loop {
+                tick.tick().await;
+                let idle = s.last_activity.lock().await.elapsed();
+                if idle >= s.idle_lock {
+                    let mut v = s.vault.lock().await;
+                    if !v.is_locked() {
+                        v.lock();
+                        s.emit(Event::Locked { reason: "idle" });
+                        tracing::info!("vault locked after idle timeout");
+                    }
+                }
+            }
+        });
+    }
+
+    let mut shutdown_rx = state.shutdown.subscribe();
+    let handle = tokio::spawn(async move {
+        let server = axum::serve(listener, app).with_graceful_shutdown(async move {
+            let _ = shutdown_rx.wait_for(|v| *v).await;
+        });
+        if let Err(e) = server.await {
+            tracing::error!(error = %e, "server error");
+        }
+    });
+    tracing::info!(%addr, "daemon listening");
+
+    Ok(Running {
+        addr,
+        token,
+        state,
+        handle,
+        paths,
+    })
+}

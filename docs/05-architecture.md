@@ -49,8 +49,8 @@ Rule: no module other than `crypto` and `broker::inject` may hold a `SecretBytes
 
 ### uskd (daemon)
 
-- One process per user, started by the CLI or desktop app, or as a login item.
-- Listens on `127.0.0.1:7391` (configurable; IPv6 `::1` too). Unix domain socket / Windows named pipe also offered for the management API.
+- One process per user, started by the CLI or desktop app, or as a login item. Implemented as the `unseenkey-daemon` library; `usk daemon run` (auto-spawned on first use) and the `uskd` binary both run it.
+- Listens on `127.0.0.1:7391` (configurable; IPv6 `::1` too). Unix domain socket / Windows named pipe also offered for the management API (planned, M2.2).
 - Serves: management API (`/v1/*`, session-token auth), proxy routes (`/p/*`), MCP over streamable HTTP (`/mcp`), health (`/healthz`).
 - Holds the unlocked vault key in memory (mlocked) until lock.
 - Single-threaded async runtime (tokio) with a small worker pool; no plaintext crosses thread boundaries except inside a request task.

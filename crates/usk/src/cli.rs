@@ -1,18 +1,20 @@
 //! Command definitions and handlers.
+//!
+//! `init` and `recover` work on the vault file directly (no daemon needed).
+//! Everything else goes through the daemon, which is started on demand.
 
-use crate::io::{self as uio, CliError, EXIT_LOCKED};
+use crate::client::Client;
+use crate::daemon;
+use crate::io::{self as uio, CliError};
 use clap::{Parser, Subcommand, ValueEnum};
-use std::collections::BTreeMap;
+use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use unseenkey_core::crypto::kdf::Argon2Profile;
-use unseenkey_core::ids::Id;
 use unseenkey_core::import::parse_dotenv;
-use unseenkey_core::providers;
 use unseenkey_core::storage::sqlite::SqliteStorage;
 use unseenkey_core::time::SystemClock;
-use unseenkey_core::vault::{NewSecret, SecretKind, SecretMeta, Vault, VaultError};
-
-type V = Vault<SqliteStorage, SystemClock>;
+use unseenkey_core::vault::{SecretKind, Vault, VaultError};
+use unseenkey_daemon::VaultPaths;
 
 #[derive(Parser)]
 #[command(
@@ -45,6 +47,10 @@ enum Command {
         #[arg(long, value_enum, default_value = "desktop")]
         profile: Profile,
     },
+    /// Unlock the vault in the daemon.
+    Unlock,
+    /// Lock the vault in the daemon.
+    Lock,
     /// Add a secret. The value is read from a hidden prompt, or from stdin with --stdin.
     Add {
         /// Unique name, e.g. `openai` or `stripe-live`.
@@ -72,7 +78,7 @@ enum Command {
     Ls,
     /// Show a secret's metadata (never the value).
     Show { name: String },
-    /// Print a secret's value once. Audited (from M1.4). Requires --yes.
+    /// Print a secret's value once. Requires --yes.
     Reveal {
         name: String,
         /// Confirm you want the value printed to this terminal.
@@ -105,7 +111,34 @@ enum Command {
         #[arg(long, value_enum, default_value = "desktop")]
         profile: Profile,
     },
-    /// Show vault status.
+    /// Show vault and daemon status.
+    Status,
+    /// Diagnose common problems.
+    Doctor,
+    /// Manage the background daemon.
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum DaemonAction {
+    /// Run the daemon in this process.
+    Run {
+        /// Loopback address (default from config or 127.0.0.1:7391).
+        #[arg(long)]
+        listen: Option<String>,
+        /// Lock after N idle minutes (0 disables).
+        #[arg(long)]
+        idle_lock_minutes: Option<u64>,
+        /// Log to the vault's logs directory instead of stderr (used when spawned).
+        #[arg(long, hide = true)]
+        detached: bool,
+    },
+    /// Stop the running daemon.
+    Stop,
+    /// Show whether the daemon is running.
     Status,
 }
 
@@ -122,16 +155,6 @@ fn parse_kind(s: &str) -> Result<SecretKind, String> {
     })
 }
 
-fn default_vault_path() -> Result<PathBuf, CliError> {
-    let base = if cfg!(windows) {
-        dirs::config_dir().map(|d| d.join("Unseenkey"))
-    } else {
-        dirs::home_dir().map(|d| d.join(".unseenkey"))
-    };
-    base.map(|d| d.join("vault.db"))
-        .ok_or_else(|| CliError::general("cannot determine the vault location; pass --vault"))
-}
-
 fn profile(p: Profile) -> Argon2Profile {
     match p {
         Profile::Desktop => Argon2Profile::DESKTOP,
@@ -139,32 +162,36 @@ fn profile(p: Profile) -> Argon2Profile {
     }
 }
 
-fn map_err(e: VaultError) -> CliError {
+fn map_vault_err(e: VaultError) -> CliError {
     match e {
         VaultError::Locked | VaultError::WrongCredential => {
-            CliError::new(EXIT_LOCKED, e.to_string())
+            CliError::with_code(uio::EXIT_LOCKED, "wrong_password", e.to_string())
         }
         VaultError::NoVault => CliError::general("no vault found; run `usk init` first"),
         other => CliError::general(other.to_string()),
     }
 }
 
-fn open_unlocked(path: &Path) -> Result<V, CliError> {
-    let storage = SqliteStorage::open(path).map_err(|e| CliError::general(e.to_string()))?;
-    let mut v = Vault::open(storage, SystemClock).map_err(map_err)?;
-    let pw = uio::read_secret_line("Vault password: ")?;
-    v.unlock_with_password(&pw).map_err(map_err)?;
-    Ok(v)
-}
-
+/// Parse arguments and dispatch.
 pub fn run() -> Result<(), CliError> {
     let cli = Cli::parse();
-    let path = match cli.vault {
-        Some(p) => p,
-        None => default_vault_path()?,
-    };
+    let vault = daemon::vault_path(cli.vault)?;
+    let paths = VaultPaths::from_vault_file(&vault);
     match cli.command {
-        Command::Init { profile: p } => init(&path, profile(p)),
+        Command::Init { profile: p } => init(&paths, profile(p)),
+        Command::Unlock => {
+            let c = Client::connect(&paths, true)?;
+            c.ensure_unlocked()?;
+            println!("Unlocked.");
+            Ok(())
+        }
+        Command::Lock => {
+            if let Some(c) = Client::try_connect(&paths) {
+                c.post("/v1/lock", json!({}))?;
+            }
+            println!("Locked.");
+            Ok(())
+        }
         Command::Add {
             name,
             r#type,
@@ -173,32 +200,77 @@ pub fn run() -> Result<(), CliError> {
             tags,
             notes,
             stdin,
-        } => add(&path, name, r#type, provider, upstreams, tags, notes, stdin),
-        Command::Ls => ls(&path, cli.json),
-        Command::Show { name } => show(&path, &name, cli.json),
-        Command::Reveal { name, yes, reason } => reveal(&path, &name, yes, reason),
-        Command::Rm { name, yes } => rm(&path, &name, yes),
+        } => add(
+            &paths, name, r#type, provider, upstreams, tags, notes, stdin,
+        ),
+        Command::Ls => ls(&paths, cli.json),
+        Command::Show { name } => show(&paths, &name, cli.json),
+        Command::Reveal { name, yes, reason } => reveal(&paths, &name, yes, reason),
+        Command::Rm { name, yes } => rm(&paths, &name, yes),
         Command::Import {
             from_env,
             all,
             dry_run,
-        } => import(&path, &from_env, all, dry_run),
-        Command::Recover { profile: p } => recover(&path, profile(p)),
-        Command::Status => status(&path, cli.json),
+        } => import(&paths, &from_env, all, dry_run),
+        Command::Recover { profile: p } => recover(&paths, profile(p)),
+        Command::Status => status(&paths, cli.json),
+        Command::Doctor => doctor(&paths),
+        Command::Daemon { action } => match action {
+            DaemonAction::Run {
+                listen,
+                idle_lock_minutes,
+                detached,
+            } => {
+                let opts = daemon::resolve_options(&paths, listen, idle_lock_minutes)?;
+                daemon::run(opts, &paths, detached)
+            }
+            DaemonAction::Stop => {
+                match Client::try_connect(&paths) {
+                    Some(c) => {
+                        c.post("/v1/shutdown", json!({}))?;
+                        println!("Daemon stopping.");
+                    }
+                    None => println!("Daemon is not running."),
+                }
+                Ok(())
+            }
+            DaemonAction::Status => {
+                match Client::try_connect(&paths) {
+                    Some(c) => {
+                        let s = c.get("/v1/status")?;
+                        println!(
+                            "running (pid {}), locked={}, uptime={}s",
+                            daemon::pid_file(&paths).unwrap_or(0),
+                            s["locked"],
+                            s["uptime_s"]
+                        );
+                    }
+                    None => println!("not running"),
+                }
+                Ok(())
+            }
+        },
     }
 }
 
-fn init(path: &Path, profile: Argon2Profile) -> Result<(), CliError> {
-    if path.exists() {
-        let storage = SqliteStorage::open(path).map_err(|e| CliError::general(e.to_string()))?;
+fn unlocked(paths: &VaultPaths) -> Result<Client, CliError> {
+    let c = Client::connect(paths, true)?;
+    c.ensure_unlocked()?;
+    Ok(c)
+}
+
+fn init(paths: &VaultPaths, profile: Argon2Profile) -> Result<(), CliError> {
+    if paths.vault.exists() {
+        let storage =
+            SqliteStorage::open(&paths.vault).map_err(|e| CliError::general(e.to_string()))?;
         if Vault::open(storage, SystemClock).is_ok() {
             return Err(CliError::general(format!(
                 "a vault already exists at {}",
-                path.display()
+                paths.vault.display()
             )));
         }
     }
-    println!("Creating a vault at {}", path.display());
+    println!("Creating a vault at {}", paths.vault.display());
     println!(
         "Choose a password. It cannot be reset; the recovery phrase is the only other way in."
     );
@@ -212,8 +284,9 @@ fn init(path: &Path, profile: Argon2Profile) -> Result<(), CliError> {
             return Err(CliError::general("passwords do not match"));
         }
     }
-    let storage = SqliteStorage::open(path).map_err(|e| CliError::general(e.to_string()))?;
-    let (v, kit) = Vault::create(storage, SystemClock, &pw, profile).map_err(map_err)?;
+    let storage =
+        SqliteStorage::open(&paths.vault).map_err(|e| CliError::general(e.to_string()))?;
+    let (v, kit) = Vault::create(storage, SystemClock, &pw, profile).map_err(map_vault_err)?;
     println!();
     println!("Vault {} created.", v.vault_id());
     println!();
@@ -235,7 +308,7 @@ fn init(path: &Path, profile: Argon2Profile) -> Result<(), CliError> {
 
 #[allow(clippy::too_many_arguments)]
 fn add(
-    path: &Path,
+    paths: &VaultPaths,
     name: String,
     kind: Option<SecretKind>,
     provider: Option<String>,
@@ -244,7 +317,7 @@ fn add(
     notes: Option<String>,
     stdin: bool,
 ) -> Result<(), CliError> {
-    let mut v = open_unlocked(path)?;
+    let c = unlocked(paths)?;
     let value = if stdin {
         uio::read_secret_rest()?
     } else {
@@ -253,181 +326,159 @@ fn add(
     if value.is_empty() {
         return Err(CliError::general("empty value"));
     }
-    let detected = providers::detect(value.expose());
-    let provider = provider.or_else(|| detected.map(|d| d.provider.to_string()));
-    let kind = kind
-        .or_else(|| detected.map(|d| d.kind))
-        .unwrap_or(SecretKind::ApiKey);
-    let upstreams = if upstreams.is_empty() {
-        provider
-            .as_deref()
-            .and_then(providers::provider)
-            .map(|d| d.upstreams.iter().map(|s| s.to_string()).collect())
-            .unwrap_or_default()
-    } else {
-        upstreams
-    };
-    if let Some(d) = detected {
-        let note = if d.note.is_empty() {
+    let value_str = std::str::from_utf8(value.expose())
+        .map_err(|_| CliError::general("value must be UTF-8 text; use import for binary"))?;
+    let body = json!({
+        "name": name,
+        "type": kind.map(|k| k.as_str()),
+        "value": value_str,
+        "provider": provider,
+        "upstreams": upstreams,
+        "tags": tags,
+        "notes": notes,
+    });
+    let created = c.post("/v1/secrets", body)?;
+    if let Some(d) = created["detected"].as_object() {
+        let note = d["note"].as_str().unwrap_or("");
+        let suffix = if note.is_empty() {
             String::new()
         } else {
-            format!(" ({})", d.note)
+            format!(" ({note})")
         };
-        println!("Detected: {}{note}", d.display);
+        println!("Detected: {}{suffix}", d["display"].as_str().unwrap_or("?"));
     }
-    let id = v
-        .add(NewSecret {
-            name: name.clone(),
-            kind,
-            value,
-            fields: BTreeMap::new(),
-            provider,
-            upstreams: upstreams.clone(),
-            tags,
-            notes,
-        })
-        .map_err(map_err)?;
-    if upstreams.is_empty() {
+    let ups: Vec<&str> = created["upstreams"]
+        .as_array()
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    if ups.is_empty() {
         println!(
             "Warning: no upstream host locked. Add one with --upstream so the broker can use it."
         );
     } else {
-        println!("Upstream locked to: {}", upstreams.join(", "));
+        println!("Upstream locked to: {}", ups.join(", "));
     }
-    println!("Saved {name} ({id}).");
+    println!(
+        "Saved {} ({}).",
+        created["name"].as_str().unwrap_or(""),
+        created["id"].as_str().unwrap_or("")
+    );
     Ok(())
 }
 
-fn meta_json(m: &SecretMeta) -> serde_json::Value {
-    serde_json::json!({
-        "id": m.secret_id.to_hex(),
-        "name": m.name,
-        "type": m.kind.as_str(),
-        "provider": m.provider,
-        "tags": m.tags,
-        "upstreams": m.upstreams,
-        "notes": m.notes,
-        "created_at": m.created_at,
-        "updated_at": m.updated_at,
-        "value_version": m.value_version,
-        "allow_injection": m.allow_injection,
-    })
-}
-
-fn ls(path: &Path, json: bool) -> Result<(), CliError> {
-    let v = open_unlocked(path)?;
-    let list = v.list().map_err(map_err)?;
+fn ls(paths: &VaultPaths, json: bool) -> Result<(), CliError> {
+    let c = unlocked(paths)?;
+    let list = c.get("/v1/secrets")?;
+    let items = list.as_array().cloned().unwrap_or_default();
     if json {
-        let arr: Vec<_> = list.iter().map(|m| meta_json(m)).collect();
-        println!("{}", serde_json::to_string_pretty(&arr).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&items).unwrap_or_default()
+        );
         return Ok(());
     }
-    if list.is_empty() {
+    if items.is_empty() {
         println!("No secrets yet. Add one with `usk add <name>`.");
         return Ok(());
     }
     let (h_name, h_type, h_prov, h_up) = ("NAME", "TYPE", "PROVIDER", "UPSTREAMS");
     println!("{h_name:<28} {h_type:<18} {h_prov:<12} {h_up}");
-    for m in list {
+    for m in items {
+        let ups: Vec<&str> = m["upstreams"]
+            .as_array()
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
         println!(
             "{:<28} {:<18} {:<12} {}",
-            m.name,
-            m.kind.as_str(),
-            m.provider.as_deref().unwrap_or("-"),
-            if m.upstreams.is_empty() {
+            m["name"].as_str().unwrap_or(""),
+            m["kind"].as_str().unwrap_or(""),
+            m["provider"].as_str().unwrap_or("-"),
+            if ups.is_empty() {
                 "(none: not locked)".to_string()
             } else {
-                m.upstreams.join(",")
+                ups.join(",")
             }
         );
     }
     Ok(())
 }
 
-fn show(path: &Path, name: &str, json: bool) -> Result<(), CliError> {
-    let v = open_unlocked(path)?;
-    let m = v.get_by_name(name).map_err(map_err)?;
+fn show(paths: &VaultPaths, name: &str, json: bool) -> Result<(), CliError> {
+    let c = unlocked(paths)?;
+    let m = c.get(&format!("/v1/secrets/{name}"))?;
     if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&meta_json(m)).unwrap_or_default()
-        );
+        println!("{}", serde_json::to_string_pretty(&m).unwrap_or_default());
         return Ok(());
     }
-    println!("name:       {}", m.name);
-    println!("id:         {}", m.secret_id);
-    println!("type:       {}", m.kind.as_str());
-    println!("provider:   {}", m.provider.as_deref().unwrap_or("-"));
-    println!(
-        "upstreams:  {}",
-        if m.upstreams.is_empty() {
-            "(none)".into()
-        } else {
-            m.upstreams.join(", ")
-        }
-    );
-    println!(
-        "tags:       {}",
-        if m.tags.is_empty() {
+    let list = |k: &str| -> String {
+        let v: Vec<&str> = m[k]
+            .as_array()
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        if v.is_empty() {
             "-".into()
         } else {
-            m.tags.join(", ")
+            v.join(", ")
         }
-    );
-    println!("notes:      {}", m.notes.as_deref().unwrap_or("-"));
-    println!("versions:   {}", m.value_version);
+    };
+    println!("name:       {}", m["name"].as_str().unwrap_or(""));
+    println!("id:         {}", m["secret_id"].as_str().unwrap_or(""));
+    println!("type:       {}", m["kind"].as_str().unwrap_or(""));
+    println!("provider:   {}", m["provider"].as_str().unwrap_or("-"));
+    println!("upstreams:  {}", list("upstreams"));
+    println!("tags:       {}", list("tags"));
+    println!("notes:      {}", m["notes"].as_str().unwrap_or("-"));
+    println!("versions:   {}", m["value_version"]);
     println!(
         "injection:  {}",
-        if m.allow_injection { "allowed" } else { "off" }
+        if m["allow_injection"].as_bool().unwrap_or(false) {
+            "allowed"
+        } else {
+            "off"
+        }
     );
-    println!(
-        "value:      [hidden] use `usk reveal {} --yes` to print it once",
-        m.name
-    );
+    println!("value:      [hidden] use `usk reveal {name} --yes` to print it once");
     Ok(())
 }
 
-fn reveal(path: &Path, name: &str, yes: bool, _reason: Option<String>) -> Result<(), CliError> {
+fn reveal(
+    paths: &VaultPaths,
+    name: &str,
+    yes: bool,
+    reason: Option<String>,
+) -> Result<(), CliError> {
     if !yes {
         return Err(CliError::general(
             "reveal prints the secret to this terminal; add --yes to confirm",
         ));
     }
-    let v = open_unlocked(path)?;
-    let m = v.get_by_name(name).map_err(map_err)?;
-    let id: Id = m.secret_id;
-    let r = v.reveal(&id).map_err(map_err)?;
-    // Audit event for reveals is wired in M1.4.
-    match std::str::from_utf8(r.value.expose()) {
-        Ok(s) => println!("{s}"),
-        Err(_) => println!("hex:{}", hex_of(r.value.expose())),
-    }
-    for (k, val) in &r.fields {
-        match std::str::from_utf8(val.expose()) {
-            Ok(s) => println!("{k}={s}"),
-            Err(_) => println!("{k}=hex:{}", hex_of(val.expose())),
+    let c = unlocked(paths)?;
+    let r = c.post(
+        &format!("/v1/secrets/{name}/reveal"),
+        json!({ "confirm": true, "reason": reason }),
+    )?;
+    println!("{}", r["value"].as_str().unwrap_or(""));
+    if let Some(fields) = r["fields"].as_object() {
+        for (k, v) in fields {
+            println!("{k}={}", v.as_str().unwrap_or(""));
         }
     }
     Ok(())
 }
 
-fn hex_of(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
-}
-
-fn rm(path: &Path, name: &str, yes: bool) -> Result<(), CliError> {
-    let mut v = open_unlocked(path)?;
-    let id = v.get_by_name(name).map_err(map_err)?.secret_id;
+fn rm(paths: &VaultPaths, name: &str, yes: bool) -> Result<(), CliError> {
+    let c = unlocked(paths)?;
+    c.get(&format!("/v1/secrets/{name}"))?;
     if !yes && uio::is_tty() && !uio::confirm(&format!("Delete {name}?"))? {
         println!("Cancelled.");
         return Ok(());
     }
-    v.delete(&id).map_err(map_err)?;
+    c.delete(&format!("/v1/secrets/{name}"))?;
     println!("Deleted {name}.");
     Ok(())
 }
 
-fn import(path: &Path, env_path: &Path, all: bool, dry_run: bool) -> Result<(), CliError> {
+fn import(paths: &VaultPaths, env_path: &Path, all: bool, dry_run: bool) -> Result<(), CliError> {
     let text = std::fs::read_to_string(env_path)
         .map_err(|e| CliError::general(format!("cannot read {}: {e}", env_path.display())))?;
     let entries = parse_dotenv(&text);
@@ -456,31 +507,31 @@ fn import(path: &Path, env_path: &Path, all: bool, dry_run: bool) -> Result<(), 
         println!("Dry run: nothing written.");
         return Ok(());
     }
-    let mut v = open_unlocked(path)?;
+    let c = unlocked(paths)?;
     let mut added = 0;
     for e in candidates {
         let name = e.key.to_lowercase().replace('_', "-");
-        let d = e.detection;
-        let provider = d.map(|d| d.provider.to_string());
-        let upstreams = d
-            .map(|d| d.upstreams.iter().map(|s| s.to_string()).collect())
-            .unwrap_or_default();
-        match v.add(NewSecret {
-            name: name.clone(),
-            kind: d.map(|d| d.kind).unwrap_or(SecretKind::Note),
-            value: e.value,
-            fields: BTreeMap::new(),
-            provider,
-            upstreams,
-            tags: vec!["imported".into()],
-            notes: Some(format!("imported from {} ({})", env_path.display(), e.key)),
-        }) {
+        let value = match std::str::from_utf8(e.value.expose()) {
+            Ok(s) => s.to_string(),
+            Err(_) => {
+                println!("skipped {name}: not UTF-8");
+                continue;
+            }
+        };
+        let body = json!({
+            "name": name,
+            "type": e.detection.map(|d| d.kind.as_str()).unwrap_or("note"),
+            "value": value,
+            "tags": ["imported"],
+            "notes": format!("imported from {} ({})", env_path.display(), e.key),
+        });
+        match c.post("/v1/secrets", body) {
             Ok(_) => {
                 added += 1;
                 println!("added {name}");
             }
-            Err(VaultError::NameExists(_)) => println!("skipped {name}: already exists"),
-            Err(err) => return Err(map_err(err)),
+            Err(err) if err.kind == "name_exists" => println!("skipped {name}: already exists"),
+            Err(err) => return Err(err),
         }
     }
     println!(
@@ -490,40 +541,131 @@ fn import(path: &Path, env_path: &Path, all: bool, dry_run: bool) -> Result<(), 
     Ok(())
 }
 
-fn recover(path: &Path, profile: Argon2Profile) -> Result<(), CliError> {
-    let storage = SqliteStorage::open(path).map_err(|e| CliError::general(e.to_string()))?;
-    let mut v = Vault::open(storage, SystemClock).map_err(map_err)?;
+fn recover(paths: &VaultPaths, profile: Argon2Profile) -> Result<(), CliError> {
+    // The daemon must not hold an unlocked copy while the header changes.
+    if let Some(c) = Client::try_connect(paths) {
+        c.post("/v1/lock", json!({}))?;
+    }
+    let storage =
+        SqliteStorage::open(&paths.vault).map_err(|e| CliError::general(e.to_string()))?;
+    let mut v = Vault::open(storage, SystemClock).map_err(map_vault_err)?;
     let phrase = uio::read_secret_line("Recovery phrase (24 words): ")?;
     let phrase_str = std::str::from_utf8(phrase.expose())
         .map_err(|_| CliError::general("invalid recovery phrase"))?;
-    v.unlock_with_recovery(phrase_str).map_err(map_err)?;
+    v.unlock_with_recovery(phrase_str).map_err(map_vault_err)?;
     let pw = uio::read_secret_line("New password: ")?;
     if pw.len() < 12 {
         return Err(CliError::general("password must be at least 12 characters"));
     }
-    v.change_password(&pw, profile).map_err(map_err)?;
+    v.change_password(&pw, profile).map_err(map_vault_err)?;
     println!("Password changed. The recovery phrase still works; keep it safe.");
     Ok(())
 }
 
-fn status(path: &Path, json: bool) -> Result<(), CliError> {
-    let exists = path.exists()
-        && SqliteStorage::open(path)
+fn status(paths: &VaultPaths, json: bool) -> Result<(), CliError> {
+    let exists = paths.vault.exists()
+        && SqliteStorage::open(&paths.vault)
             .ok()
             .and_then(|s| Vault::open(s, SystemClock).ok())
             .is_some();
+    let daemon_status = Client::try_connect(paths).and_then(|c| c.get("/v1/status").ok());
     if json {
         println!(
             "{}",
-            serde_json::json!({ "vault": path.display().to_string(), "exists": exists, "version": env!("CARGO_PKG_VERSION") })
+            json!({
+                "vault": paths.vault.display().to_string(),
+                "exists": exists,
+                "version": env!("CARGO_PKG_VERSION"),
+                "daemon": daemon_status,
+            })
         );
-    } else {
-        println!("vault:   {}", path.display());
-        println!(
-            "exists:  {}",
-            if exists { "yes" } else { "no (run `usk init`)" }
-        );
-        println!("version: {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    println!("vault:   {}", paths.vault.display());
+    println!(
+        "exists:  {}",
+        if exists { "yes" } else { "no (run `usk init`)" }
+    );
+    println!("version: {}", env!("CARGO_PKG_VERSION"));
+    match daemon_status {
+        Some(s) => println!(
+            "daemon:  running, {} (idle lock {} min)",
+            if s["locked"].as_bool().unwrap_or(true) {
+                "locked"
+            } else {
+                "unlocked"
+            },
+            s["idle_lock_minutes"]
+        ),
+        None => println!("daemon:  not running (starts on first use)"),
     }
     Ok(())
+}
+
+fn doctor(paths: &VaultPaths) -> Result<(), CliError> {
+    let mut problems = 0;
+    let mut check = |ok: bool, label: &str, hint: &str| {
+        if ok {
+            println!("ok    {label}");
+        } else {
+            problems += 1;
+            println!("FAIL  {label}\n      {hint}");
+        }
+    };
+    check(
+        paths.vault.exists(),
+        &format!("vault file {}", paths.vault.display()),
+        "run `usk init`",
+    );
+    let cfg = unseenkey_daemon::config::load(&paths.config);
+    check(
+        cfg.is_ok(),
+        &format!("config {}", paths.config.display()),
+        &cfg.err().map(|e| e.to_string()).unwrap_or_default(),
+    );
+    let daemon = Client::try_connect(paths);
+    let running = daemon.is_some();
+    check(
+        running || !paths.addr.exists(),
+        "daemon runtime files",
+        "stale daemon.addr/daemon.token found; delete them or run `usk daemon stop`",
+    );
+    if let Some(c) = &daemon {
+        let s = c.get("/v1/status").unwrap_or(Value::Null);
+        let ver = s["version"].as_str().unwrap_or("?");
+        check(
+            ver == env!("CARGO_PKG_VERSION"),
+            &format!(
+                "daemon version {ver} matches CLI {}",
+                env!("CARGO_PKG_VERSION")
+            ),
+            "run `usk daemon stop`; it restarts with the new version on next use",
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&paths.token)
+                .map(|m| m.permissions().mode() & 0o777)
+                .unwrap_or(0);
+            check(
+                mode == 0o600,
+                &format!("token file permissions {mode:o}"),
+                "chmod 600 daemon.token",
+            );
+        }
+    } else {
+        println!("info  daemon not running (starts on first use)");
+    }
+    if std::env::var_os("USK_VAULT").is_some() {
+        println!(
+            "info  USK_VAULT is set; commands use {}",
+            paths.vault.display()
+        );
+    }
+    if problems == 0 {
+        println!("All checks passed.");
+        Ok(())
+    } else {
+        Err(CliError::general(format!("{problems} problem(s) found")))
+    }
 }

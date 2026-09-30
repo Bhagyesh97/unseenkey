@@ -72,7 +72,7 @@ unseenkey/
 - `core` has **no** network listeners and no CLI; it exposes types and async functions. This keeps it testable and WASM-buildable (`--no-default-features --features wasm`).
 - `uskd` is the only crate that binds sockets. `usk` talks to `uskd`, except `usk mcp` and `usk run`, which link `core` directly.
 - Cloud crates depend on `core` for policy evaluation and envelope handling so the hosted broker runs the identical pipeline.
-- `#![forbid(unsafe_code)]` everywhere except a tiny `platform` module (mlock, keychain FFI) that is reviewed separately.
+- `#![forbid(unsafe_code)]` everywhere except a tiny `platform` module (mlock, keychain FFI, Windows handle-inheritance flags) that is reviewed separately. Today: `crates/usk/src/platform.rs` (two Win32 calls, `#![deny(unsafe_code)]` at crate level with a module-scoped allow).
 - `SecretBytes` never implements `Serialize` for JSON; the only way to serialize is inside `vault::records` encryption. Clippy lint (custom `dylint`, later) or code review enforces it.
 - Logging via `tracing` with a global layer that redacts any string matching the scrubber automaton, as defence in depth (INV-1). Log level `debug` never logs bodies or headers.
 

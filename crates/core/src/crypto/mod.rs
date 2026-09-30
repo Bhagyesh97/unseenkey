@@ -51,3 +51,22 @@ pub fn random_array<const N: usize>() -> [u8; N] {
     random_bytes(&mut out);
     out
 }
+
+/// The base62 alphabet used for tokens and handles.
+pub const BASE62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+/// `len` uniformly random base62 characters (rejection sampling, no modulo bias).
+pub fn random_base62(len: usize) -> alloc::string::String {
+    let mut out = alloc::string::String::with_capacity(len);
+    let mut buf = [0u8; 64];
+    while out.len() < len {
+        random_bytes(&mut buf);
+        for &b in buf.iter() {
+            // 248 = 4 * 62: bytes at or above are rejected to keep the draw uniform.
+            if b < 248 && out.len() < len {
+                out.push(BASE62[(b % 62) as usize] as char);
+            }
+        }
+    }
+    out
+}
