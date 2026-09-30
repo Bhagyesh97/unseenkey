@@ -7,7 +7,8 @@
 //! - no `unsafe` outside a reviewed `platform` module (none yet);
 //! - no network listeners, no CLI;
 //! - plaintext lives in [`crypto::SecretBytes`], which zeroizes on drop and
-//!   never prints or serializes its contents.
+//!   never prints or serializes its contents, or in the vault's zeroizing
+//!   payload types that exist only on the encryption path.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -16,3 +17,9 @@
 extern crate alloc;
 
 pub mod crypto;
+pub mod ids;
+pub mod import;
+pub mod providers;
+pub mod storage;
+pub mod time;
+pub mod vault;

@@ -21,6 +21,8 @@ allow = [
   "Unicode-DFS-2016",
   "Zlib",
   "CC0-1.0",
+  # File-level copyleft only; used by `option-ext` via `dirs`. Does not affect our licence.
+  "MPL-2.0",
 ]
 confidence-threshold = 0.9
 

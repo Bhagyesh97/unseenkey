@@ -11,8 +11,18 @@ rust-version.workspace = true
 crate-type = ["rlib"]
 
 [features]
-default = ["std"]
-std = ["argon2/std", "hkdf/std", "blake3/std", "ed25519-dalek/std"]
+default = ["std", "sqlite"]
+std = [
+  "argon2/std",
+  "hkdf/std",
+  "blake3/std",
+  "ed25519-dalek/std",
+  "serde_json/std",
+  "hex/std",
+  "bip39/std",
+]
+# SQLite storage backend (native only).
+sqlite = ["std", "dep:rusqlite"]
 # Browser build: no std-only platform code. Randomness comes from the
 # browser's crypto.getRandomValues via getrandom's "js" feature.
 wasm = ["getrandom/js"]
@@ -27,10 +37,13 @@ ed25519-dalek = { workspace = true }
 rand_core = { workspace = true }
 subtle = { workspace = true }
 zeroize = { workspace = true }
+bip39 = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
-getrandom = { version = "0.2", default-features = false }
-
-[dev-dependencies]
 serde_json = { workspace = true }
 hex = { workspace = true }
+getrandom = { version = "0.2", default-features = false }
+rusqlite = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
