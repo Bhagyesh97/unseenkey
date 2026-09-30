@@ -1,0 +1,27 @@
+id = "sendgrid"
+display = "SendGrid"
+upstreams = ["api.sendgrid.com"]
+auth = { kind = "bearer" }
+docs = "https://app.sendgrid.com/settings/api_keys"
+base_path = ""
+
+[env]
+api_key = "SENDGRID_API_KEY"
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+recommended = true
+allow = ["GET /**"]
+
+[[policies]]
+id = "write"
+display = "Read and write; no deletes or account settings"
+recommended = true
+allow = ["GET /**", "POST /v3/mail/send", "POST /v3/marketing/contacts", "PUT /v3/marketing/contacts"]
+deny = ["DELETE /**", "* /v3/api_keys/**", "* /v3/user/**", "* /v3/teammates/**", "* /v3/whitelabel/**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

@@ -1,0 +1,22 @@
+id = "google-ai"
+display = "Google AI"
+upstreams = ["generativelanguage.googleapis.com"]
+auth = { kind = "query", param = "key" }
+docs = "https://aistudio.google.com/app/apikey"
+base_path = "/v1beta"
+
+[env]
+base_url = "GOOGLE_GEMINI_BASE_URL"
+api_key = "GEMINI_API_KEY"
+
+[[policies]]
+id = "generate"
+display = "Generate content and embeddings only"
+recommended = true
+allow = ["POST /v1beta/models/**", "GET /v1beta/models", "GET /v1beta/models/*", "POST /v1/models/**", "GET /v1/models"]
+deny = ["* /v1beta/tunedModels/**", "* /v1beta/files/**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

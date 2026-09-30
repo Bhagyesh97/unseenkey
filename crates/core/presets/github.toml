@@ -1,0 +1,54 @@
+id = "github"
+display = "GitHub"
+upstreams = ["api.github.com"]
+auth = { kind = "bearer" }
+docs = "https://github.com/settings/tokens"
+base_path = ""
+
+[env]
+base_url = "GITHUB_API_URL"
+api_key = "GITHUB_TOKEN"
+
+[[policies]]
+id = "read-only"
+display = "Read repositories, issues and pull requests"
+recommended = true
+allow = ["GET /**"]
+deny = ["GET /user/keys", "GET /user/emails", "GET /orgs/*/actions/secrets/**", "GET /repos/*/*/actions/secrets/**"]
+
+[[policies]]
+id = "contribute"
+display = "Read, open issues and pull requests, push via API; no deletes or settings"
+recommended = true
+allow = [
+  "GET /**",
+  "POST /repos/*/*/issues",
+  "PATCH /repos/*/*/issues/*",
+  "POST /repos/*/*/issues/*/comments",
+  "POST /repos/*/*/pulls",
+  "PATCH /repos/*/*/pulls/*",
+  "POST /repos/*/*/pulls/*/reviews",
+  "POST /repos/*/*/pulls/*/comments",
+  "POST /repos/*/*/git/**",
+  "PUT /repos/*/*/contents/**",
+  "POST /repos/*/*/statuses/*",
+  "POST /repos/*/*/check-runs",
+  "PATCH /repos/*/*/check-runs/*",
+]
+deny = [
+  "DELETE /**",
+  "* /repos/*/*/actions/secrets/**",
+  "* /orgs/*/actions/secrets/**",
+  "* /repos/*/*/keys/**",
+  "* /user/keys/**",
+  "* /repos/*/*/hooks/**",
+  "* /orgs/*/hooks/**",
+  "* /orgs/*/members/**",
+  "* /repos/*/*/collaborators/**",
+  "PATCH /repos/*/*",
+]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

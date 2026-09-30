@@ -46,8 +46,12 @@ dirs = "7"
 # Loopback only: no TLS feature, so no second crypto stack (rustls/ring) in the tree.
 ureq = { version = "2", default-features = false, features = ["json"] }
 
+# time zones for policy schedules (bundled tzdb so behaviour is identical on every OS)
+jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
+
 # dev
 tempfile = "3"
+proptest = "1"
 
 [profile.release]
 opt-level = 3

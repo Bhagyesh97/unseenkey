@@ -1,0 +1,36 @@
+id = "anthropic"
+display = "Anthropic"
+upstreams = ["api.anthropic.com"]
+auth = { kind = "header", name = "x-api-key" }
+docs = "https://console.anthropic.com/settings/keys"
+base_path = ""
+
+[env]
+base_url = "ANTHROPIC_BASE_URL"
+api_key = "ANTHROPIC_API_KEY"
+
+[[policies]]
+id = "chat"
+display = "Chat, responses and embeddings only"
+recommended = true
+allow = [
+  "POST /v1/messages",
+  "POST /v1/messages/count_tokens",
+  "GET /v1/models",
+  "GET /v1/models/*",
+]
+
+[[policies]]
+id = "no-admin"
+display = "Everything except organisation, billing and fine-tuning"
+allow = ["* /**"]
+deny = [
+  "* /v1/organizations/**",
+  "* /v1/messages/batches/**",
+  "* /v1/files/**",
+]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

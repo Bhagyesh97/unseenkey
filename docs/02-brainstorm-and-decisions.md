@@ -74,6 +74,7 @@ Legend: **D-nn** = decision. **Open** = intentionally left open with a default.
 
 **Options:** (a) custom DSL, (b) OPA/Rego, (c) Cedar, (d) plain structured YAML/JSON with a fixed schema.
 **Decision:** (d). A fixed schema is auditable by non-experts (the client must understand what they granted). Cedar is a reasonable upgrade path if expressiveness runs out; noted as Open-2.
+**Amendment (2026-09-30, M1.3):** the human-edited form is **TOML**, not YAML, and the stored form is JSON, same schema. Reason: the standard `serde_yaml` crate is unmaintained (RUSTSEC advisory) and its forks are not established; `toml` is already a dependency. Unknown fields are rejected on parse (INV-5).
 
 ## D-12 Approval flows
 

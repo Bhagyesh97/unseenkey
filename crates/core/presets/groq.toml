@@ -1,0 +1,35 @@
+id = "groq"
+display = "Groq"
+upstreams = ["api.groq.com"]
+auth = { kind = "bearer" }
+docs = "https://console.groq.com/keys"
+base_path = "/openai/v1"
+
+[env]
+base_url = "GROQ_BASE_URL"
+api_key = "GROQ_API_KEY"
+
+[[policies]]
+id = "chat"
+display = "Chat, responses and embeddings only"
+recommended = true
+allow = [
+  "POST /openai/v1/chat/completions",
+  "POST /openai/v1/responses",
+  "GET /openai/v1/models",
+  "POST /openai/v1/audio/transcriptions",
+]
+
+[[policies]]
+id = "no-admin"
+display = "Everything except organisation, billing and fine-tuning"
+allow = ["* /**"]
+deny = [
+  "* /openai/v1/files/**",
+  "* /openai/v1/batches/**",
+]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

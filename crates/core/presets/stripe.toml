@@ -1,0 +1,62 @@
+id = "stripe"
+display = "Stripe"
+upstreams = ["api.stripe.com"]
+auth = { kind = "bearer" }
+docs = "https://dashboard.stripe.com/apikeys"
+base_path = ""
+
+[env]
+base_url = "STRIPE_API_BASE"
+api_key = "STRIPE_SECRET_KEY"
+
+[[policies]]
+id = "read-only"
+display = "Read everything, change nothing"
+recommended = true
+allow = ["GET /v1/**"]
+
+[[policies]]
+id = "payments"
+display = "Take payments; no refunds, payouts or transfers"
+recommended = true
+allow = [
+  "GET /v1/**",
+  "POST /v1/customers",
+  "POST /v1/customers/*",
+  "POST /v1/payment_intents",
+  "POST /v1/payment_intents/*",
+  "POST /v1/payment_intents/*/confirm",
+  "POST /v1/payment_intents/*/capture",
+  "POST /v1/payment_intents/*/cancel",
+  "POST /v1/checkout/sessions",
+  "POST /v1/checkout/sessions/*/expire",
+  "POST /v1/setup_intents",
+  "POST /v1/setup_intents/*",
+  "POST /v1/payment_methods",
+  "POST /v1/payment_methods/*",
+  "POST /v1/payment_methods/*/attach",
+  "POST /v1/subscriptions",
+  "POST /v1/subscriptions/*",
+  "POST /v1/invoices",
+  "POST /v1/invoices/*",
+  "POST /v1/products",
+  "POST /v1/products/*",
+  "POST /v1/prices",
+  "POST /v1/prices/*",
+  "POST /v1/webhook_endpoints",
+]
+deny = [
+  "* /v1/refunds/**",
+  "* /v1/payouts/**",
+  "* /v1/transfers/**",
+  "* /v1/topups/**",
+  "* /v1/balance/**",
+  "* /v1/accounts/**",
+  "* /v1/account_links/**",
+  "DELETE /**",
+]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

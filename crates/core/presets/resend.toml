@@ -1,0 +1,27 @@
+id = "resend"
+display = "Resend"
+upstreams = ["api.resend.com"]
+auth = { kind = "bearer" }
+docs = "https://resend.com/api-keys"
+base_path = ""
+
+[env]
+api_key = "RESEND_API_KEY"
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+recommended = true
+allow = ["GET /**"]
+
+[[policies]]
+id = "write"
+display = "Read and write; no deletes or account settings"
+recommended = true
+allow = ["GET /**", "POST /emails", "POST /emails/batch", "POST /contacts", "PATCH /contacts/*", "POST /audiences/*/contacts"]
+deny = ["DELETE /**", "* /api-keys/**", "* /domains/**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

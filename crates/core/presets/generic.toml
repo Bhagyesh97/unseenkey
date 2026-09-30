@@ -1,0 +1,17 @@
+id = "generic"
+display = "Generic HTTP API"
+upstreams = []
+auth = { kind = "template" }
+docs = ""
+base_path = ""
+
+[[policies]]
+id = "read-only"
+display = "GET requests only"
+recommended = true
+allow = ["GET /**", "HEAD /**"]
+
+[[policies]]
+id = "full"
+display = "Any request to the locked host"
+allow = ["* /**"]

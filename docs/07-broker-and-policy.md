@@ -82,34 +82,54 @@ Shipping presets in Phase 1: openai, anthropic, google-ai, mistral, groq, openro
 
 ## Policy schema
 
-```yaml
-version: 1
-secret: stripe-live                 # by name (resolved to id at save time)
-upstreams: ["api.stripe.com"]       # inherited from secret; may only narrow
-allow:                              # "<METHOD|*> <path-glob>"
-  - "GET /v1/**"
-  - "POST /v1/payment_intents"
-  - "POST /v1/payment_intents/*/confirm"
-deny:                               # evaluated after allow; deny wins
-  - "POST /v1/refunds"
-  - "* /v1/payouts/**"
-limits:
-  requests_per_minute: 120
-  requests_per_day: 5000
-  requests_total: 100000            # lifetime of the handle
-  max_body_bytes: 1048576
-schedule:                           # optional; UTC or IANA zone
-  timezone: "Asia/Kolkata"
-  allowed: ["Mon-Fri 09:00-19:00"]
-expires_at: "2026-12-31T00:00:00Z"
-approval:
-  mode: none                        # none | first_use | every_use | paths
-  paths: ["POST /v1/transfers/**"]  # when mode = paths
-  timeout_seconds: 120
-callers: ["device:2f9c…"]           # empty = any registered caller of this vault
-injection: false                    # allow `usk run` env injection
-mcp: true                           # expose to MCP clients
-notes: "For the checkout project, Sept–Dec 2026"
+```toml
+# TOML when a human edits it, JSON when the vault stores it (D-11 amendment).
+version = 1
+secret = "stripe-live"                # by name (resolved to id at save time)
+upstreams = ["api.stripe.com"]        # inherited from the secret; may only narrow
+allow = [                             # "<METHOD|*> <path-glob>"
+  "GET /v1/**",
+  "POST /v1/payment_intents",
+  "POST /v1/payment_intents/*/confirm",
+]
+deny = [                              # deny wins over allow
+  "POST /v1/refunds",
+  "* /v1/payouts/**",
+]
+expires_at = "2026-12-31T00:00:00Z"
+callers = ["device:2f9c…"]            # empty = any registered caller of this vault
+injection = false                     # allow `usk run` env injection
+mcp = true                            # expose to MCP clients
+notes = "For the checkout project, Sept–Dec 2026"
+
+[limits]
+requests_per_minute = 120
+requests_per_day = 5000
+requests_total = 100000               # lifetime of the handle
+max_body_bytes = 1048576
+
+[schedule]                            # optional; IANA zone
+timezone = "Asia/Kolkata"
+allowed = ["Mon-Fri 09:00-19:00"]
+
+[approval]
+mode = "none"                         # none | first_use | every_use | paths
+paths = ["POST /v1/transfers/**"]     # when mode = paths
+timeout_seconds = 120
+```
+
+`usk policy explain --file policy.toml` renders this as:
+
+```
+Can read anything under /v1, create or send at /v1/payment_intents, and create or send anything under /v1/payment_intents.
+Cannot create or send at /v1/refunds and do anything under /v1/payouts.
+Only to api.stripe.com.
+At most 120 requests per minute, 5,000 per day, and 100,000 in total.
+Requests larger than 1 MiB are refused.
+Only Mon–Fri 09:00–19:00 (Asia/Kolkata).
+Expires 31 Dec 2026 (UTC).
+Usable only by device:2f9c….
+Note: For the checkout project, Sept–Dec 2026
 ```
 
 ### Evaluation rules

@@ -1,0 +1,35 @@
+id = "openrouter"
+display = "OpenRouter"
+upstreams = ["openrouter.ai"]
+auth = { kind = "bearer" }
+docs = "https://openrouter.ai/settings/keys"
+base_path = "/api/v1"
+
+[env]
+base_url = "OPENROUTER_BASE_URL"
+api_key = "OPENROUTER_API_KEY"
+
+[[policies]]
+id = "chat"
+display = "Chat, responses and embeddings only"
+recommended = true
+allow = [
+  "POST /api/v1/chat/completions",
+  "POST /api/v1/completions",
+  "GET /api/v1/models",
+  "GET /api/v1/models/**",
+]
+
+[[policies]]
+id = "no-admin"
+display = "Everything except organisation, billing and fine-tuning"
+allow = ["* /**"]
+deny = [
+  "* /api/v1/keys/**",
+  "* /api/v1/credits/**",
+]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

@@ -23,9 +23,9 @@ std = [
 ]
 # SQLite storage backend (native only).
 sqlite = ["std", "dep:rusqlite"]
-# Browser build: no std-only platform code. Randomness comes from the
-# browser's crypto.getRandomValues via getrandom's "js" feature.
-wasm = ["getrandom/js"]
+# Browser build (wasm32-unknown-unknown has std; the OS clock is not used
+# there). Randomness comes from crypto.getRandomValues via getrandom's "js" feature.
+wasm = ["std", "getrandom/js"]
 
 [dependencies]
 argon2 = { workspace = true }
@@ -44,6 +44,9 @@ serde_json = { workspace = true }
 hex = { workspace = true }
 getrandom = { version = "0.2", default-features = false }
 rusqlite = { workspace = true, optional = true }
+jiff = { workspace = true }
+toml = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+proptest = { workspace = true }

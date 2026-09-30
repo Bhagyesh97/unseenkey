@@ -1,0 +1,39 @@
+id = "openai"
+display = "OpenAI"
+upstreams = ["api.openai.com"]
+auth = { kind = "bearer" }
+docs = "https://platform.openai.com/api-keys"
+base_path = "/v1"
+
+[env]
+base_url = "OPENAI_BASE_URL"
+api_key = "OPENAI_API_KEY"
+
+[[policies]]
+id = "chat"
+display = "Chat, responses and embeddings only"
+recommended = true
+allow = [
+  "POST /v1/chat/completions",
+  "POST /v1/responses",
+  "POST /v1/embeddings",
+  "GET /v1/models",
+  "GET /v1/models/*",
+  "POST /v1/moderations",
+]
+
+[[policies]]
+id = "no-admin"
+display = "Everything except organisation, billing and fine-tuning"
+allow = ["* /**"]
+deny = [
+  "* /v1/organization/**",
+  "* /v1/fine_tuning/**",
+  "* /v1/files/**",
+  "* /v1/batches/**",
+]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

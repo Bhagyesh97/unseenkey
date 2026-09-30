@@ -1,0 +1,27 @@
+id = "cloudflare"
+display = "Cloudflare"
+upstreams = ["api.cloudflare.com"]
+auth = { kind = "bearer" }
+docs = "https://dash.cloudflare.com/profile/api-tokens"
+base_path = "/client/v4"
+
+[env]
+api_key = "CLOUDFLARE_API_TOKEN"
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+recommended = true
+allow = ["GET /client/v4/**"]
+
+[[policies]]
+id = "write"
+display = "Read and write; no deletes or account settings"
+recommended = true
+allow = ["GET /client/v4/**", "POST /client/v4/zones/*/dns_records", "PUT /client/v4/zones/*/dns_records/*", "PATCH /client/v4/zones/*/dns_records/*", "POST /client/v4/zones/*/purge_cache", "PUT /client/v4/accounts/*/workers/scripts/*", "POST /client/v4/accounts/*/pages/projects/*/deployments"]
+deny = ["DELETE /**", "* /client/v4/user/tokens/**", "* /client/v4/accounts/*/tokens/**", "* /client/v4/accounts/*/members/**", "* /client/v4/zones/*/settings/**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

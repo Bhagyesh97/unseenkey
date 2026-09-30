@@ -115,6 +115,13 @@ enum Command {
     Status,
     /// Diagnose common problems.
     Doctor,
+    /// List provider presets and their ready-made policies.
+    Presets,
+    /// Inspect policies.
+    Policy {
+        #[command(subcommand)]
+        action: PolicyAction,
+    },
     /// Manage the background daemon.
     Daemon {
         #[command(subcommand)]
@@ -215,6 +222,11 @@ pub fn run() -> Result<(), CliError> {
         Command::Recover { profile: p } => recover(&paths, profile(p)),
         Command::Status => status(&paths, cli.json),
         Command::Doctor => doctor(&paths),
+        Command::Presets => presets(cli.json),
+        Command::Policy { action } => match action {
+            PolicyAction::Explain { preset, file } => policy_explain(preset, file, cli.json),
+            PolicyAction::Check { file } => policy_check(&file),
+        },
         Command::Daemon { action } => match action {
             DaemonAction::Run {
                 listen,
@@ -599,6 +611,115 @@ fn status(paths: &VaultPaths, json: bool) -> Result<(), CliError> {
         ),
         None => println!("daemon:  not running (starts on first use)"),
     }
+    Ok(())
+}
+
+#[derive(Subcommand)]
+enum PolicyAction {
+    /// Render a policy as plain English.
+    Explain {
+        /// A preset policy such as `stripe:payments`.
+        #[arg(long, conflicts_with = "file")]
+        preset: Option<String>,
+        /// A policy file (TOML or JSON).
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
+    /// Validate a policy file.
+    Check {
+        /// A policy file (TOML or JSON).
+        file: PathBuf,
+    },
+}
+
+fn load_policy_file(file: &Path) -> Result<unseenkey_core::policy::Policy, CliError> {
+    let text = std::fs::read_to_string(file)
+        .map_err(|e| CliError::general(format!("cannot read {}: {e}", file.display())))?;
+    let is_json =
+        file.extension().is_some_and(|e| e == "json") || text.trim_start().starts_with('{');
+    let parsed = if is_json {
+        unseenkey_core::policy::Policy::from_json(&text)
+    } else {
+        unseenkey_core::policy::Policy::from_toml(&text)
+    };
+    parsed.map_err(|e| CliError::with_code(2, "invalid_policy", e.to_string()))
+}
+
+fn presets(json: bool) -> Result<(), CliError> {
+    let all: Vec<_> = unseenkey_core::presets::all().collect();
+    if json {
+        let v: Vec<Value> = all
+            .iter()
+            .map(|p| {
+                json!({
+                    "id": p.id, "display": p.display, "upstreams": p.upstreams, "docs": p.docs,
+                    "policies": p.policies.iter().map(|pp| json!({"id": pp.id, "display": pp.display, "recommended": pp.recommended})).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+        return Ok(());
+    }
+    for p in all {
+        println!(
+            "{:<12} {:<16} {}",
+            p.id,
+            p.display,
+            if p.upstreams.is_empty() {
+                "(any locked host)".to_string()
+            } else {
+                p.upstreams.join(", ")
+            }
+        );
+        for pp in &p.policies {
+            println!(
+                "    {}:{:<12} {}{}",
+                p.id,
+                pp.id,
+                pp.display,
+                if pp.recommended {
+                    "  (recommended)"
+                } else {
+                    ""
+                }
+            );
+        }
+    }
+    println!("\nExplain one with: usk policy explain --preset <provider>:<policy>");
+    Ok(())
+}
+
+fn policy_explain(
+    preset: Option<String>,
+    file: Option<PathBuf>,
+    json: bool,
+) -> Result<(), CliError> {
+    let policy = match (preset, file) {
+        (Some(spec), None) => unseenkey_core::presets::policy_ref(&spec)
+            .map_err(|e| CliError::general(e.to_string()))?,
+        (None, Some(f)) => load_policy_file(&f)?,
+        _ => {
+            return Err(CliError::general(
+                "pass --preset provider:policy or --file path",
+            ))
+        }
+    };
+    let text = unseenkey_core::policy::explain(&policy);
+    if json {
+        println!(
+            "{}",
+            json!({ "explanation": text, "policy": serde_json::from_str::<Value>(&policy.to_json()).unwrap_or(Value::Null) })
+        );
+    } else {
+        println!("{text}");
+    }
+    Ok(())
+}
+
+fn policy_check(file: &Path) -> Result<(), CliError> {
+    let policy = load_policy_file(file)?;
+    println!("ok: {} valid", file.display());
+    println!("{}", unseenkey_core::policy::explain(&policy));
     Ok(())
 }
 

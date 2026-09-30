@@ -1,0 +1,27 @@
+id = "twilio"
+display = "Twilio"
+upstreams = ["api.twilio.com"]
+auth = { kind = "basic" }
+docs = "https://console.twilio.com/"
+base_path = "/2010-04-01"
+
+[env]
+api_key = "TWILIO_AUTH_TOKEN"
+
+[[policies]]
+id = "read-only"
+display = "Read logs and resources only"
+recommended = true
+allow = ["GET /**"]
+
+[[policies]]
+id = "messaging"
+display = "Send SMS and read logs; no calls, numbers or account changes"
+recommended = true
+allow = ["GET /**", "POST /2010-04-01/Accounts/*/Messages.json", "POST /2010-04-01/Accounts/*/Messages/*.json"]
+deny = ["* /2010-04-01/Accounts/*/Calls/**", "* /2010-04-01/Accounts/*/IncomingPhoneNumbers/**", "* /2010-04-01/Accounts/*/Keys/**", "POST /2010-04-01/Accounts/*.json", "DELETE /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

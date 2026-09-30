@@ -1,0 +1,28 @@
+id = "supabase"
+display = "Supabase"
+upstreams = ["*.supabase.co"]
+auth = { kind = "bearer", also_headers = ["apikey"] }
+docs = "https://supabase.com/dashboard/project/_/settings/api"
+base_path = ""
+
+[env]
+base_url = "SUPABASE_URL"
+api_key = "SUPABASE_KEY"
+
+[[policies]]
+id = "read-only"
+display = "Read data only"
+recommended = true
+allow = ["GET /rest/v1/**", "GET /storage/v1/**", "HEAD /rest/v1/**"]
+
+[[policies]]
+id = "data"
+display = "Read and write data and storage; no auth admin"
+recommended = true
+allow = ["* /rest/v1/**", "* /storage/v1/**", "POST /functions/v1/**"]
+deny = ["* /auth/v1/admin/**", "DELETE /storage/v1/bucket/**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

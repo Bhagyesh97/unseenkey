@@ -1,0 +1,27 @@
+id = "notion"
+display = "Notion"
+upstreams = ["api.notion.com"]
+auth = { kind = "bearer" }
+docs = "https://www.notion.so/my-integrations"
+base_path = "/v1"
+
+[env]
+api_key = "NOTION_TOKEN"
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+recommended = true
+allow = ["GET /v1/**", "POST /v1/search", "POST /v1/databases/*/query"]
+
+[[policies]]
+id = "write"
+display = "Read and write; no deletes or account settings"
+recommended = true
+allow = ["GET /v1/**", "POST /v1/search", "POST /v1/databases/*/query", "POST /v1/pages", "PATCH /v1/pages/*", "PATCH /v1/blocks/*", "PATCH /v1/blocks/*/children", "POST /v1/comments", "POST /v1/databases", "PATCH /v1/databases/*"]
+deny = ["DELETE /**", "* /v1/users/**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

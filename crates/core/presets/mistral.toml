@@ -1,0 +1,34 @@
+id = "mistral"
+display = "Mistral"
+upstreams = ["api.mistral.ai"]
+auth = { kind = "bearer" }
+docs = "https://console.mistral.ai/api-keys"
+base_path = "/v1"
+
+[env]
+base_url = "MISTRAL_BASE_URL"
+api_key = "MISTRAL_API_KEY"
+
+[[policies]]
+id = "chat"
+display = "Chat, responses and embeddings only"
+recommended = true
+allow = [
+  "POST /v1/chat/completions",
+  "POST /v1/embeddings",
+  "GET /v1/models",
+]
+
+[[policies]]
+id = "no-admin"
+display = "Everything except organisation, billing and fine-tuning"
+allow = ["* /**"]
+deny = [
+  "* /v1/fine_tuning/**",
+  "* /v1/files/**",
+]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

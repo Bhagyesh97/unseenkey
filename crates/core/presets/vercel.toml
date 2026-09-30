@@ -1,0 +1,27 @@
+id = "vercel"
+display = "Vercel"
+upstreams = ["api.vercel.com"]
+auth = { kind = "bearer" }
+docs = "https://vercel.com/account/tokens"
+base_path = ""
+
+[env]
+api_key = "VERCEL_TOKEN"
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+recommended = true
+allow = ["GET /**"]
+
+[[policies]]
+id = "write"
+display = "Read and write; no deletes or account settings"
+recommended = true
+allow = ["GET /**", "POST /v13/deployments", "POST /v*/deployments", "PATCH /v*/projects/*", "POST /v*/projects/*/env", "PATCH /v*/projects/*/env/*"]
+deny = ["DELETE /**", "* /v*/teams/**", "* /v*/user/**", "* /v*/projects/*/domains/**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

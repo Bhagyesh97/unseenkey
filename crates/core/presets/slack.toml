@@ -1,0 +1,27 @@
+id = "slack"
+display = "Slack"
+upstreams = ["slack.com"]
+auth = { kind = "bearer" }
+docs = "https://api.slack.com/apps"
+base_path = "/api"
+
+[env]
+api_key = "SLACK_BOT_TOKEN"
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+recommended = true
+allow = ["GET /api/conversations.*", "GET /api/users.*", "POST /api/conversations.history", "POST /api/conversations.list", "POST /api/users.list", "POST /api/users.info", "POST /api/auth.test"]
+
+[[policies]]
+id = "write"
+display = "Read and write; no deletes or account settings"
+recommended = true
+allow = ["* /api/chat.postMessage", "* /api/chat.update", "* /api/chat.postEphemeral", "* /api/reactions.add", "* /api/files.upload", "* /api/files.getUploadURLExternal", "* /api/files.completeUploadExternal", "* /api/conversations.*", "* /api/users.*", "* /api/auth.test", "* /api/views.*"]
+deny = ["* /api/chat.delete", "* /api/admin.*", "* /api/conversations.kick", "* /api/conversations.archive", "* /api/users.admin.*", "* /api/apps.*"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]
