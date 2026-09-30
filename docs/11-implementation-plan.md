@@ -2,6 +2,8 @@
 
 Assumes one experienced developer full-time (with AI assistance), or a two-person team halving the calendar. Weeks are estimates; each milestone has a demo and a "done" definition. Security tests from [12](12-testing-and-assurance.md) are part of "done", not a later phase.
 
+> **Order of execution (D-27, 2026-09-30):** Phase 0 → Phase 1 → M2.1 (MCP) → **M3.1 + M3.2 as "delegation-lite"** (web dashboard instead of desktop; CLI for grantees) → M2.2 desktop app, M2.3 adapters, transparent mode, importers → Phase 3 remainder → Phase 4. The phase numbering below is kept for reference; the sequence above is what we build. Ten customer conversations gate the delegation build.
+
 ## Phase 0 — Foundations (Week 1)
 
 - Monorepo, workspace, CI matrix (macOS/Windows/Linux/wasm32), `cargo deny`/`audit`, formatting and clippy gates.

@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = ["crates/core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/Bhagyesh97/unseenkey"
+rust-version = "1.80"
+
+[workspace.dependencies]
+# crypto (RustCrypto + friends); versions pinned to a mutually compatible set
+argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+hkdf = "0.12"
+sha2 = { version = "0.10", default-features = false }
+blake3 = "1"
+ed25519-dalek = { version = "2", default-features = false, features = ["alloc", "zeroize"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+subtle = { version = "2", default-features = false }
+zeroize = { version = "1", features = ["zeroize_derive"] }
+
+# general
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 1

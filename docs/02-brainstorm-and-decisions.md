@@ -155,6 +155,11 @@ SSO/SCIM, browser autofill, HSM, Kubernetes operator, WebSocket proxying, spend 
 **Context:** Some SDKs validate key shape (prefix or length) before sending. Veil avoids this with realistic-looking placeholders.
 **Decision:** Each preset may define a `handle_format` (e.g. OpenAI `sk-usk-<32 chars>`, Stripe `sk_live_usk_<24 chars>`). `usk handle create` uses the preset format when the preset declares it is needed; otherwise the canonical `usk_h_` form. All formats contain the `usk` marker, are registered with secret scanners, and are looked up by hash exactly like canonical handles. The canonical form remains the default.
 
+## D-27 Re-ordered roadmap: delegation before desktop
+
+**Context:** Delegation is the only uncontested and only unvalidated part of the product, and the original plan reached it in week 22.
+**Decision (approved 2026-09-30):** Weeks 1–8 Phase 0 + Phase 1 (core, vault, local broker, CLI). Weeks 9–10 MCP server only. Weeks 11–18 **delegation-lite**: accounts, grants, invites, KMS-backed hosted broker, a simple web dashboard for owners (developers use the CLI). Week 19+ desktop app, transparent mode, importers, then Phase 4 assurance. Ten customer conversations (five agencies/freelancers, five clients) happen before week 11 and gate the hosted build. Repo is private until the Phase 1 alpha, then public with the threat model as README. Details in [11](11-implementation-plan.md).
+
 ## Open items (defaults chosen; revisit when data arrives)
 
 - **Open-1: Pricing tiers.** Default in [15](15-business-and-gtm.md). Validate with 20 customer conversations.

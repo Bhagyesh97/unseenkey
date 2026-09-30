@@ -1,0 +1,14 @@
+{
+  "source": "BLAKE3 official test vectors (github.com/BLAKE3-team/BLAKE3/test_vectors)",
+  "vectors": [
+    {
+      "input_len": 0,
+      "hash_hex": "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+    },
+    {
+      "input_len": 1,
+      "hash_hex": "2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213"
+    }
+  ],
+  "note": "Inputs are the standard BLAKE3 pattern: byte i = i mod 251."
+}

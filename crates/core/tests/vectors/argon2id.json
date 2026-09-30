@@ -1,0 +1,21 @@
+{
+  "source": "phc-winner-argon2 test.c, Argon2id version 0x13",
+  "vectors": [
+    {
+      "password": "password",
+      "salt": "somesalt",
+      "t_cost": 2,
+      "m_cost_kib": 65536,
+      "p_cost": 1,
+      "tag_hex": "09316115d5cf24ed5a15a31a3ba326e5cf32edc24702987c02b6566f61913cf7"
+    },
+    {
+      "password": "password",
+      "salt": "somesalt",
+      "t_cost": 2,
+      "m_cost_kib": 262144,
+      "p_cost": 1,
+      "tag_hex": "78fe1ec91fb3aa5657d72e710854e4c3d9b9198c742f9616c2f085bed95b2e8c"
+    }
+  ]
+}
