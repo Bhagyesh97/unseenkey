@@ -474,7 +474,12 @@ pub async fn events(
 
 /// `POST /v1/shutdown`
 pub async fn shutdown(State(s): State<Arc<AppState>>) -> ApiResult<serde_json::Value> {
-    s.request_shutdown();
+    // Signal after this response has been written, so the client sees a clean reply
+    // instead of a dropped connection.
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        s.request_shutdown();
+    });
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

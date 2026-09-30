@@ -239,7 +239,16 @@ pub fn run() -> Result<(), CliError> {
             DaemonAction::Stop => {
                 match Client::try_connect(&paths) {
                     Some(c) => {
-                        c.post("/v1/shutdown", json!({}))?;
+                        // A dropped connection is fine as long as the daemon is actually gone.
+                        if let Err(e) = c.post("/v1/shutdown", json!({})) {
+                            let gone =
+                                daemon::wait_until(std::time::Duration::from_secs(3), || {
+                                    Client::try_connect(&paths).is_none().then_some(())
+                                });
+                            if gone.is_none() {
+                                return Err(e);
+                            }
+                        }
                         println!("Daemon stopping.");
                     }
                     None => println!("Daemon is not running."),
