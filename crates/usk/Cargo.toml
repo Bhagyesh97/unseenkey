@@ -6,6 +6,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+# `cargo run -p usk` runs the CLI; the daemon is `usk daemon run` or the `uskd` bin.
+default-run = "usk"
 
 [[bin]]
 name = "usk"
