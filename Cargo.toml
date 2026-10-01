@@ -1,6 +1,9 @@
 [workspace]
 resolver = "2"
 members = ["crates/core", "crates/daemon", "crates/usk"]
+# The desktop app has its own lockfile and a much larger dependency tree (webkit/GTK on
+# Linux); it is built separately so `cargo build --workspace` stays lean.
+exclude = ["apps/desktop/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"

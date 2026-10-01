@@ -15,6 +15,9 @@ Every SDK, `.env` file and AI agent asks for the raw secret string, and once it 
 
 ```
 crates/core   unseenkey-core: crypto, vault, policy, broker, audit (no sockets, no CLI)
+crates/daemon unseenkey-daemon: loopback management API, broker route, MCP server
+crates/usk    usk (CLI) and uskd (daemon) binaries
+apps/desktop  desktop app (Tauri 2 + React), built separately; see its README
 docs/         design documents and decision records
 ```
 

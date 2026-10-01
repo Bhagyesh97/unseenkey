@@ -7,7 +7,6 @@ Cargo.lock.bak
 node_modules/
 dist/
 .vite/
-apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
 
 # OS / editor
