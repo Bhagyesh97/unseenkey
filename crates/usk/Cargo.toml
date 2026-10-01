@@ -22,6 +22,7 @@ unseenkey-core = { version = "0.1.0", path = "../core" }
 unseenkey-daemon = { version = "0.1.0", path = "../daemon" }
 clap = { workspace = true }
 rpassword = { workspace = true }
+dirs = { workspace = true }
 serde_json = { workspace = true, features = ["std"] }
 zeroize = { workspace = true }
 ureq = { workspace = true }

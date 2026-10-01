@@ -196,6 +196,7 @@ async fn setup() -> Env {
             ("api.stripe.com".into(), format!("http://{mock}")),
             ("127.0.0.1".into(), format!("http://{mock}")),
         ],
+        mcp_allow_store: false,
     })
     .await
     .unwrap();

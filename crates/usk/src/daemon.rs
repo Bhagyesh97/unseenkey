@@ -30,6 +30,7 @@ pub fn resolve_options(
         idle_lock_minutes,
         write_runtime_files: true,
         upstream_overrides: vec![],
+        mcp_allow_store: cfg.mcp.allow_store,
     })
 }
 

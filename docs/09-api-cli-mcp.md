@@ -82,8 +82,11 @@ usk run --with VAR=name [...] -- <cmd…>   inject secrets into a child's enviro
 usk secret set <name> [--allow-injection bool] [--no-scrub bool] [--notes …] [--tag …] [--upstream host]
 usk guard scan [.env]            which lines look like secrets, and which can become handles
 usk guard fix  [.env] [--dry-run] move them into the vault, rewrite the file with handles + base-URL variables
-usk mcp                          stdio MCP server
-usk mcp install [claude|cursor|windsurf|all]   write MCP config for detected clients
+usk mcp --client <name>          stdio MCP bridge to the daemon's /mcp (what the clients' configs run)
+usk mcp install <claude-code|claude-desktop|cursor|windsurf|all|custom-name>   register the client (usk_m_ token) and write its config
+usk mcp clients | usk mcp remove <name>
+usk approvals                    requests waiting for you (proxied calls parked on approval, MCP access requests)
+usk approve [id|latest] [--remember] | usk deny [id|latest]
 usk log [--since 1h] [--kind use] [--json]
 usk log verify
 usk export --out file.uskx | usk import file.uskx

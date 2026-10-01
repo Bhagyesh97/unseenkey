@@ -105,6 +105,11 @@ impl Client {
         Self::handle(self.request("DELETE", path).call())
     }
 
+    /// `http://127.0.0.1:<port>` of the connected daemon.
+    pub fn base_url(&self) -> &str {
+        &self.base
+    }
+
     /// Is the vault locked?
     pub fn is_locked(&self) -> Result<bool, CliError> {
         Ok(self.get("/v1/status")?["locked"].as_bool().unwrap_or(true))

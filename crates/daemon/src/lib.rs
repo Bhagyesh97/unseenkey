@@ -14,9 +14,11 @@
 #![deny(missing_docs)]
 
 pub mod api;
+pub mod callers;
 pub mod config;
 pub mod guard;
 pub mod logging;
+pub mod mcp;
 pub mod paths;
 pub mod proxy;
 pub mod server;

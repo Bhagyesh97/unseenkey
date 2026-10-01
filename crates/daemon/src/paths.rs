@@ -19,6 +19,8 @@ pub struct VaultPaths {
     pub pid: PathBuf,
     /// Daemon log directory.
     pub logs: PathBuf,
+    /// MCP client registry and token files.
+    pub mcp: PathBuf,
 }
 
 impl VaultPaths {
@@ -35,6 +37,7 @@ impl VaultPaths {
             addr: dir.join("daemon.addr"),
             pid: dir.join("daemon.pid"),
             logs: dir.join("logs"),
+            mcp: dir.join("mcp"),
             dir,
         }
     }

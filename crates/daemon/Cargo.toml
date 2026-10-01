@@ -23,6 +23,7 @@ dirs = { workspace = true }
 reqwest = { workspace = true }
 rustls = { workspace = true }
 percent-encoding = { workspace = true }
+hex = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

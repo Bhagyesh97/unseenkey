@@ -2387,6 +2387,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "dirs",
+ "hex",
  "percent-encoding",
  "reqwest",
  "rustls",
@@ -2441,6 +2442,7 @@ name = "usk"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "dirs",
  "rpassword",
  "serde_json",
  "tempfile",

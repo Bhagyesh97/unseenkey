@@ -7,6 +7,7 @@ use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -812,6 +813,140 @@ pub async fn revoke_handle(
         serde_json::json!({ "id": id.to_hex() }),
     );
     tracing::info!(handle = %id, "handle revoked");
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ---------- approvals ----------
+
+/// `GET /v1/approvals` — pending requests waiting for the owner.
+pub async fn approvals_list(State(s): State<Arc<AppState>>) -> ApiResult<Vec<Value>> {
+    let now = unseenkey_core::time::Clock::now_unix_ms(&unseenkey_core::time::SystemClock);
+    let items = s
+        .approvals_pending()
+        .await
+        .into_iter()
+        .map(|p| {
+            serde_json::json!({
+                "id": p.id.to_hex(), "kind": p.kind, "handle_id": p.handle_id.to_hex(), "label": p.label,
+                "secret": p.secret, "caller": p.caller, "method": p.method, "host": p.host, "path": p.path,
+                "scope": p.scope, "remember_key": p.remember_key, "created_at": p.created_at,
+                "expires_at": p.expires_at, "seconds_left": ((p.expires_at - now) / 1000).max(0),
+            })
+        })
+        .collect();
+    Ok(Json(items))
+}
+
+/// `POST /v1/approvals/{id}` body.
+#[derive(Deserialize)]
+pub struct Decide {
+    /// `allow` or `deny`.
+    pub decision: String,
+    /// Remember for this handle and rule (only meaningful with `allow`).
+    #[serde(default)]
+    pub remember: bool,
+}
+
+/// `POST /v1/approvals/{id}`
+pub async fn approvals_decide(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(d): Json<Decide>,
+) -> ApiResult<serde_json::Value> {
+    let allow = match d.decision.as_str() {
+        "allow" => true,
+        "deny" => false,
+        _ => {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid",
+                "decision must be allow or deny",
+            ))
+        }
+    };
+    // Accept "latest" as the newest pending id.
+    let id = if id == "latest" {
+        match s.approvals_pending().await.last() {
+            Some(p) => p.id,
+            None => {
+                return Err(ApiError::new(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "nothing is waiting for approval",
+                ))
+            }
+        }
+    } else {
+        Id::from_hex(&id)
+            .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "invalid", "bad approval id"))?
+    };
+    match s.approval_decide(&id, allow, d.remember).await {
+        Some(p) => Ok(Json(
+            serde_json::json!({ "ok": true, "id": id.to_hex(), "allowed": allow, "label": p.label, "secret": p.secret }),
+        )),
+        None => Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "no such pending approval (already decided or expired)",
+        )),
+    }
+}
+
+// ---------- callers (MCP clients) ----------
+
+/// `POST /v1/callers` body.
+#[derive(Deserialize)]
+pub struct CreateCaller {
+    /// Client name, e.g. `cursor`, `claude-code`.
+    pub name: String,
+}
+
+/// `POST /v1/callers` — register an MCP client; returns its token once.
+pub async fn callers_create(
+    State(s): State<Arc<AppState>>,
+    Json(req): Json<CreateCaller>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let now = unseenkey_core::time::Clock::now_unix_ms(&unseenkey_core::time::SystemClock);
+    let token = s
+        .callers
+        .create(&req.name, now)
+        .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, "invalid_caller", e.to_string()))?;
+    tracing::info!(caller = %req.name, "mcp client registered");
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            serde_json::json!({ "name": req.name, "caller": format!("mcp:{}", req.name), "token": token }),
+        ),
+    ))
+}
+
+/// `GET /v1/callers`
+pub async fn callers_list(State(s): State<Arc<AppState>>) -> ApiResult<Vec<Value>> {
+    Ok(Json(
+        s.callers
+            .list()
+            .into_iter()
+            .map(|(n, e)| serde_json::json!({ "name": n, "caller": format!("mcp:{n}"), "created_at": e.created_at, "last_seen_at": e.last_seen_at }))
+            .collect(),
+    ))
+}
+
+/// `DELETE /v1/callers/{name}`
+pub async fn callers_remove(
+    State(s): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> ApiResult<Value> {
+    let removed = s
+        .callers
+        .remove(&name)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "io", e.to_string()))?;
+    if !removed {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "no such caller",
+        ));
+    }
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

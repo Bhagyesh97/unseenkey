@@ -9,6 +9,16 @@ use std::path::Path;
 pub struct Config {
     /// `[daemon]` section.
     pub daemon: DaemonConfig,
+    /// `[mcp]` section.
+    pub mcp: McpConfig,
+}
+
+/// `[mcp]` section.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct McpConfig {
+    /// Let MCP clients store secrets they find (`store_secret` tool). Off by default.
+    pub allow_store: bool,
 }
 
 /// `[daemon]` section.

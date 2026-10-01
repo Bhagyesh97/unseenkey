@@ -9,5 +9,6 @@ pub mod client;
 pub mod daemon;
 pub mod guard;
 pub mod io;
+pub mod mcp;
 pub mod platform;
 pub mod run;

@@ -53,8 +53,12 @@ pub mod kinds {
     pub const DENY: &str = "deny";
     /// The egress guard blocked a request carrying another secret.
     pub const EGRESS_BLOCKED: &str = "egress_blocked";
-    /// A request needed approval and none was available.
+    /// A request needed approval and one was requested.
     pub const APPROVAL_REQUIRED: &str = "approval_required";
+    /// An approval was allowed, denied or timed out.
+    pub const APPROVAL_DECIDED: &str = "approval_decided";
+    /// An MCP client asked for access via `request_access`.
+    pub const ACCESS_REQUESTED: &str = "access_requested";
     /// A value was revealed to a human.
     pub const REVEAL: &str = "reveal";
     /// A value was injected into a process environment.

@@ -115,6 +115,31 @@ enum Command {
     Status,
     /// Diagnose common problems.
     Doctor,
+    /// Show requests waiting for your approval.
+    Approvals,
+    /// Approve a waiting request (default: the latest).
+    Approve {
+        /// Approval id, or `latest`.
+        #[arg(default_value = "latest")]
+        id: String,
+        /// Remember this decision for the same handle and rule.
+        #[arg(long)]
+        remember: bool,
+    },
+    /// Deny a waiting request (default: the latest).
+    Deny {
+        /// Approval id, or `latest`.
+        #[arg(default_value = "latest")]
+        id: String,
+    },
+    /// MCP server for Claude Code, Claude Desktop, Cursor and Windsurf.
+    Mcp {
+        /// Run the stdio bridge as this registered client (used by the tools' configs).
+        #[arg(long)]
+        client: Option<String>,
+        #[command(subcommand)]
+        action: Option<McpAction>,
+    },
     /// Run a program with secrets injected as environment variables (weaker mode:
     /// the program sees the values). Requires `usk secret set <name> --allow-injection true`.
     Run {
@@ -277,6 +302,20 @@ pub fn run() -> Result<(), CliError> {
         Command::Doctor => doctor(&paths),
         Command::Presets => presets(cli.json),
         Command::Run { with, command } => crate::run::run(&paths, with, command),
+        Command::Approvals => approvals_list(&paths, cli.json),
+        Command::Approve { id, remember } => approvals_decide(&paths, &id, true, remember),
+        Command::Deny { id } => approvals_decide(&paths, &id, false, false),
+        Command::Mcp { client, action } => match (client, action) {
+            (Some(c), None) => crate::mcp::bridge(&paths, &c),
+            (_, Some(McpAction::Install { client, home })) => {
+                crate::mcp::install(&paths, &client, home.as_deref())
+            }
+            (_, Some(McpAction::Remove { client })) => crate::mcp::remove(&paths, &client),
+            (_, Some(McpAction::Clients)) => crate::mcp::clients(&paths, cli.json),
+            (None, None) => Err(CliError::general(
+                "usage: usk mcp install <claude-code|claude-desktop|cursor|windsurf|all>, usk mcp clients, usk mcp remove <client>, or usk mcp --client <name> (stdio bridge)",
+            )),
+        },
         Command::Guard { action } => match action {
             GuardAction::Scan { path } => crate::guard::scan(&path, cli.json).map(|_| ()),
             GuardAction::Fix { path, dry_run } => crate::guard::fix(&paths, &path, dry_run),
@@ -1162,6 +1201,92 @@ fn log_verify(paths: &VaultPaths, json: bool) -> Result<(), CliError> {
             "audit chain verification failed",
         ))
     }
+}
+
+#[derive(Subcommand)]
+enum McpAction {
+    /// Register a client and write its MCP config (restart the client afterwards).
+    Install {
+        /// claude-code, claude-desktop, cursor, windsurf, all, or a custom name.
+        client: String,
+        /// Write configs under this directory instead of the real home (tests).
+        #[arg(long, hide = true)]
+        home: Option<PathBuf>,
+    },
+    /// Forget a client (its token stops working).
+    Remove {
+        /// Client name.
+        client: String,
+    },
+    /// List registered clients.
+    Clients,
+}
+
+fn approvals_list(paths: &VaultPaths, json_out: bool) -> Result<(), CliError> {
+    let c = Client::connect(paths, true)?;
+    let list = c.get("/v1/approvals")?;
+    if json_out {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&list).unwrap_or_default()
+        );
+        return Ok(());
+    }
+    let items = list.as_array().cloned().unwrap_or_default();
+    if items.is_empty() {
+        println!("Nothing is waiting for approval.");
+        return Ok(());
+    }
+    for p in items {
+        let what = if p["kind"] == "access" {
+            format!("access request: {}", p["scope"].as_str().unwrap_or(""))
+        } else {
+            format!(
+                "{} {}{} ({})",
+                p["method"].as_str().unwrap_or(""),
+                p["host"].as_str().unwrap_or(""),
+                p["path"].as_str().unwrap_or(""),
+                p["scope"].as_str().unwrap_or("")
+            )
+        };
+        println!(
+            "{}  {} wants to use {} via \"{}\": {}  [{}s left]\n    usk approve {}   |   usk deny {}",
+            p["id"].as_str().unwrap_or(""),
+            p["caller"].as_str().unwrap_or(""),
+            p["secret"].as_str().unwrap_or(""),
+            p["label"].as_str().unwrap_or(""),
+            what,
+            p["seconds_left"],
+            p["id"].as_str().unwrap_or(""),
+            p["id"].as_str().unwrap_or("")
+        );
+    }
+    Ok(())
+}
+
+fn approvals_decide(
+    paths: &VaultPaths,
+    id: &str,
+    allow: bool,
+    remember: bool,
+) -> Result<(), CliError> {
+    let c = Client::connect(paths, true)?;
+    let r = c.post(
+        &format!("/v1/approvals/{id}"),
+        json!({ "decision": if allow { "allow" } else { "deny" }, "remember": remember }),
+    )?;
+    println!(
+        "{} {} via \"{}\"{}",
+        if allow { "Approved" } else { "Denied" },
+        r["secret"].as_str().unwrap_or(""),
+        r["label"].as_str().unwrap_or(""),
+        if allow && remember {
+            " (remembered for this rule)"
+        } else {
+            ""
+        }
+    );
+    Ok(())
 }
 
 #[derive(Subcommand)]

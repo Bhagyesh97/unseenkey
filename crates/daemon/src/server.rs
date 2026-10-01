@@ -61,6 +61,8 @@ pub struct ServeOptions {
     pub write_runtime_files: bool,
     /// Logical host → origin to connect to instead (tests and staging only).
     pub upstream_overrides: Vec<(String, String)>,
+    /// Enable the MCP `store_secret` tool.
+    pub mcp_allow_store: bool,
 }
 
 /// A running daemon.
@@ -165,6 +167,13 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
         http,
         upstream_overrides: opts.upstream_overrides.iter().cloned().collect(),
         base_url: format!("http://127.0.0.1:{}", addr.port()),
+        approvals: Mutex::new(Default::default()),
+        callers: crate::callers::Callers::load(
+            &VaultPaths::from_vault_file(&opts.vault_path)
+                .mcp
+                .join("clients.json"),
+        ),
+        mcp_allow_store: opts.mcp_allow_store,
     });
 
     let paths = if opts.write_runtime_files {
@@ -203,6 +212,13 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
         )
         .route("/audit", get(api::audit_list))
         .route("/audit/verify", get(api::audit_verify))
+        .route("/approvals", get(api::approvals_list))
+        .route("/approvals/{id}", post(api::approvals_decide))
+        .route("/callers", get(api::callers_list).post(api::callers_create))
+        .route(
+            "/callers/{name}",
+            axum::routing::delete(api::callers_remove),
+        )
         .route("/shutdown", post(api::shutdown))
         .route_layer(from_fn_with_state(state.clone(), require_token));
 
@@ -210,6 +226,7 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
         .route("/healthz", get(api::healthz))
         .route("/p/{preset}", any(proxy::proxy))
         .route("/p/{preset}/{*rest}", any(proxy::proxy))
+        .route("/mcp", post(crate::mcp::mcp_http).get(crate::mcp::mcp_get))
         .nest("/v1", v1)
         .fallback(api::not_found)
         .layer(from_fn_with_state(state.clone(), ingress_guard))

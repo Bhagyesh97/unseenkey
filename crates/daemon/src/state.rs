@@ -1,9 +1,10 @@
 //! Shared daemon state.
 
+use std::collections::HashSet;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{OnceLock, RwLock};
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, watch, Mutex};
+use tokio::sync::{broadcast, oneshot, watch, Mutex};
 use unseenkey_core::broker::scrub::{Guarded, Scrubber};
 use unseenkey_core::crypto::hash::Digest;
 use unseenkey_core::ids::Id;
@@ -76,6 +77,68 @@ pub enum Event {
         /// Names of the secrets found in the request.
         leaked: Vec<String>,
     },
+    /// A request or access request is waiting for the owner.
+    ApprovalRequested {
+        /// Approval id (hex).
+        id: String,
+        /// Handle label.
+        label: String,
+        /// Secret name.
+        secret: String,
+        /// Caller identity.
+        caller: String,
+        /// Method (empty for access requests).
+        method: String,
+        /// Path or scope.
+        path: String,
+        /// What is being asked.
+        scope: String,
+    },
+    /// An approval was decided.
+    ApprovalDecided {
+        /// Approval id (hex).
+        id: String,
+        /// Allowed?
+        allowed: bool,
+    },
+}
+
+/// A request parked until the owner decides.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PendingApproval {
+    /// Id (hex in JSON).
+    pub id: Id,
+    /// `request` (a proxied call is waiting) or `access` (MCP `request_access`).
+    pub kind: String,
+    /// Handle.
+    pub handle_id: Id,
+    /// Handle label.
+    pub label: String,
+    /// Secret name.
+    pub secret: String,
+    /// Caller identity.
+    pub caller: String,
+    /// Method (empty for access requests).
+    pub method: String,
+    /// Host (empty for access requests).
+    pub host: String,
+    /// Path (empty for access requests).
+    pub path: String,
+    /// Human description of what approval covers.
+    pub scope: String,
+    /// Rule text remembered when the owner answers "always".
+    pub remember_key: Option<String>,
+    /// Unix ms.
+    pub created_at: i64,
+    /// Unix ms after which the request gives up.
+    pub expires_at: i64,
+}
+
+/// Pending approvals and remembered decisions.
+#[derive(Default)]
+pub struct Approvals {
+    pending: std::collections::HashMap<Id, (PendingApproval, oneshot::Sender<(bool, bool)>)>,
+    remembered: HashSet<(Id, String)>,
 }
 
 /// Sliding request counters for one handle.
@@ -134,6 +197,12 @@ pub struct AppState {
     pub upstream_overrides: HashMap<String, String>,
     /// `http://127.0.0.1:<port>`, for setup snippets.
     pub base_url: String,
+    /// Parked requests and remembered decisions.
+    pub approvals: Mutex<Approvals>,
+    /// Registered MCP clients.
+    pub callers: crate::callers::Callers,
+    /// Whether the MCP `store_secret` tool is enabled.
+    pub mcp_allow_store: bool,
 }
 
 impl AppState {
@@ -211,6 +280,66 @@ impl AppState {
         let scrubber = Scrubber::new(&guarded);
         set_redactor(scrubber.clone());
         *self.scrubber.write().unwrap_or_else(|e| e.into_inner()) = scrubber;
+    }
+
+    /// Park a request; the receiver resolves with (allowed, remember).
+    pub async fn approval_create(&self, p: PendingApproval) -> oneshot::Receiver<(bool, bool)> {
+        let (tx, rx) = oneshot::channel();
+        self.approvals.lock().await.pending.insert(p.id, (p, tx));
+        rx
+    }
+
+    /// Forget a pending approval (after a decision or timeout).
+    pub async fn approval_remove(&self, id: &Id) {
+        self.approvals.lock().await.pending.remove(id);
+    }
+
+    /// Pending approvals, oldest first.
+    pub async fn approvals_pending(&self) -> Vec<PendingApproval> {
+        let mut v: Vec<PendingApproval> = self
+            .approvals
+            .lock()
+            .await
+            .pending
+            .values()
+            .map(|(p, _)| p.clone())
+            .collect();
+        v.sort_by_key(|p| p.created_at);
+        v
+    }
+
+    /// Decide a pending approval. `None` if unknown (already decided or expired).
+    pub async fn approval_decide(
+        &self,
+        id: &Id,
+        allow: bool,
+        remember: bool,
+    ) -> Option<PendingApproval> {
+        let (p, tx) = self.approvals.lock().await.pending.remove(id)?;
+        let _ = tx.send((allow, remember));
+        self.emit(Event::ApprovalDecided {
+            id: id.to_hex(),
+            allowed: allow,
+        });
+        Some(p)
+    }
+
+    /// Was (handle, rule) approved with "remember"?
+    pub async fn is_remembered(&self, handle: &Id, key: &str) -> bool {
+        self.approvals
+            .lock()
+            .await
+            .remembered
+            .contains(&(*handle, key.to_string()))
+    }
+
+    /// Remember a decision for (handle, rule) until the daemon restarts or the handle changes.
+    pub async fn remember(&self, handle: &Id, key: &str) {
+        self.approvals
+            .lock()
+            .await
+            .remembered
+            .insert((*handle, key.to_string()));
     }
 
     /// Drop all guarded values (on lock).

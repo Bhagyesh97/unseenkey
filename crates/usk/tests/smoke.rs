@@ -382,6 +382,94 @@ fn run_injection_and_env_guard() {
 }
 
 #[test]
+fn mcp_install_bridge_and_remove() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    let _stop = StopDaemon(&vault);
+    assert!(usk(&vault, &["init", "--profile", "light"], PW)
+        .status
+        .success());
+    let key = "sk_live_51Habcdefghijklmnop";
+    let o = usk(
+        &vault,
+        &["add", "stripe", "--stdin"],
+        &format!("{PW}{key}\n"),
+    );
+    assert!(o.status.success(), "{}", err(&o));
+
+    // Install writes the client's config under --home and a token file next to the vault.
+    let home = dir.path().join("home");
+    let o = usk(
+        &vault,
+        &["mcp", "install", "cursor", "--home", home.to_str().unwrap()],
+        "",
+    );
+    assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
+    let cfg: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(home.join(".cursor").join("mcp.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        cfg["mcpServers"]["unseenkey"]["args"],
+        serde_json::json!(["mcp", "--client", "cursor"])
+    );
+    assert!(cfg["mcpServers"]["unseenkey"]["command"]
+        .as_str()
+        .unwrap()
+        .contains("usk"));
+    assert!(
+        !cfg.to_string().contains("usk_m_"),
+        "configs must not contain tokens"
+    );
+    let token_file = dir.path().join("mcp").join("cursor.token");
+    assert!(std::fs::read_to_string(&token_file)
+        .unwrap()
+        .starts_with("usk_m_"));
+    let o = usk(&vault, &["mcp", "clients"], "");
+    assert!(out(&o).contains("mcp:cursor"), "{}", out(&o));
+
+    // The stdio bridge: JSON-RPC lines in, JSON-RPC lines out, nothing else on stdout.
+    let input = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"t\",\"version\":\"0\"}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"list_secrets\",\"arguments\":{}}}\n",
+    );
+    let o = usk(&vault, &["mcp", "--client", "cursor"], input);
+    assert!(o.status.success(), "{}", err(&o));
+    let lines: Vec<serde_json::Value> = out(&o)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            serde_json::from_str(l).unwrap_or_else(|e| panic!("non-JSON on stdout: {l} ({e})"))
+        })
+        .collect();
+    assert_eq!(lines.len(), 3, "{}", out(&o));
+    assert_eq!(lines[0]["result"]["serverInfo"]["name"], "unseenkey");
+    let names: Vec<&str> = lines[1]["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"call_api") && names.contains(&"list_secrets"));
+    let text = lines[2]["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("\"stripe\""), "{text}");
+    assert!(
+        !out(&o).contains(key),
+        "bridge output must never contain a value"
+    );
+
+    // Remove: token gone, bridge refuses.
+    let o = usk(&vault, &["mcp", "remove", "cursor"], "");
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(!token_file.exists());
+    let o = usk(&vault, &["mcp", "--client", "cursor"], input);
+    assert!(!o.status.success());
+    assert!(err(&o).contains("usk mcp install cursor"), "{}", err(&o));
+}
+
+#[test]
 fn status_without_vault() {
     let dir = tempfile::tempdir().unwrap();
     let vault = dir.path().join("vault.db");
