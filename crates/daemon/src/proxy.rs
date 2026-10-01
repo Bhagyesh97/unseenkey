@@ -26,6 +26,7 @@ use unseenkey_core::broker::{
 use unseenkey_core::ids::Id;
 use unseenkey_core::policy::{evaluate, Decision, DenyReason, Request as PolicyRequest};
 use unseenkey_core::presets::{self, Auth, Preset};
+use unseenkey_core::vault::SecretKind;
 use zeroize::Zeroizing;
 
 /// Largest request body we buffer.
@@ -344,8 +345,18 @@ pub async fn proxy(State(s): State<Arc<AppState>>, req: Request) -> Response {
     };
     let (handle, meta, revealed) = prepared;
 
+    // A bearer-kind secret (OAuth token, PAT) is always sent as `Authorization:
+    // Bearer`, even for providers whose API keys travel in another header or in
+    // the query string. Template and basic styles keep their own shape.
+    let auth = match (&preset.auth, meta.kind) {
+        (Auth::Header { .. } | Auth::Query { .. }, SecretKind::BearerToken) => Auth::Bearer {
+            also_headers: Vec::new(),
+        },
+        (a, _) => a.clone(),
+    };
+
     // Materialise credentials.
-    let injection = match &preset.auth {
+    let injection = match &auth {
         Auth::Template => Injection::default(),
         auth => match adapters::inject(auth, &revealed) {
             Ok(i) => i,
@@ -353,7 +364,7 @@ pub async fn proxy(State(s): State<Arc<AppState>>, req: Request) -> Response {
         },
     };
     let resolver = |name: &str| (name == meta.name).then(|| revealed.value.clone());
-    let (out_path, out_query, out_body) = if matches!(preset.auth, Auth::Template) {
+    let (out_path, out_query, out_body) = if matches!(auth, Auth::Template) {
         let (p, _) = match adapters::substitute(path.as_bytes(), resolver) {
             Ok(v) => v,
             Err(e) => return broker_err(e),
@@ -375,6 +386,7 @@ pub async fn proxy(State(s): State<Arc<AppState>>, req: Request) -> Response {
             Bytes::copy_from_slice(&b),
         )
     } else {
+        // Strip the query parameter that carried the handle, if the SDK put it there.
         let q = match &preset.auth {
             Auth::Query { param } => strip_query_param(query, param),
             _ => query.map(str::to_string),
@@ -415,7 +427,7 @@ pub async fn proxy(State(s): State<Arc<AppState>>, req: Request) -> Response {
         }
     }
     // Template mode: substitute placeholders inside header values too.
-    if matches!(preset.auth, Auth::Template) {
+    if matches!(auth, Auth::Template) {
         let mut replaced = reqwest::header::HeaderMap::new();
         for (name, value) in headers.iter() {
             match adapters::substitute(value.as_bytes(), resolver) {

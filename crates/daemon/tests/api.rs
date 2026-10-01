@@ -87,7 +87,6 @@ async fn browser_origin_headers_are_rejected_on_every_route() {
     let markers: &[(&str, &str)] = &[
         ("Origin", "https://evil.example"),
         ("Referer", "https://evil.example/page"),
-        ("Sec-Fetch-Mode", "cors"),
         ("Sec-Fetch-Site", "cross-site"),
         ("Sec-Fetch-Dest", "empty"),
         ("Sec-CH-UA", "\"Chromium\";v=\"130\""),
@@ -98,6 +97,13 @@ async fn browser_origin_headers_are_rejected_on_every_route() {
             assert_eq!(code, 403, "{route} with {h}");
             assert_eq!(body["error"], "browser_origin_rejected", "{route} with {h}");
         }
+        // Node's fetch (undici) sends `sec-fetch-mode: cors` on its own; that is an
+        // SDK, not a browser, and must pass. Browsers always add Sec-Fetch-Site too.
+        let (code, _) = C::status_of(c.req("GET", route).set("Sec-Fetch-Mode", "cors").call());
+        assert_ne!(
+            code, 403,
+            "{route}: sec-fetch-mode alone must not be treated as a browser"
+        );
         // Even a valid token does not help a browser.
         let (code, _) = C::status_of(c.req("POST", route).set("Origin", "null").call());
         assert_eq!(code, 403);

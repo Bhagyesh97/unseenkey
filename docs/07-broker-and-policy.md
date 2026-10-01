@@ -15,7 +15,7 @@ The broker is the heart of the product. It is the only component that turns a ha
 ## Request pipeline (local and hosted share this code)
 
 1. **Ingress checks**
-   - Local: reject if `Origin`, `Referer`, or any `Sec-Fetch-*` header present → 403 `browser_origin_rejected`. Reject if `Host` is not `127.0.0.1:7391`/`localhost:7391`/`[::1]:7391`.
+   - Local: reject if `Origin`, `Referer`, `Sec-Fetch-Site`, `Sec-Fetch-Dest`, `Sec-Fetch-User` or `Sec-CH-UA` is present → 403 `browser_origin_rejected`. `Sec-Fetch-Mode` alone is **not** a marker: Node's `fetch` (undici), hence the OpenAI/Anthropic Node SDKs and Claude Code, sends `sec-fetch-mode: cors` on every request, while real browsers always add `Sec-Fetch-Site`/`Sec-Fetch-Dest` (and `Origin` cross-site) with it. Reject if `Host` is not `127.0.0.1:7391`/`localhost:7391`/`[::1]:7391`.
    - Hosted: verify TLS, device signature, timestamp, nonce.
    - Body size limit (default 32 MiB, streaming for larger where allowed).
 2. **Handle resolution**: extract handle from the preset's auth location (`Authorization: Bearer`, `x-api-key`, `X-Usk-Handle`, or query param for presets that need it). `BLAKE3(handle)` → constant-time lookup. Miss → 401 `unknown_handle` (same timing as a revoked one).

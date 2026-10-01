@@ -187,6 +187,13 @@ pub fn detect(value: &[u8]) -> Option<Detection> {
     let p = |id: &str| *provider(id).expect("known provider");
 
     // Order matters: most specific prefixes first.
+    if s.starts_with("sk-ant-oat") {
+        // Claude Code / Console OAuth token: sent as `Authorization: Bearer`.
+        let mut d = p("anthropic");
+        d.kind = SecretKind::BearerToken;
+        d.note = "OAuth token (Claude Code); injected as a Bearer token";
+        return Some(d);
+    }
     if s.starts_with("sk-ant-") {
         return Some(p("anthropic"));
     }
@@ -360,6 +367,15 @@ mod tests {
         assert_eq!(detect(b"hello world"), None);
         assert_eq!(detect(b""), None);
         assert_eq!(detect(b"sk-short"), None);
+    }
+
+    #[test]
+    fn anthropic_oauth_tokens_are_bearer() {
+        let d = detect(b"sk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123456789").unwrap();
+        assert_eq!(d.provider, "anthropic");
+        assert_eq!(d.kind, SecretKind::BearerToken);
+        let d = detect(b"sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789").unwrap();
+        assert_eq!(d.kind, SecretKind::ApiKey);
     }
 
     #[test]

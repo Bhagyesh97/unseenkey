@@ -68,7 +68,7 @@ Read this before writing any code that touches a secret. Every mitigation here m
 | T2 makes the agent exfiltrate a secret it read from somewhere | Egress guard scans bodies to non-upstream hosts for stored values | Encoded/obfuscated exfil not caught; agent could read `.env` if user still has plaintext elsewhere |
 | T2 uses `usk run` to get plaintext | `allow_injection` off by default; injection audited; output scrubbed | Base64/transforms defeat scrubbing; documented weaker mode |
 | T2 calls `list_secrets` | Returns metadata only | Metadata reveals what the user has (A7); acceptable |
-| T3 fetches localhost broker | Reject requests with `Origin`/`Referer`/`Sec-Fetch-*`; strict `Host`; no CORS; management routes need session token | Non-browser local attacker (T4) |
+| T3 fetches localhost broker | Reject requests with `Origin`/`Referer`/`Sec-Fetch-Site`/`Sec-Fetch-Dest`/`Sec-Fetch-User`/`Sec-CH-UA` (not `Sec-Fetch-Mode` alone: Node's `fetch` sends it); strict `Host`; no CORS; management routes need session token | Non-browser local attacker (T4) |
 | T4 connects to loopback | Handles are 160-bit random and only in memory/keychain; management token file 0600; optional per-process peer credential check (SO_PEERCRED / GetExtendedTcpTable) to allow only approved executables | A same-user malicious process is largely game over on desktop OSes; we reduce, not eliminate |
 | T4 reads daemon memory | `mlock`, zeroize, short-lived decrypts; keep secrets encrypted in memory under a session key, decrypt per request | Root/debugger can still read; out of scope |
 | T8 steals disk | Vault encrypted with Argon2id-derived key; no plaintext ever on disk; SQLite audit log encrypted | Weak password → offline brute force; enforce strength meter and passkey |

@@ -9,10 +9,14 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use std::sync::Arc;
 
-/// Headers a browser attaches to cross-site or same-site requests. Curl, SDKs
-/// and the CLI never send them, so their presence means "a web page did this".
+/// Headers a browser attaches to every request from a page. Curl, Rust and
+/// Python SDKs and the CLI never send them, so their presence means "a web
+/// page did this". `Sec-Fetch-Mode` is deliberately *not* in this list:
+/// Node's `fetch` (undici), and therefore the OpenAI/Anthropic Node SDKs and
+/// Claude Code, send `sec-fetch-mode: cors` on every request, while browsers
+/// always add `Sec-Fetch-Site`/`Sec-Fetch-Dest` (and `Origin` cross-site)
+/// alongside it.
 const BROWSER_MARKERS: &[&str] = &[
-    "sec-fetch-mode",
     "sec-fetch-site",
     "sec-fetch-dest",
     "sec-fetch-user",

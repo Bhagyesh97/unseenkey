@@ -668,7 +668,14 @@ pub async fn create_handle(
         if let Some(var) = p.env.get("base_url") {
             env.insert(var.clone(), b.clone());
         }
-        if let Some(var) = p.env.get("api_key") {
+        // Bearer-kind secrets (e.g. Claude Code's OAuth token) go in the
+        // provider's bearer variable when it declares one.
+        let key_var = if meta.kind == SecretKind::BearerToken {
+            p.env.get("oauth_token").or_else(|| p.env.get("api_key"))
+        } else {
+            p.env.get("api_key")
+        };
+        if let Some(var) = key_var {
             env.insert(var.clone(), plain.clone());
         }
     }
