@@ -19,7 +19,11 @@ serde_json = { workspace = true, features = ["std"] }
 thiserror = { workspace = true }
 zeroize = { workspace = true }
 dirs = { workspace = true }
+reqwest = { workspace = true }
+rustls = { workspace = true }
+percent-encoding = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 ureq = { workspace = true }
+base64 = { workspace = true }

@@ -3,19 +3,24 @@
 use crate::api;
 use crate::guard::{ingress_guard, require_token};
 use crate::paths::VaultPaths;
+use crate::proxy;
 use crate::state::{AppState, Event};
 use crate::token::{self, SessionToken};
 use axum::middleware::from_fn_with_state;
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use axum::Router;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, watch, Mutex};
 use tokio::task::JoinHandle;
+use unseenkey_core::audit::kinds;
+use unseenkey_core::broker::scrub::Scrubber;
 use unseenkey_core::storage::sqlite::SqliteStorage;
 use unseenkey_core::time::SystemClock;
 use unseenkey_core::vault::Vault;
@@ -54,6 +59,8 @@ pub struct ServeOptions {
     pub idle_lock_minutes: u64,
     /// Write `daemon.token`, `daemon.addr`, `daemon.pid` next to the vault.
     pub write_runtime_files: bool,
+    /// Logical host → origin to connect to instead (tests and staging only).
+    pub upstream_overrides: Vec<(String, String)>,
 }
 
 /// A running daemon.
@@ -87,7 +94,13 @@ impl Running {
     /// Wait until the server stops (after a shutdown request).
     pub async fn wait(self) {
         let _ = self.handle.await;
-        self.state.vault.lock().await.lock();
+        {
+            let mut v = self.state.vault.lock().await;
+            if !v.is_locked() {
+                let _ = v.audit(kinds::LOCK, serde_json::json!({ "reason": "shutdown" }));
+            }
+            v.lock();
+        }
         if let Some(p) = &self.paths {
             let _ = std::fs::remove_file(&p.token);
             let _ = std::fs::remove_file(&p.addr);
@@ -119,6 +132,14 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
     }
     let storage = SqliteStorage::open(&opts.vault_path)?;
     let vault = Vault::open(storage, SystemClock)?;
+    // reqwest is built without a default TLS provider; use ring (pure Rust).
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(600))
+        .build()
+        .map_err(|e| ServeError::Bind("http client".into(), std::io::Error::other(e)))?;
 
     let listener = TcpListener::bind(requested)
         .await
@@ -139,6 +160,11 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
         started: Instant::now(),
         idle_lock: Duration::from_secs(opts.idle_lock_minutes * 60),
         shutdown: watch::channel(false).0,
+        scrubber: RwLock::new(Scrubber::empty()),
+        usage: Mutex::new(HashMap::new()),
+        http,
+        upstream_overrides: opts.upstream_overrides.iter().cloned().collect(),
+        base_url: format!("http://127.0.0.1:{}", addr.port()),
     });
 
     let paths = if opts.write_runtime_files {
@@ -167,11 +193,22 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
         )
         .route("/secrets/{r}/reveal", post(api::reveal_secret))
         .route("/events", get(api::events))
+        .route("/handles", get(api::list_handles).post(api::create_handle))
+        .route(
+            "/handles/{r}",
+            get(api::get_handle)
+                .patch(api::patch_handle)
+                .delete(api::revoke_handle),
+        )
+        .route("/audit", get(api::audit_list))
+        .route("/audit/verify", get(api::audit_verify))
         .route("/shutdown", post(api::shutdown))
         .route_layer(from_fn_with_state(state.clone(), require_token));
 
     let app = Router::new()
         .route("/healthz", get(api::healthz))
+        .route("/p/{preset}", any(proxy::proxy))
+        .route("/p/{preset}/{*rest}", any(proxy::proxy))
         .nest("/v1", v1)
         .fallback(api::not_found)
         .layer(from_fn_with_state(state.clone(), ingress_guard))
@@ -188,7 +225,9 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
                 if idle >= s.idle_lock {
                     let mut v = s.vault.lock().await;
                     if !v.is_locked() {
+                        let _ = v.audit(kinds::LOCK, serde_json::json!({ "reason": "idle" }));
                         v.lock();
+                        s.clear_scrubber();
                         s.emit(Event::Locked { reason: "idle" });
                         tracing::info!("vault locked after idle timeout");
                     }

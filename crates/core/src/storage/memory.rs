@@ -1,6 +1,7 @@
 //! In-memory backend for tests and ephemeral vaults.
 
 use super::{HeaderRow, RecordKind, Storage, StorageError, StoredRecord};
+use crate::audit::AuditRow;
 use crate::ids::Id;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
@@ -10,6 +11,7 @@ use alloc::vec::Vec;
 pub struct MemoryStorage {
     header: Option<HeaderRow>,
     records: BTreeMap<Id, BTreeMap<u64, StoredRecord>>,
+    audit: Vec<AuditRow>,
 }
 
 impl MemoryStorage {
@@ -75,6 +77,36 @@ impl Storage for MemoryStorage {
             .cloned()
             .collect())
     }
+
+    fn append_audit(&mut self, row: &AuditRow) -> Result<(), StorageError> {
+        let expected = self.audit.last().map(|r| r.seq + 1).unwrap_or(1);
+        if row.seq != expected {
+            return Err(StorageError::AuditSequence {
+                expected,
+                got: row.seq,
+            });
+        }
+        self.audit.push(row.clone());
+        Ok(())
+    }
+
+    fn audit_last(&self) -> Result<Option<AuditRow>, StorageError> {
+        Ok(self.audit.last().cloned())
+    }
+
+    fn audit_rows(&self, from_seq: u64, limit: usize) -> Result<Vec<AuditRow>, StorageError> {
+        Ok(self
+            .audit
+            .iter()
+            .filter(|r| r.seq >= from_seq)
+            .take(limit)
+            .cloned()
+            .collect())
+    }
+
+    fn audit_count(&self) -> Result<u64, StorageError> {
+        Ok(self.audit.len() as u64)
+    }
 }
 
 #[cfg(test)]
@@ -121,5 +153,34 @@ mod tests {
             s.list_latest(Some(RecordKind::Policy), true).unwrap().len(),
             0
         );
+    }
+
+    #[test]
+    fn audit_is_append_only_and_contiguous() {
+        let mut s = MemoryStorage::new();
+        let row = |seq: u64| AuditRow {
+            seq,
+            ts: 0,
+            kind: "use".into(),
+            prev_hash: [0; 32],
+            this_hash: [1; 32],
+            nonce: [0; 24],
+            ciphertext: alloc::vec![],
+            signature: None,
+        };
+        assert!(matches!(
+            s.append_audit(&row(2)),
+            Err(StorageError::AuditSequence {
+                expected: 1,
+                got: 2
+            })
+        ));
+        s.append_audit(&row(1)).unwrap();
+        s.append_audit(&row(2)).unwrap();
+        assert!(s.append_audit(&row(2)).is_err());
+        assert_eq!(s.audit_count().unwrap(), 2);
+        assert_eq!(s.audit_last().unwrap().unwrap().seq, 2);
+        assert_eq!(s.audit_rows(2, 10).unwrap().len(), 1);
+        assert_eq!(s.audit_rows(1, 1).unwrap().len(), 1);
     }
 }

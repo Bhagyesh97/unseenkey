@@ -117,6 +117,39 @@ enum Command {
     Doctor,
     /// List provider presets and their ready-made policies.
     Presets,
+    /// Create, list and revoke handles (the strings you give to tools instead of keys).
+    Handle {
+        #[command(subcommand)]
+        action: HandleAction,
+    },
+    /// Create a handle and print the environment variables for the provider's SDK.
+    Env {
+        /// Secret name.
+        secret: String,
+        /// Preset policy id (e.g. `chat`, `payments`) or `provider:policy`.
+        #[arg(long)]
+        policy: Option<String>,
+        /// Handle label (default: "<secret> env").
+        #[arg(long)]
+        label: Option<String>,
+        /// Output form.
+        #[arg(long, value_enum)]
+        shell: Option<Shell>,
+    },
+    /// Show the audit log.
+    Log {
+        #[command(subcommand)]
+        action: Option<LogAction>,
+        /// Only events of this kind (use, deny, egress_blocked, reveal, ...).
+        #[arg(long)]
+        kind: Option<String>,
+        /// Start at this sequence number.
+        #[arg(long, default_value_t = 1)]
+        since: u64,
+        /// Show at most this many events.
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
     /// Inspect policies.
     Policy {
         #[command(subcommand)]
@@ -223,6 +256,46 @@ pub fn run() -> Result<(), CliError> {
         Command::Status => status(&paths, cli.json),
         Command::Doctor => doctor(&paths),
         Command::Presets => presets(cli.json),
+        Command::Handle { action } => match action {
+            HandleAction::Create {
+                secret,
+                label,
+                policy,
+                policy_file,
+                expires_days,
+            } => handle_create(
+                &paths,
+                &secret,
+                label,
+                policy,
+                policy_file,
+                expires_days,
+                cli.json,
+            ),
+            HandleAction::Ls => handle_ls(&paths, cli.json),
+            HandleAction::Show { r#ref } => handle_show(&paths, &r#ref, cli.json),
+            HandleAction::Revoke { r#ref } => handle_revoke(&paths, &r#ref),
+            HandleAction::Policy {
+                r#ref,
+                preset,
+                file,
+            } => handle_policy(&paths, &r#ref, preset, file),
+        },
+        Command::Env {
+            secret,
+            policy,
+            label,
+            shell,
+        } => env_cmd(&paths, &secret, policy, label, shell),
+        Command::Log {
+            action,
+            kind,
+            since,
+            limit,
+        } => match action {
+            Some(LogAction::Verify) => log_verify(&paths, cli.json),
+            None => log_list(&paths, kind, since, limit, cli.json),
+        },
         Command::Policy { action } => match action {
             PolicyAction::Explain { preset, file } => policy_explain(preset, file, cli.json),
             PolicyAction::Check { file } => policy_check(&file),
@@ -652,6 +725,400 @@ fn load_policy_file(file: &Path) -> Result<unseenkey_core::policy::Policy, CliEr
         unseenkey_core::policy::Policy::from_toml(&text)
     };
     parsed.map_err(|e| CliError::with_code(2, "invalid_policy", e.to_string()))
+}
+
+#[derive(Subcommand)]
+enum HandleAction {
+    /// Create a handle for a secret. The handle string is shown once.
+    Create {
+        /// Secret name.
+        secret: String,
+        /// Label, e.g. "cursor on laptop" (default: the secret name).
+        #[arg(long)]
+        label: Option<String>,
+        /// Preset policy id (e.g. `chat`, `payments`) or `provider:policy`.
+        #[arg(long, conflicts_with = "policy_file")]
+        policy: Option<String>,
+        /// Policy file (TOML or JSON).
+        #[arg(long)]
+        policy_file: Option<PathBuf>,
+        /// Expire after this many days.
+        #[arg(long)]
+        expires_days: Option<u32>,
+    },
+    /// List handles.
+    Ls,
+    /// Show one handle and its policy in plain English.
+    Show {
+        /// Label or id.
+        r#ref: String,
+    },
+    /// Revoke a handle immediately.
+    Revoke {
+        /// Label or id.
+        r#ref: String,
+    },
+    /// Replace a handle's policy.
+    Policy {
+        /// Label or id.
+        r#ref: String,
+        /// Preset policy id or `provider:policy`.
+        #[arg(long, conflicts_with = "file")]
+        preset: Option<String>,
+        /// Policy file (TOML or JSON).
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum LogAction {
+    /// Verify the audit log's hash chain.
+    Verify,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum Shell {
+    /// `export VAR=value` (bash, zsh)
+    Sh,
+    /// `$env:VAR = "value"`
+    Powershell,
+    /// `set VAR=value`
+    Cmd,
+    /// `VAR=value` lines for a .env file
+    Dotenv,
+}
+
+/// Turn `chat` into `openai:chat` using the secret's provider; pass through `a:b`.
+fn qualify_policy(client: &Client, secret: &str, spec: &str) -> Result<String, CliError> {
+    if spec.contains(':') {
+        return Ok(spec.to_string());
+    }
+    let m = client.get(&format!("/v1/secrets/{secret}"))?;
+    let provider = m["provider"].as_str().ok_or_else(|| {
+        CliError::general(format!(
+            "{secret} has no provider; pass --policy provider:policy or --policy-file"
+        ))
+    })?;
+    Ok(format!("{provider}:{spec}"))
+}
+
+fn print_handle_created(created: &Value, json: bool) {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(created).unwrap_or_default()
+        );
+        return;
+    }
+    println!(
+        "Handle created for {} (label: {}).",
+        created["secret"].as_str().unwrap_or(""),
+        created["label"].as_str().unwrap_or("")
+    );
+    println!();
+    println!("  {}", created["handle"].as_str().unwrap_or(""));
+    println!();
+    println!("This is shown once. It is safe to paste into tools: it only works through this");
+    println!(
+        "computer's broker, only for {}, and only within this policy:",
+        created["policy"]["upstreams"]
+            .as_array()
+            .map(|a| a
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", "))
+            .unwrap_or_default()
+    );
+    for line in created["policy_explanation"].as_str().unwrap_or("").lines() {
+        println!("  {line}");
+    }
+    if let Some(env) = created["env"].as_object().filter(|e| !e.is_empty()) {
+        println!();
+        println!("Environment for the provider's SDK:");
+        for (k, v) in env {
+            println!("  {k}={}", v.as_str().unwrap_or(""));
+        }
+    } else if let Some(b) = created["base_url"].as_str() {
+        println!();
+        println!("Base URL through the broker: {b}");
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_create(
+    paths: &VaultPaths,
+    secret: &str,
+    label: Option<String>,
+    policy: Option<String>,
+    policy_file: Option<PathBuf>,
+    expires_days: Option<u32>,
+    json: bool,
+) -> Result<(), CliError> {
+    let c = unlocked(paths)?;
+    let mut body = json!({ "secret": secret, "label": label, "expires_in_days": expires_days });
+    if let Some(spec) = policy {
+        body["preset_policy"] = json!(qualify_policy(&c, secret, &spec)?);
+    } else if let Some(f) = policy_file {
+        let p = load_policy_file(&f)?;
+        body["policy"] = serde_json::from_str::<Value>(&p.to_json()).unwrap_or(Value::Null);
+    }
+    let created = c.post("/v1/handles", body)?;
+    print_handle_created(&created, json);
+    Ok(())
+}
+
+fn handle_ls(paths: &VaultPaths, json: bool) -> Result<(), CliError> {
+    let c = unlocked(paths)?;
+    let list = c.get("/v1/handles")?;
+    let items = list.as_array().cloned().unwrap_or_default();
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&items).unwrap_or_default()
+        );
+        return Ok(());
+    }
+    if items.is_empty() {
+        println!(
+            "No handles yet. Create one with `usk handle create <secret>` or `usk env <secret>`."
+        );
+        return Ok(());
+    }
+    let (h_label, h_secret, h_state, h_uses, h_id) = ("LABEL", "SECRET", "STATE", "USES", "ID");
+    println!("{h_label:<24} {h_secret:<20} {h_state:<9} {h_uses:>6}  {h_id}");
+    for h in items {
+        let state = if h["revoked_at"].is_i64() {
+            "revoked"
+        } else if h["active"].as_bool() == Some(false) {
+            "expired"
+        } else {
+            "active"
+        };
+        println!(
+            "{:<24} {:<20} {:<9} {:>6}  {}",
+            h["label"].as_str().unwrap_or(""),
+            h["secret"].as_str().unwrap_or(""),
+            state,
+            h["use_count"].as_u64().unwrap_or(0),
+            h["id"].as_str().unwrap_or("")
+        );
+    }
+    Ok(())
+}
+
+fn handle_show(paths: &VaultPaths, r#ref: &str, json: bool) -> Result<(), CliError> {
+    let c = unlocked(paths)?;
+    let h = c.get(&format!("/v1/handles/{ref}"))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&h).unwrap_or_default());
+        return Ok(());
+    }
+    println!("label:      {}", h["label"].as_str().unwrap_or(""));
+    println!("id:         {}", h["id"].as_str().unwrap_or(""));
+    println!("secret:     {}", h["secret"].as_str().unwrap_or(""));
+    println!("active:     {}", h["active"]);
+    println!("uses:       {}", h["use_count"]);
+    println!("created_at: {}", h["created_at"]);
+    println!("expires_at: {}", h["expires_at"]);
+    println!("revoked_at: {}", h["revoked_at"]);
+    println!("policy:");
+    for line in h["policy_explanation"].as_str().unwrap_or("").lines() {
+        println!("  {line}");
+    }
+    Ok(())
+}
+
+fn handle_revoke(paths: &VaultPaths, r#ref: &str) -> Result<(), CliError> {
+    let c = unlocked(paths)?;
+    c.delete(&format!("/v1/handles/{ref}"))?;
+    println!("Revoked {ref}. Requests with it now fail immediately.");
+    Ok(())
+}
+
+fn handle_policy(
+    paths: &VaultPaths,
+    r#ref: &str,
+    preset: Option<String>,
+    file: Option<PathBuf>,
+) -> Result<(), CliError> {
+    let c = unlocked(paths)?;
+    let h = c.get(&format!("/v1/handles/{ref}"))?;
+    let secret = h["secret"].as_str().unwrap_or("").to_string();
+    let body = match (preset, file) {
+        (Some(spec), None) => json!({ "preset_policy": qualify_policy(&c, &secret, &spec)? }),
+        (None, Some(f)) => {
+            let p = load_policy_file(&f)?;
+            json!({ "policy": serde_json::from_str::<Value>(&p.to_json()).unwrap_or(Value::Null) })
+        }
+        _ => return Err(CliError::general("pass --preset <policy> or --file <path>")),
+    };
+    let updated = c.patch(&format!("/v1/handles/{ref}"), body)?;
+    println!(
+        "Policy updated for {}:",
+        updated["label"].as_str().unwrap_or("")
+    );
+    for line in updated["policy_explanation"].as_str().unwrap_or("").lines() {
+        println!("  {line}");
+    }
+    Ok(())
+}
+
+fn env_cmd(
+    paths: &VaultPaths,
+    secret: &str,
+    policy: Option<String>,
+    label: Option<String>,
+    shell: Option<Shell>,
+) -> Result<(), CliError> {
+    let c = unlocked(paths)?;
+    let label = label.unwrap_or_else(|| format!("{secret} env"));
+    let mut body = json!({ "secret": secret, "label": label });
+    if let Some(spec) = policy {
+        body["preset_policy"] = json!(qualify_policy(&c, secret, &spec)?);
+    }
+    let created = c.post("/v1/handles", body)?;
+    let env = created["env"].as_object().cloned().unwrap_or_default();
+    if env.is_empty() {
+        return Err(CliError::general(format!(
+            "{secret} has no provider preset; use `usk handle create {secret}` and the generic route instead"
+        )));
+    }
+    let shell = shell.unwrap_or(if cfg!(windows) {
+        Shell::Powershell
+    } else {
+        Shell::Sh
+    });
+    eprintln!("# Handle \"{label}\" created. These variables point the SDK at the local broker;");
+    eprintln!("# the real key never leaves the vault. Revoke with: usk handle revoke \"{label}\"");
+    for (k, v) in env {
+        let v = v.as_str().unwrap_or("");
+        match shell {
+            Shell::Sh => println!("export {k}={v}"),
+            Shell::Powershell => println!("$env:{k} = \"{v}\""),
+            Shell::Cmd => println!("set {k}={v}"),
+            Shell::Dotenv => println!("{k}={v}"),
+        }
+    }
+    Ok(())
+}
+
+fn log_list(
+    paths: &VaultPaths,
+    kind: Option<String>,
+    since: u64,
+    limit: usize,
+    json: bool,
+) -> Result<(), CliError> {
+    let c = unlocked(paths)?;
+    let mut url = format!("/v1/audit?since={since}&limit={limit}");
+    if let Some(k) = &kind {
+        url.push_str(&format!("&kind={k}"));
+    }
+    let events = c.get(&url)?;
+    let items = events.as_array().cloned().unwrap_or_default();
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&items).unwrap_or_default()
+        );
+        return Ok(());
+    }
+    if items.is_empty() {
+        println!("No events.");
+        return Ok(());
+    }
+    for e in items {
+        let ts = e["ts"].as_i64().unwrap_or(0);
+        let kind = e["kind"].as_str().unwrap_or("");
+        let b = &e["body"];
+        let detail = match kind {
+            "use" => format!(
+                "{} {} {} -> {} ({} via {})",
+                b["method"].as_str().unwrap_or(""),
+                b["host"].as_str().unwrap_or(""),
+                b["path"].as_str().unwrap_or(""),
+                b["status"],
+                b["secret"].as_str().unwrap_or(""),
+                b["label"].as_str().unwrap_or("")
+            ),
+            "deny" => format!(
+                "{} {} {} refused: {} ({})",
+                b["method"].as_str().unwrap_or(""),
+                b["host"].as_str().unwrap_or(""),
+                b["path"].as_str().unwrap_or(""),
+                b["reason"].as_str().unwrap_or(""),
+                b["label"].as_str().unwrap_or("")
+            ),
+            "egress_blocked" => format!(
+                "request via {} carried secret(s) {} -> blocked",
+                b["label"].as_str().unwrap_or(""),
+                b["leaked"]
+            ),
+            _ => b.to_string(),
+        };
+        println!(
+            "{:>6}  {}  {:<16} {}",
+            e["seq"],
+            format_ts(ts),
+            kind,
+            detail
+        );
+    }
+    Ok(())
+}
+
+fn format_ts(ms: i64) -> String {
+    jiff_free_format(ms)
+}
+
+/// `YYYY-MM-DD HH:MM:SS` in UTC without pulling a date library into the CLI.
+fn jiff_free_format(ms: i64) -> String {
+    let secs = ms.div_euclid(1000);
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    // Civil-from-days (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02}Z",
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60
+    )
+}
+
+fn log_verify(paths: &VaultPaths, json: bool) -> Result<(), CliError> {
+    let c = Client::connect(paths, true)?;
+    let r = c.get("/v1/audit/verify")?;
+    if json {
+        println!("{r}");
+    } else if r["ok"].as_bool() == Some(true) {
+        println!("Audit log intact: {} events, chain verified.", r["rows"]);
+    } else {
+        println!(
+            "AUDIT LOG TAMPERED: first broken sequence {} (contiguous: {})",
+            r["first_broken"], r["contiguous"]
+        );
+    }
+    if r["ok"].as_bool() == Some(true) {
+        Ok(())
+    } else {
+        Err(CliError::with_code(
+            4,
+            "audit_tampered",
+            "audit chain verification failed",
+        ))
+    }
 }
 
 fn presets(json: bool) -> Result<(), CliError> {

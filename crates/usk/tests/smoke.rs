@@ -132,6 +132,72 @@ fn init_add_ls_reveal_rm_with_daemon() {
     assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
     assert!(out(&o).contains("All checks passed"));
 
+    // Handles, env snippets and the audit log.
+    let o = usk(
+        &vault,
+        &["add", "stripe", "--stdin"],
+        "sk_test_51Habcdefghijklmnop\n",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let o = usk(
+        &vault,
+        &[
+            "handle", "create", "stripe", "--label", "dev", "--policy", "payments",
+        ],
+        "",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let t = out(&o);
+    assert!(t.contains("usk_h_"), "{t}");
+    assert!(t.contains("Cannot"), "policy explanation expected: {t}");
+    assert!(
+        !t.contains("sk_test_"),
+        "handle output must not contain the key"
+    );
+    let o = usk(
+        &vault,
+        &["--json", "env", "stripe", "--policy", "read-only"],
+        "",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(
+        out(&o).contains("STRIPE_SECRET_KEY=usk_h_")
+            || out(&o).contains("STRIPE_SECRET_KEY = \"usk_h_"),
+        "{}",
+        out(&o)
+    );
+    assert!(out(&o).contains("/p/stripe"), "{}", out(&o));
+    let o = usk(&vault, &["handle", "ls"], "");
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(
+        out(&o).contains("dev") && out(&o).contains("stripe env"),
+        "{}",
+        out(&o)
+    );
+    let o = usk(&vault, &["handle", "show", "dev"], "");
+    assert!(out(&o).contains("Only to api.stripe.com"), "{}", out(&o));
+    let o = usk(
+        &vault,
+        &["handle", "policy", "dev", "--preset", "read-only"],
+        "",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let o = usk(&vault, &["handle", "revoke", "dev"], "");
+    assert!(o.status.success(), "{}", err(&o));
+    let o = usk(&vault, &["--json", "handle", "ls"], "");
+    let j: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
+    assert!(j
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|h| h["label"] == "dev" && h["revoked_at"].is_i64()));
+    let o = usk(&vault, &["log", "--kind", "handle_created"], "");
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(out(&o).lines().count() >= 2, "{}", out(&o));
+    let o = usk(&vault, &["log", "verify"], "");
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(out(&o).contains("intact"), "{}", out(&o));
+
     let o = usk(&vault, &["daemon", "stop"], "");
     assert!(o.status.success());
     assert!(

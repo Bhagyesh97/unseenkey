@@ -5,6 +5,7 @@
 //! - `records`: `(record_id, version)` primary key; ciphertext only.
 
 use super::{HeaderRow, RecordKind, Storage, StorageError, StoredRecord};
+use crate::audit::AuditRow;
 use crate::crypto::aead::Sealed;
 use crate::crypto::kdf::Argon2Profile;
 use crate::ids::Id;
@@ -40,6 +41,17 @@ CREATE TABLE IF NOT EXISTS records (
   PRIMARY KEY (record_id, version)
 );
 CREATE INDEX IF NOT EXISTS records_kind ON records (kind);
+CREATE TABLE IF NOT EXISTS audit (
+  seq        INTEGER PRIMARY KEY,
+  ts         INTEGER NOT NULL,
+  kind       TEXT    NOT NULL,
+  prev_hash  BLOB    NOT NULL,
+  this_hash  BLOB    NOT NULL,
+  nonce      BLOB    NOT NULL,
+  ciphertext BLOB    NOT NULL,
+  signature  BLOB
+);
+CREATE INDEX IF NOT EXISTS audit_kind ON audit (kind);
 ";
 
 /// A vault stored in a SQLite file.
@@ -299,6 +311,101 @@ impl Storage for SqliteStorage {
             )
             .map_err(backend)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(backend)
+    }
+
+    fn append_audit(&mut self, row: &AuditRow) -> Result<(), StorageError> {
+        let tx = self.conn.transaction().map_err(backend)?;
+        let last: Option<i64> = tx
+            .query_row("SELECT MAX(seq) FROM audit", [], |r| r.get(0))
+            .map_err(backend)?;
+        let expected = last.map(|l| l as u64 + 1).unwrap_or(1);
+        if row.seq != expected {
+            return Err(StorageError::AuditSequence {
+                expected,
+                got: row.seq,
+            });
+        }
+        tx.execute(
+            "INSERT INTO audit (seq, ts, kind, prev_hash, this_hash, nonce, ciphertext, signature)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                row.seq as i64,
+                row.ts,
+                row.kind,
+                row.prev_hash.as_slice(),
+                row.this_hash.as_slice(),
+                row.nonce.as_slice(),
+                row.ciphertext.as_slice(),
+                row.signature.as_deref(),
+            ],
+        )
+        .map_err(backend)?;
+        tx.commit().map_err(backend)
+    }
+
+    fn audit_last(&self) -> Result<Option<AuditRow>, StorageError> {
+        self.conn
+            .query_row(
+                "SELECT seq, ts, kind, prev_hash, this_hash, nonce, ciphertext, signature
+                 FROM audit ORDER BY seq DESC LIMIT 1",
+                [],
+                Self::row_to_audit,
+            )
+            .optional()
+            .map_err(backend)
+    }
+
+    fn audit_rows(&self, from_seq: u64, limit: usize) -> Result<Vec<AuditRow>, StorageError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT seq, ts, kind, prev_hash, this_hash, nonce, ciphertext, signature
+                 FROM audit WHERE seq >= ?1 ORDER BY seq ASC LIMIT ?2",
+            )
+            .map_err(backend)?;
+        let rows = stmt
+            .query_map(params![from_seq as i64, limit as i64], Self::row_to_audit)
+            .map_err(backend)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(backend)
+    }
+
+    fn audit_count(&self) -> Result<u64, StorageError> {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM audit", [], |r| r.get::<_, i64>(0))
+            .map(|n| n as u64)
+            .map_err(backend)
+    }
+}
+
+impl SqliteStorage {
+    fn row_to_audit(row: &rusqlite::Row<'_>) -> Result<AuditRow, rusqlite::Error> {
+        let corrupt = |m: &str| {
+            rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Blob,
+                Box::new(std::io::Error::other(m.to_string())),
+            )
+        };
+        let seq: i64 = row.get(0)?;
+        let prev: Vec<u8> = row.get(3)?;
+        let this: Vec<u8> = row.get(4)?;
+        let nonce: Vec<u8> = row.get(5)?;
+        Ok(AuditRow {
+            seq: seq as u64,
+            ts: row.get(1)?,
+            kind: row.get(2)?,
+            prev_hash: prev
+                .try_into()
+                .map_err(|_| corrupt("prev_hash must be 32 bytes"))?,
+            this_hash: this
+                .try_into()
+                .map_err(|_| corrupt("this_hash must be 32 bytes"))?,
+            nonce: nonce
+                .try_into()
+                .map_err(|_| corrupt("nonce must be 24 bytes"))?,
+            ciphertext: row.get(6)?,
+            signature: row.get(7)?,
+        })
     }
 }
 

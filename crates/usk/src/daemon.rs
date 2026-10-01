@@ -29,6 +29,7 @@ pub fn resolve_options(
         listen,
         idle_lock_minutes,
         write_runtime_files: true,
+        upstream_overrides: vec![],
     })
 }
 

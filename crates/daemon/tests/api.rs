@@ -29,6 +29,7 @@ async fn start(dir: &std::path::Path, write_files: bool) -> Running {
         listen: "127.0.0.1:0".into(),
         idle_lock_minutes: 0,
         write_runtime_files: write_files,
+        upstream_overrides: vec![],
     })
     .await
     .unwrap()
@@ -283,6 +284,7 @@ async fn refuses_non_loopback() {
         listen: "0.0.0.0:0".into(),
         idle_lock_minutes: 0,
         write_runtime_files: false,
+        upstream_overrides: vec![],
     })
     .await
     .err()

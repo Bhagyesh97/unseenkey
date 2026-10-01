@@ -5,6 +5,7 @@
 //! [`crate::vault`]. Backends are therefore not security boundaries, and a
 //! vault file may be copied, synced or backed up by any means.
 
+use crate::audit::AuditRow;
 use crate::crypto::aead::Sealed;
 use crate::crypto::kdf::Argon2Profile;
 use crate::ids::Id;
@@ -118,6 +119,14 @@ pub enum StorageError {
     /// The backend itself failed (I/O, SQL).
     #[error("storage backend error: {0}")]
     Backend(String),
+    /// An audit row was appended out of order.
+    #[error("audit sequence error: expected {expected}, got {got}")]
+    AuditSequence {
+        /// Next sequence number the log expected.
+        expected: u64,
+        /// Sequence number that was submitted.
+        got: u64,
+    },
 }
 
 /// A vault storage backend.
@@ -143,4 +152,14 @@ pub trait Storage {
         kind: Option<RecordKind>,
         include_deleted: bool,
     ) -> Result<Vec<StoredRecord>, StorageError>;
+
+    /// Append an audit row. `row.seq` must be exactly one more than the last stored row
+    /// (or 1 for an empty log), otherwise [`StorageError::AuditSequence`].
+    fn append_audit(&mut self, row: &AuditRow) -> Result<(), StorageError>;
+    /// The most recent audit row.
+    fn audit_last(&self) -> Result<Option<AuditRow>, StorageError>;
+    /// Audit rows with `seq >= from_seq`, ascending, at most `limit`.
+    fn audit_rows(&self, from_seq: u64, limit: usize) -> Result<Vec<AuditRow>, StorageError>;
+    /// Number of audit rows.
+    fn audit_count(&self) -> Result<u64, StorageError>;
 }

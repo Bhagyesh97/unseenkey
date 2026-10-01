@@ -1,0 +1,332 @@
+//! Vault operations for handles and the audit log.
+
+use super::{records, Vault, VaultError};
+use crate::audit::{self, AuditEvent, AuditRow, VerifyReport};
+use crate::broker::effective_hosts;
+use crate::crypto::aead;
+use crate::crypto::hash::Digest;
+use crate::crypto::{kdf, SecretBytes};
+use crate::handles::{self, HandleRecord};
+use crate::ids::Id;
+use crate::policy::Policy;
+use crate::storage::{RecordKind, Storage};
+use crate::time::Clock;
+use alloc::collections::BTreeMap;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+
+/// Persist handle counters after this many unrecorded uses.
+pub const COUNTER_FLUSH_EVERY: u64 = 100;
+
+/// Handles by id, and handle hash → id.
+type HandleIndex = (BTreeMap<Id, HandleRecord>, BTreeMap<Digest, Id>);
+
+impl<S: Storage, C: Clock> Vault<S, C> {
+    pub(super) fn build_handle_index(&self, vk: &SecretBytes) -> Result<HandleIndex, VaultError> {
+        let mut by_id = BTreeMap::new();
+        let mut by_hash = BTreeMap::new();
+        for rec in self.storage.list_latest(Some(RecordKind::Handle), false)? {
+            let h: HandleRecord = records::decrypt_json(vk, &self.header.vault_id, &rec)
+                .map_err(|_| VaultError::Corrupt(rec.record_id))?;
+            if let Some(hash) = h.hash_bytes() {
+                by_hash.insert(hash, h.handle_id);
+            }
+            by_id.insert(h.handle_id, h);
+        }
+        Ok((by_id, by_hash))
+    }
+
+    fn write_handle(&mut self, vk: &SecretBytes, h: HandleRecord) -> Result<(), VaultError> {
+        let version = self
+            .storage
+            .latest_record(&h.handle_id)?
+            .map(|r| r.version + 1)
+            .unwrap_or(1);
+        let now = self.clock.now_unix_ms();
+        let rec = records::encrypt_json(
+            vk,
+            &self.header.vault_id,
+            h.handle_id,
+            RecordKind::Handle,
+            version,
+            &h,
+            now,
+        )?;
+        self.storage.insert_record(&rec)?;
+        if let Some(hash) = h.hash_bytes() {
+            self.handle_hashes.insert(hash, h.handle_id);
+        }
+        self.handles.insert(h.handle_id, h);
+        Ok(())
+    }
+
+    /// Create a handle for a secret. Returns the record and the handle string,
+    /// which is shown once and never stored. The policy may narrow the secret's
+    /// upstreams but not widen them.
+    pub fn create_handle(
+        &mut self,
+        secret_id: &Id,
+        label: &str,
+        policy: Policy,
+        expires_at: Option<i64>,
+    ) -> Result<(HandleRecord, String), VaultError> {
+        let vk = self.vk()?.clone();
+        let meta = self.index.get(secret_id).ok_or(VaultError::NotFound)?;
+        policy
+            .validate()
+            .map_err(|e| VaultError::InvalidPolicy(e.to_string()))?;
+        if !policy.upstreams.is_empty()
+            && effective_hosts(&meta.upstreams, &policy.upstreams).is_empty()
+        {
+            return Err(VaultError::PolicyWidensHosts);
+        }
+        let label = label.trim();
+        if label.is_empty() || label.len() > 128 {
+            return Err(VaultError::InvalidName);
+        }
+        if self
+            .handles
+            .values()
+            .any(|h| h.label == label && h.revoked_at.is_none())
+        {
+            return Err(VaultError::LabelExists(label.to_string()));
+        }
+        let plain = handles::generate();
+        let now = self.clock.now_unix_ms();
+        let record = HandleRecord {
+            handle_id: Id::new_v7(now),
+            handle_hash: hex::encode(handles::hash_of(&plain)),
+            secret_id: *secret_id,
+            label: label.to_string(),
+            policy,
+            created_at: now,
+            expires_at,
+            revoked_at: None,
+            use_count: 0,
+            last_used_at: None,
+        };
+        self.write_handle(&vk, record.clone())?;
+        Ok((record, plain))
+    }
+
+    /// All handles, active and revoked, newest first.
+    pub fn handles(&self) -> Result<Vec<&HandleRecord>, VaultError> {
+        self.vk()?;
+        let mut v: Vec<&HandleRecord> = self.handles.values().collect();
+        v.sort_by_key(|h| core::cmp::Reverse(h.created_at));
+        Ok(v)
+    }
+
+    /// A handle by id.
+    pub fn handle(&self, id: &Id) -> Result<&HandleRecord, VaultError> {
+        self.vk()?;
+        self.handles.get(id).ok_or(VaultError::HandleNotFound)
+    }
+
+    /// A handle by label (active ones first).
+    pub fn handle_by_label(&self, label: &str) -> Result<&HandleRecord, VaultError> {
+        self.vk()?;
+        self.handles
+            .values()
+            .filter(|h| h.label == label)
+            .max_by_key(|h| (h.revoked_at.is_none(), h.created_at))
+            .ok_or(VaultError::HandleNotFound)
+    }
+
+    /// Resolve a presented handle string. Returns `None` for unknown handles;
+    /// the caller decides how to respond (identically for unknown and revoked).
+    pub fn handle_by_string(&self, presented: &str) -> Result<Option<&HandleRecord>, VaultError> {
+        self.vk()?;
+        if !handles::is_handle_shaped(presented) {
+            return Ok(None);
+        }
+        let hash = handles::hash_of(presented);
+        Ok(self
+            .handle_hashes
+            .get(&hash)
+            .and_then(|id| self.handles.get(id)))
+    }
+
+    /// Revoke a handle. Effective immediately for in-memory lookups.
+    pub fn revoke_handle(&mut self, id: &Id) -> Result<(), VaultError> {
+        let vk = self.vk()?.clone();
+        let mut h = self
+            .handles
+            .get(id)
+            .ok_or(VaultError::HandleNotFound)?
+            .clone();
+        if h.revoked_at.is_none() {
+            h.revoked_at = Some(self.clock.now_unix_ms());
+            self.write_handle(&vk, h)?;
+        }
+        Ok(())
+    }
+
+    /// Replace a handle's policy.
+    pub fn set_handle_policy(&mut self, id: &Id, policy: Policy) -> Result<(), VaultError> {
+        let vk = self.vk()?.clone();
+        let mut h = self
+            .handles
+            .get(id)
+            .ok_or(VaultError::HandleNotFound)?
+            .clone();
+        policy
+            .validate()
+            .map_err(|e| VaultError::InvalidPolicy(e.to_string()))?;
+        let meta = self.index.get(&h.secret_id).ok_or(VaultError::NotFound)?;
+        if !policy.upstreams.is_empty()
+            && effective_hosts(&meta.upstreams, &policy.upstreams).is_empty()
+        {
+            return Err(VaultError::PolicyWidensHosts);
+        }
+        h.policy = policy;
+        self.write_handle(&vk, h)
+    }
+
+    /// Record a use in memory; persisted every [`COUNTER_FLUSH_EVERY`] uses and on lock.
+    pub fn touch_handle(&mut self, id: &Id, now: i64) -> Result<(), VaultError> {
+        let vk = self.vk()?.clone();
+        let h = self.handles.get_mut(id).ok_or(VaultError::HandleNotFound)?;
+        h.use_count += 1;
+        h.last_used_at = Some(now);
+        let dirty = h.use_count - self.handle_counters_flushed.get(id).copied().unwrap_or(0);
+        if dirty >= COUNTER_FLUSH_EVERY {
+            let snapshot = h.clone();
+            self.handle_counters_flushed.insert(*id, snapshot.use_count);
+            self.write_handle(&vk, snapshot)?;
+        }
+        Ok(())
+    }
+
+    /// Persist every handle whose counters changed since the last flush.
+    pub fn flush_handle_counters(&mut self) -> Result<(), VaultError> {
+        let Some(vk) = self.vk.clone() else {
+            return Ok(());
+        };
+        let dirty: Vec<HandleRecord> = self
+            .handles
+            .values()
+            .filter(|h| {
+                h.use_count
+                    != self
+                        .handle_counters_flushed
+                        .get(&h.handle_id)
+                        .copied()
+                        .unwrap_or(0)
+            })
+            .cloned()
+            .collect();
+        for h in dirty {
+            self.handle_counters_flushed
+                .insert(h.handle_id, h.use_count);
+            self.write_handle(&vk, h)?;
+        }
+        Ok(())
+    }
+
+    fn audit_dek(&self, vk: &SecretBytes) -> SecretBytes {
+        kdf::subkey(vk, b"usk/audit-dek/v1")
+    }
+
+    fn audit_aad(&self, seq: u64, kind: &str) -> Vec<u8> {
+        let mut a = Vec::with_capacity(64);
+        a.extend_from_slice(self.header.vault_id.as_bytes());
+        a.extend_from_slice(&seq.to_be_bytes());
+        a.extend_from_slice(kind.as_bytes());
+        a
+    }
+
+    /// Append an audit event. Requires an unlocked vault. Returns its sequence number.
+    pub fn audit(&mut self, kind: &str, body: serde_json::Value) -> Result<u64, VaultError> {
+        let vk = self.vk()?.clone();
+        let last = self.storage.audit_last()?;
+        let (seq, prev_hash) = match &last {
+            Some(r) => (r.seq + 1, r.this_hash),
+            None => (1, audit::genesis(&self.header.vault_id)),
+        };
+        let ts = self.clock.now_unix_ms();
+        let json = serde_json::to_vec(&body)
+            .map_err(|_| VaultError::InvalidPolicy("audit body".into()))?;
+        let sealed = aead::seal(
+            &self.audit_dek(&vk),
+            &self.audit_aad(seq, kind),
+            &SecretBytes::new(json),
+        )?;
+        let this_hash =
+            audit::chain_hash(&prev_hash, seq, ts, kind, &sealed.nonce, &sealed.ciphertext);
+        self.storage.append_audit(&AuditRow {
+            seq,
+            ts,
+            kind: kind.to_string(),
+            prev_hash,
+            this_hash,
+            nonce: sealed.nonce,
+            ciphertext: sealed.ciphertext,
+            signature: None,
+        })?;
+        Ok(seq)
+    }
+
+    /// Decrypt events with `seq >= since_seq`, optionally filtered by kind, up to `limit`.
+    pub fn audit_events(
+        &self,
+        since_seq: u64,
+        kind: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<AuditEvent>, VaultError> {
+        let vk = self.vk()?;
+        let dek = self.audit_dek(vk);
+        let mut out = Vec::new();
+        let mut cursor = since_seq.max(1);
+        while out.len() < limit {
+            let batch = self.storage.audit_rows(cursor, 256)?;
+            if batch.is_empty() {
+                break;
+            }
+            for row in &batch {
+                cursor = row.seq + 1;
+                if kind.is_some_and(|k| k != row.kind) {
+                    continue;
+                }
+                let sealed = aead::Sealed {
+                    nonce: row.nonce,
+                    ciphertext: row.ciphertext.clone(),
+                };
+                let plain = aead::open(&dek, &self.audit_aad(row.seq, &row.kind), &sealed)
+                    .map_err(|_| VaultError::Corrupt(self.header.vault_id))?;
+                let body: serde_json::Value = serde_json::from_slice(plain.expose())
+                    .map_err(|_| VaultError::Corrupt(self.header.vault_id))?;
+                out.push(AuditEvent {
+                    seq: row.seq,
+                    ts: row.ts,
+                    kind: row.kind.clone(),
+                    body,
+                });
+                if out.len() >= limit {
+                    break;
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Walk the whole chain. Works while locked (no decryption needed).
+    pub fn audit_verify(&self) -> Result<VerifyReport, VaultError> {
+        let mut rows = Vec::new();
+        let mut cursor = 1;
+        loop {
+            let batch = self.storage.audit_rows(cursor, 1024)?;
+            if batch.is_empty() {
+                break;
+            }
+            cursor = batch.last().map(|r| r.seq + 1).unwrap_or(cursor);
+            rows.extend(batch);
+        }
+        Ok(audit::verify(&self.header.vault_id, &rows))
+    }
+
+    /// Number of audit rows.
+    pub fn audit_count(&self) -> Result<u64, VaultError> {
+        Ok(self.storage.audit_count()?)
+    }
+}

@@ -23,17 +23,21 @@ allow = [
   "CC0-1.0",
   # File-level copyleft only; used by `option-ext` via `dirs`. Does not affect our licence.
   "MPL-2.0",
+  # Permissive data licence for the Mozilla root-certificate store
+  # (`webpki-root-certs`, pulled in by `rustls-platform-verifier`).
+  "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.9
 
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
-# Exactly one implementation of each primitive; no duplicate crypto crates.
+# Our own crypto is RustCrypto only. `ring` is allowed solely as the rustls TLS
+# provider for outbound upstream connections; OpenSSL is never allowed.
 deny = [
   { name = "openssl" },
   { name = "openssl-sys" },
-  { name = "ring", wrappers = [] },
+  { name = "native-tls" },
   { name = "rustc-serialize" },
 ]
 

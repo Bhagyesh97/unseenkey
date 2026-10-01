@@ -13,8 +13,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::{Stream, StreamExt};
+use unseenkey_core::audit::kinds;
 use unseenkey_core::crypto::SecretBytes;
+use unseenkey_core::handles::HandleRecord;
 use unseenkey_core::ids::Id;
+use unseenkey_core::policy::{explain, Policy};
+use unseenkey_core::presets;
 use unseenkey_core::providers;
 use unseenkey_core::vault::{NewSecret, SecretKind, SecretMeta, VaultError};
 use zeroize::Zeroizing;
@@ -65,6 +69,10 @@ impl From<VaultError> for ApiError {
             VaultError::Corrupt(_) => (S::INTERNAL_SERVER_ERROR, "corrupt_record"),
             VaultError::Storage(_) => (S::INTERNAL_SERVER_ERROR, "storage_error"),
             VaultError::Crypto(_) => (S::INTERNAL_SERVER_ERROR, "crypto_error"),
+            VaultError::HandleNotFound => (S::NOT_FOUND, "handle_not_found"),
+            VaultError::LabelExists(_) => (S::CONFLICT, "label_exists"),
+            VaultError::PolicyWidensHosts => (S::BAD_REQUEST, "policy_widens_hosts"),
+            VaultError::InvalidPolicy(_) => (S::BAD_REQUEST, "invalid_policy"),
         };
         ApiError::new(status, code, e.to_string())
     }
@@ -133,6 +141,9 @@ pub async fn unlock(
         v.reload_header()?;
         v.unlock_with_password(&pw)
     })?;
+    let _ = v.audit(kinds::UNLOCK, serde_json::json!({}));
+    s.rebuild_scrubber(&v);
+    drop(v);
     s.emit(Event::Unlocked);
     tracing::info!("vault unlocked");
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -140,7 +151,14 @@ pub async fn unlock(
 
 /// `POST /v1/lock`
 pub async fn lock(State(s): State<Arc<AppState>>) -> ApiResult<serde_json::Value> {
-    s.vault.lock().await.lock();
+    {
+        let mut v = s.vault.lock().await;
+        if !v.is_locked() {
+            let _ = v.audit(kinds::LOCK, serde_json::json!({ "reason": "request" }));
+        }
+        v.lock();
+    }
+    s.clear_scrubber();
     s.emit(Event::Locked { reason: "request" });
     tracing::info!("vault locked by request");
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -257,7 +275,16 @@ pub async fn create_secret(
         tags: req.tags.clone(),
         notes: req.notes.clone(),
     };
-    let id = s.vault.lock().await.add(new)?;
+    let id = {
+        let mut v = s.vault.lock().await;
+        let id = v.add(new)?;
+        let _ = v.audit(
+            kinds::SECRET_CREATED,
+            serde_json::json!({ "id": id.to_hex(), "name": req.name.trim(), "provider": provider }),
+        );
+        s.rebuild_scrubber(&v);
+        id
+    };
     s.emit(Event::SecretChanged {
         id: id.to_hex(),
         change: "created",
@@ -379,6 +406,13 @@ pub async fn patch_secret(
             }
         })?;
     }
+    let _ = v.audit(
+        kinds::SECRET_UPDATED,
+        serde_json::json!({ "id": id.to_hex(), "value_changed": p.value.is_some() }),
+    );
+    if p.value.is_some() || p.no_scrub.is_some() {
+        s.rebuild_scrubber(&v);
+    }
     s.emit(Event::SecretChanged {
         id: id.to_hex(),
         change: "updated",
@@ -394,6 +428,11 @@ pub async fn delete_secret(
     let mut v = s.vault.lock().await;
     let id = resolve(&v, &r)?;
     v.delete(&id)?;
+    let _ = v.audit(
+        kinds::SECRET_DELETED,
+        serde_json::json!({ "id": id.to_hex() }),
+    );
+    s.rebuild_scrubber(&v);
     s.emit(Event::SecretChanged {
         id: id.to_hex(),
         change: "deleted",
@@ -444,9 +483,13 @@ pub async fn reveal_secret(
             "set confirm=true to reveal a value",
         ));
     }
-    let v = s.vault.lock().await;
+    let mut v = s.vault.lock().await;
     let id = resolve(&v, &r)?;
     let revealed = v.reveal(&id)?;
+    let _ = v.audit(
+        kinds::REVEAL,
+        serde_json::json!({ "id": id.to_hex(), "reason": req.reason.as_deref().unwrap_or("") }),
+    );
     s.emit(Event::Revealed { id: id.to_hex() });
     tracing::info!(secret = %id, reason = req.reason.as_deref().unwrap_or(""), "secret revealed");
     Ok(Json(RevealResponse {
@@ -481,6 +524,272 @@ pub async fn shutdown(State(s): State<Arc<AppState>>) -> ApiResult<serde_json::V
         s.request_shutdown();
     });
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ---------- handles ----------
+
+/// `POST /v1/handles` body.
+#[derive(Deserialize)]
+pub struct CreateHandle {
+    /// Secret name or id.
+    pub secret: String,
+    /// Label; defaults to the secret name.
+    pub label: Option<String>,
+    /// A preset policy such as `stripe:payments`. When omitted and `policy` is
+    /// absent, the provider's first (recommended) policy is used, or "full" for
+    /// secrets without a provider.
+    pub preset_policy: Option<String>,
+    /// An inline policy document.
+    pub policy: Option<Policy>,
+    /// Expiry in days from now.
+    pub expires_in_days: Option<u32>,
+}
+
+/// What a handle looks like to owners. Never includes the handle string
+/// except in the creation response.
+#[derive(Serialize)]
+pub struct HandleView {
+    /// Handle id (hex).
+    pub id: String,
+    /// Label.
+    pub label: String,
+    /// Secret name.
+    pub secret: String,
+    /// Secret id (hex).
+    pub secret_id: String,
+    /// Provider id.
+    pub provider: Option<String>,
+    /// Plain-English policy.
+    pub policy_explanation: String,
+    /// The policy itself.
+    pub policy: Policy,
+    /// Unix ms.
+    pub created_at: i64,
+    /// Unix ms.
+    pub expires_at: Option<i64>,
+    /// Unix ms.
+    pub revoked_at: Option<i64>,
+    /// Uses.
+    pub use_count: u64,
+    /// Unix ms.
+    pub last_used_at: Option<i64>,
+    /// Usable now?
+    pub active: bool,
+}
+
+/// Creation response: the only place the handle string appears.
+#[derive(Serialize)]
+pub struct HandleCreated {
+    /// The view.
+    #[serde(flatten)]
+    pub view: HandleView,
+    /// The handle string. Shown once.
+    pub handle: String,
+    /// Environment variables an SDK needs, when the provider has a preset.
+    pub env: BTreeMap<String, String>,
+    /// Base URL for this provider through the local broker.
+    pub base_url: Option<String>,
+}
+
+fn handle_view(v: &crate::state::DaemonVault, h: &HandleRecord, now: i64) -> HandleView {
+    let (secret, provider) = v
+        .get(&h.secret_id)
+        .map(|m| (m.name.clone(), m.provider.clone()))
+        .unwrap_or_else(|_| ("(deleted)".into(), None));
+    HandleView {
+        id: h.handle_id.to_hex(),
+        label: h.label.clone(),
+        secret,
+        secret_id: h.secret_id.to_hex(),
+        provider,
+        policy_explanation: explain(&h.policy),
+        policy: h.policy.clone(),
+        created_at: h.created_at,
+        expires_at: h.expires_at,
+        revoked_at: h.revoked_at,
+        use_count: h.use_count,
+        last_used_at: h.last_used_at,
+        active: h.is_active(now),
+    }
+}
+
+fn now_ms() -> i64 {
+    unseenkey_core::time::Clock::now_unix_ms(&unseenkey_core::time::SystemClock)
+}
+
+fn resolve_handle(v: &crate::state::DaemonVault, r: &str) -> Result<Id, ApiError> {
+    if let Some(id) = Id::from_hex(r) {
+        if v.handle(&id).is_ok() {
+            return Ok(id);
+        }
+    }
+    Ok(v.handle_by_label(r)?.handle_id)
+}
+
+/// `POST /v1/handles`
+pub async fn create_handle(
+    State(s): State<Arc<AppState>>,
+    Json(req): Json<CreateHandle>,
+) -> Result<(StatusCode, Json<HandleCreated>), ApiError> {
+    let mut v = s.vault.lock().await;
+    let secret_id = resolve(&v, &req.secret)?;
+    let meta = v.get(&secret_id)?.clone();
+    let policy = match (&req.policy, &req.preset_policy) {
+        (Some(p), _) => p.clone(),
+        (None, Some(spec)) => presets::policy_ref(spec)
+            .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, "invalid_policy", e.to_string()))?,
+        (None, None) => match meta.provider.as_deref().and_then(presets::get) {
+            Some(p) => p
+                .policies
+                .first()
+                .and_then(|pp| p.policy(&pp.id))
+                .unwrap_or_else(Policy::allow_all),
+            None => Policy::allow_all(),
+        },
+    };
+    let label = req
+        .label
+        .clone()
+        .filter(|l| !l.trim().is_empty())
+        .unwrap_or_else(|| meta.name.clone());
+    let now = now_ms();
+    let expires_at = req.expires_in_days.map(|d| now + d as i64 * 86_400_000);
+    let (record, plain) = v.create_handle(&secret_id, &label, policy, expires_at)?;
+    let _ = v.audit(
+        kinds::HANDLE_CREATED,
+        serde_json::json!({ "id": record.handle_id.to_hex(), "label": record.label, "secret": meta.name, "expires_at": expires_at }),
+    );
+    let view = handle_view(&v, &record, now);
+    drop(v);
+    let preset = meta.provider.as_deref().and_then(presets::get);
+    let base_url = preset.map(|p| format!("{}/p/{}{}", s.base_url, p.id, p.base_path));
+    let mut env = BTreeMap::new();
+    if let (Some(p), Some(b)) = (preset, &base_url) {
+        if let Some(var) = p.env.get("base_url") {
+            env.insert(var.clone(), b.clone());
+        }
+        if let Some(var) = p.env.get("api_key") {
+            env.insert(var.clone(), plain.clone());
+        }
+    }
+    tracing::info!(handle = %record.handle_id, label = %record.label, "handle created");
+    Ok((
+        StatusCode::CREATED,
+        Json(HandleCreated {
+            view,
+            handle: plain,
+            env,
+            base_url,
+        }),
+    ))
+}
+
+/// `GET /v1/handles`
+pub async fn list_handles(State(s): State<Arc<AppState>>) -> ApiResult<Vec<HandleView>> {
+    let v = s.vault.lock().await;
+    let now = now_ms();
+    Ok(Json(
+        v.handles()?
+            .into_iter()
+            .map(|h| handle_view(&v, h, now))
+            .collect(),
+    ))
+}
+
+/// `GET /v1/handles/{ref}`
+pub async fn get_handle(
+    State(s): State<Arc<AppState>>,
+    Path(r): Path<String>,
+) -> ApiResult<HandleView> {
+    let v = s.vault.lock().await;
+    let id = resolve_handle(&v, &r)?;
+    Ok(Json(handle_view(&v, v.handle(&id)?, now_ms())))
+}
+
+/// `PATCH /v1/handles/{ref}` body.
+#[derive(Deserialize)]
+pub struct PatchHandle {
+    /// Replace the policy with a preset policy.
+    pub preset_policy: Option<String>,
+    /// Replace the policy with an inline document.
+    pub policy: Option<Policy>,
+}
+
+/// `PATCH /v1/handles/{ref}`
+pub async fn patch_handle(
+    State(s): State<Arc<AppState>>,
+    Path(r): Path<String>,
+    Json(p): Json<PatchHandle>,
+) -> ApiResult<HandleView> {
+    let mut v = s.vault.lock().await;
+    let id = resolve_handle(&v, &r)?;
+    let policy = match (&p.policy, &p.preset_policy) {
+        (Some(pol), _) => pol.clone(),
+        (None, Some(spec)) => presets::policy_ref(spec)
+            .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, "invalid_policy", e.to_string()))?,
+        (None, None) => {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid",
+                "pass policy or preset_policy",
+            ))
+        }
+    };
+    v.set_handle_policy(&id, policy)?;
+    let _ = v.audit(
+        kinds::POLICY_CHANGED,
+        serde_json::json!({ "id": id.to_hex() }),
+    );
+    Ok(Json(handle_view(&v, v.handle(&id)?, now_ms())))
+}
+
+/// `DELETE /v1/handles/{ref}` — revoke.
+pub async fn revoke_handle(
+    State(s): State<Arc<AppState>>,
+    Path(r): Path<String>,
+) -> ApiResult<serde_json::Value> {
+    let mut v = s.vault.lock().await;
+    let id = resolve_handle(&v, &r)?;
+    v.revoke_handle(&id)?;
+    let _ = v.audit(
+        kinds::HANDLE_REVOKED,
+        serde_json::json!({ "id": id.to_hex() }),
+    );
+    tracing::info!(handle = %id, "handle revoked");
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ---------- audit ----------
+
+/// `GET /v1/audit` query.
+#[derive(Deserialize)]
+pub struct AuditQuery {
+    /// Start at this sequence number.
+    #[serde(default)]
+    pub since: u64,
+    /// Only this kind.
+    pub kind: Option<String>,
+    /// At most this many (default 100, max 1000).
+    pub limit: Option<usize>,
+}
+
+/// `GET /v1/audit`
+pub async fn audit_list(
+    State(s): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<AuditQuery>,
+) -> ApiResult<Vec<unseenkey_core::audit::AuditEvent>> {
+    let v = s.vault.lock().await;
+    let limit = q.limit.unwrap_or(100).min(1000);
+    Ok(Json(v.audit_events(q.since, q.kind.as_deref(), limit)?))
+}
+
+/// `GET /v1/audit/verify`
+pub async fn audit_verify(State(s): State<Arc<AppState>>) -> ApiResult<serde_json::Value> {
+    let v = s.vault.lock().await;
+    let report = v.audit_verify()?;
+    Ok(Json(serde_json::json!({
+        "ok": report.ok(), "rows": report.rows, "first_broken": report.first_broken, "contiguous": report.contiguous,
+    })))
 }
 
 /// Fallback for unknown routes.

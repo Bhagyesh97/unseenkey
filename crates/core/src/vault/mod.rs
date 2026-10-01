@@ -21,6 +21,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 pub mod header;
+mod ops;
 pub mod records;
 pub mod recovery;
 
@@ -60,6 +61,18 @@ pub enum VaultError {
     /// A record failed to decrypt or parse: corruption or tampering.
     #[error("record {0} is corrupt or was tampered with")]
     Corrupt(Id),
+    /// No handle with that id or label.
+    #[error("handle not found")]
+    HandleNotFound,
+    /// A handle with that label is already active.
+    #[error("a handle labelled {0:?} already exists")]
+    LabelExists(String),
+    /// The policy's upstreams are not a subset of the secret's.
+    #[error("policy upstreams must be within the secret's upstreams")]
+    PolicyWidensHosts,
+    /// The policy failed validation.
+    #[error("invalid policy: {0}")]
+    InvalidPolicy(String),
     /// The recovery phrase could not be parsed.
     #[error("invalid recovery phrase")]
     Recovery,
@@ -109,6 +122,12 @@ pub struct Vault<S: Storage, C: Clock> {
     vk: Option<SecretBytes>,
     /// Decrypted metadata index, rebuilt on unlock.
     index: BTreeMap<Id, SecretMeta>,
+    /// Decrypted handles, rebuilt on unlock.
+    handles: BTreeMap<Id, crate::handles::HandleRecord>,
+    /// Handle hash → handle id.
+    handle_hashes: BTreeMap<crate::crypto::hash::Digest, Id>,
+    /// Use counts as last persisted, per handle.
+    handle_counters_flushed: BTreeMap<Id, u64>,
 }
 
 impl<S: Storage, C: Clock> core::fmt::Debug for Vault<S, C> {
@@ -149,6 +168,9 @@ impl<S: Storage, C: Clock> Vault<S, C> {
                 header: hdr,
                 vk: Some(vk),
                 index: BTreeMap::new(),
+                handles: BTreeMap::new(),
+                handle_hashes: BTreeMap::new(),
+                handle_counters_flushed: BTreeMap::new(),
             },
             kit,
         ))
@@ -166,6 +188,9 @@ impl<S: Storage, C: Clock> Vault<S, C> {
             header: hdr,
             vk: None,
             index: BTreeMap::new(),
+            handles: BTreeMap::new(),
+            handle_hashes: BTreeMap::new(),
+            handle_counters_flushed: BTreeMap::new(),
         })
     }
 
@@ -230,15 +255,23 @@ impl<S: Storage, C: Clock> Vault<S, C> {
 
     fn finish_unlock(&mut self, vk: SecretBytes) -> Result<(), VaultError> {
         let index = self.build_index(&vk)?;
+        let (handles, hashes) = self.build_handle_index(&vk)?;
+        self.handle_counters_flushed = handles.iter().map(|(id, h)| (*id, h.use_count)).collect();
         self.vk = Some(vk);
         self.index = index;
+        self.handles = handles;
+        self.handle_hashes = hashes;
         Ok(())
     }
 
     /// Forget the vault key and the decrypted index.
     pub fn lock(&mut self) {
+        let _ = self.flush_handle_counters();
         self.vk = None;
         self.index.clear();
+        self.handles.clear();
+        self.handle_hashes.clear();
+        self.handle_counters_flushed.clear();
     }
 
     /// Re-wrap the vault key under a new password. Requires an unlocked vault.
