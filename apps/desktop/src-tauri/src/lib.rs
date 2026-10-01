@@ -283,9 +283,13 @@ pub fn run() {
                 .on_menu_event(move |app, event| match event.id.as_ref() {
                     "open" => show_main(app),
                     "lock" => {
-                        if let Some(c) = Client::try_connect(&tray_paths) {
-                            let _ = c.post("/v1/lock", json!({}));
-                        }
+                        // Menu events run on the main thread; keep the HTTP call off it.
+                        let paths = tray_paths.clone();
+                        std::thread::spawn(move || {
+                            if let Some(c) = Client::try_connect(&paths) {
+                                let _ = c.post("/v1/lock", json!({}));
+                            }
+                        });
                     }
                     "quit" => app.exit(0),
                     _ => {}

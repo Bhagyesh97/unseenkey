@@ -77,6 +77,16 @@ export function App() {
 
   const unlocked = !!status?.daemon && !status.daemon.locked;
 
+  const lockNow = useCallback(async () => {
+    setError(null);
+    try {
+      await api.lock();
+    } catch (e) {
+      setError(`Lock failed: ${(e as Error).message}`);
+    }
+    await refresh();
+  }, [refresh]);
+
   return (
     <div className="app">
       <aside className="sidebar">
@@ -93,7 +103,7 @@ export function App() {
               key={t.id}
               className={`nav-item ${tab === t.id ? "active" : ""}`}
               onClick={() => setTab(t.id)}
-              disabled={!unlocked && t.id !== "settings"}
+              disabled={!unlocked}
             >
               {t.label}
               {t.id === "approvals" && approvals.length > 0 && <span className="badge">{approvals.length}</span>}
@@ -104,7 +114,7 @@ export function App() {
           <div className={`dot ${unlocked ? "ok" : status?.daemon ? "warn" : "off"}`} />
           {status?.daemon ? (unlocked ? "unlocked" : "locked") : "daemon off"}
           {unlocked && (
-            <button className="link" onClick={() => void api.lock().then(refresh)}>
+            <button className="link" onClick={() => void lockNow()}>
               lock now
             </button>
           )}
@@ -115,7 +125,7 @@ export function App() {
         {toast && <div className="banner info">{toast}</div>}
         {!status ? (
           <div className="muted">Connecting to the daemon…</div>
-        ) : !unlocked && tab !== "settings" ? (
+        ) : !unlocked ? (
           <Gate status={status} onDone={refresh} />
         ) : (
           <>
@@ -126,7 +136,7 @@ export function App() {
             )}
             {tab === "activity" && <Activity key={tick} />}
             {tab === "agents" && <Agents />}
-            {tab === "settings" && <Settings status={status} onChange={refresh} />}
+            {tab === "settings" && <Settings status={status} onLock={lockNow} />}
           </>
         )}
       </main>

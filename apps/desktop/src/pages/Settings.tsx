@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api, type Status } from "../api";
 
-export function Settings({ status, onChange }: { status: Status; onChange: () => Promise<void> }) {
+export function Settings({ status, onLock }: { status: Status; onLock: () => Promise<void> }) {
   const [path, setPath] = useState(".env");
   const [scan, setScan] = useState<{ line: number; key: string; detected: string | null; fixable: boolean }[] | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -17,7 +17,7 @@ export function Settings({ status, onChange }: { status: Status; onChange: () =>
       </dl>
       {status.daemon && !status.daemon.locked && (
         <div className="actions">
-          <button onClick={() => void api.lock().then(onChange)}>Lock vault now</button>
+          <button onClick={() => void onLock()}>Lock vault now</button>
         </div>
       )}
       <h3>.env guard</h3>

@@ -86,7 +86,7 @@ export function Gate({ status, onDone }: { status: Status; onDone: () => Promise
   return (
     <div className="gate">
       <h1>Unlock</h1>
-      <p>Your vault is locked. Enter your password to let tools and agents use your keys again.</p>
+      <p>Your vault is locked. Tools and agents cannot use your keys until you unlock it.</p>
       <input
         type="password"
         placeholder="Vault password"
