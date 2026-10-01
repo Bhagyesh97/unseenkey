@@ -526,6 +526,55 @@ pub async fn shutdown(State(s): State<Arc<AppState>>) -> ApiResult<serde_json::V
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+/// `POST /v1/secrets/{ref}/inject` body.
+#[derive(Deserialize)]
+pub struct InjectRequest {
+    /// Environment variable the value will be placed in (audited).
+    pub var: Option<String>,
+    /// Command line being started (audited; never the value).
+    pub command: Option<String>,
+}
+
+/// `POST /v1/secrets/{ref}/inject` — plaintext for `usk run`. Only for secrets
+/// with `allow_injection`; every call is audited as `inject`.
+pub async fn inject_secret(
+    State(s): State<Arc<AppState>>,
+    Path(r): Path<String>,
+    Json(req): Json<InjectRequest>,
+) -> ApiResult<RevealResponse> {
+    let mut v = s.vault.lock().await;
+    let id = resolve(&v, &r)?;
+    let meta = v.get(&id)?.clone();
+    if !meta.allow_injection {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "injection_not_allowed",
+            format!(
+                "injection is off for {n}; the process would see the value. Enable it with: usk secret set {n} --allow-injection true",
+                n = meta.name
+            ),
+        ));
+    }
+    let revealed = v.reveal(&id)?;
+    let _ = v.audit(
+        kinds::INJECT,
+        serde_json::json!({
+            "id": id.to_hex(), "name": meta.name,
+            "var": req.var.as_deref().unwrap_or(""),
+            "command": req.command.as_deref().unwrap_or(""),
+        }),
+    );
+    tracing::info!(secret = %id, var = req.var.as_deref().unwrap_or(""), "secret injected into a process");
+    Ok(Json(RevealResponse {
+        value: text_or_hex(&revealed.value),
+        fields: revealed
+            .fields
+            .iter()
+            .map(|(k, val)| (k.clone(), text_or_hex(val)))
+            .collect(),
+    }))
+}
+
 // ---------- handles ----------
 
 /// `POST /v1/handles` body.

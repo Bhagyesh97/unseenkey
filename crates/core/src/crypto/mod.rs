@@ -12,6 +12,7 @@
 pub mod aead;
 pub mod hash;
 pub mod kdf;
+mod platform;
 pub mod secret_bytes;
 pub mod sign;
 

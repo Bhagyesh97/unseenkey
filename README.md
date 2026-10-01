@@ -24,6 +24,19 @@ Requires stable Rust (see `rust-toolchain.toml`).
 
 ```
 cargo test --workspace
+cargo run -p usk -- --help
+```
+
+## Try it (local, nothing leaves your machine)
+
+```
+usk init                                   # password + 24-word recovery phrase
+usk add anthropic                          # paste a key or a Claude Code token (hidden prompt)
+usk env anthropic --policy chat            # prints ANTHROPIC_BASE_URL + a usk_h_… handle
+claude -p "hello"                          # Claude Code now goes through the broker
+usk log                                    # every call, hash-chained
+usk guard fix .env                         # replace real keys in a .env with handles
+usk run --with DATABASE_URL=prod-db -- app # for things that cannot be proxied (audited, scrubbed)
 ```
 
 ## Security

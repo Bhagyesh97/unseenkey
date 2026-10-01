@@ -115,6 +115,26 @@ enum Command {
     Status,
     /// Diagnose common problems.
     Doctor,
+    /// Run a program with secrets injected as environment variables (weaker mode:
+    /// the program sees the values). Requires `usk secret set <name> --allow-injection true`.
+    Run {
+        /// `VAR=secret`, repeatable.
+        #[arg(long = "with", value_name = "VAR=SECRET", required = true)]
+        with: Vec<String>,
+        /// The program and its arguments, after `--`.
+        #[arg(last = true, required = true)]
+        command: Vec<String>,
+    },
+    /// Find real keys in a `.env` file and replace them with handles.
+    Guard {
+        #[command(subcommand)]
+        action: GuardAction,
+    },
+    /// Change a secret's settings.
+    Secret {
+        #[command(subcommand)]
+        action: SecretAction,
+    },
     /// List provider presets and their ready-made policies.
     Presets,
     /// Create, list and revoke handles (the strings you give to tools instead of keys).
@@ -256,6 +276,29 @@ pub fn run() -> Result<(), CliError> {
         Command::Status => status(&paths, cli.json),
         Command::Doctor => doctor(&paths),
         Command::Presets => presets(cli.json),
+        Command::Run { with, command } => crate::run::run(&paths, with, command),
+        Command::Guard { action } => match action {
+            GuardAction::Scan { path } => crate::guard::scan(&path, cli.json).map(|_| ()),
+            GuardAction::Fix { path, dry_run } => crate::guard::fix(&paths, &path, dry_run),
+        },
+        Command::Secret { action } => match action {
+            SecretAction::Set {
+                name,
+                allow_injection,
+                no_scrub,
+                notes,
+                tags,
+                upstreams,
+            } => secret_set(
+                &paths,
+                &name,
+                allow_injection,
+                no_scrub,
+                notes,
+                tags,
+                upstreams,
+            ),
+        },
         Command::Handle { action } => match action {
             HandleAction::Create {
                 secret,
@@ -1119,6 +1162,111 @@ fn log_verify(paths: &VaultPaths, json: bool) -> Result<(), CliError> {
             "audit chain verification failed",
         ))
     }
+}
+
+#[derive(Subcommand)]
+enum GuardAction {
+    /// Report which lines look like secrets and which can become handles.
+    Scan {
+        /// Path to the .env file.
+        #[arg(default_value = ".env")]
+        path: PathBuf,
+    },
+    /// Move secrets into the vault and rewrite the file with handles.
+    Fix {
+        /// Path to the .env file.
+        #[arg(default_value = ".env")]
+        path: PathBuf,
+        /// Show what would change without writing.
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum SecretAction {
+    /// Set flags and metadata on a secret.
+    Set {
+        /// Secret name.
+        name: String,
+        /// Allow `usk run` to inject this secret into a process environment.
+        #[arg(long)]
+        allow_injection: Option<bool>,
+        /// Exclude this value from response scrubbing (for false positives).
+        #[arg(long)]
+        no_scrub: Option<bool>,
+        /// Replace the notes.
+        #[arg(long)]
+        notes: Option<String>,
+        /// Replace the tags; repeatable.
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+        /// Replace the allowed hosts; repeatable.
+        #[arg(long = "upstream")]
+        upstreams: Vec<String>,
+    },
+}
+
+fn secret_set(
+    paths: &VaultPaths,
+    name: &str,
+    allow_injection: Option<bool>,
+    no_scrub: Option<bool>,
+    notes: Option<String>,
+    tags: Vec<String>,
+    upstreams: Vec<String>,
+) -> Result<(), CliError> {
+    let c = unlocked(paths)?;
+    let mut body = serde_json::Map::new();
+    if let Some(a) = allow_injection {
+        body.insert("allow_injection".into(), json!(a));
+    }
+    if let Some(n) = no_scrub {
+        body.insert("no_scrub".into(), json!(n));
+    }
+    if let Some(n) = notes {
+        body.insert("notes".into(), json!(n));
+    }
+    if !tags.is_empty() {
+        body.insert("tags".into(), json!(tags));
+    }
+    if !upstreams.is_empty() {
+        body.insert("upstreams".into(), json!(upstreams));
+    }
+    if body.is_empty() {
+        return Err(CliError::general(
+            "nothing to change; pass --allow-injection, --no-scrub, --notes, --tag or --upstream",
+        ));
+    }
+    let m = c.patch(&format!("/v1/secrets/{name}"), Value::Object(body))?;
+    println!(
+        "{}: injection {}, scrubbing {}, upstreams {}",
+        m["name"].as_str().unwrap_or(name),
+        if m["allow_injection"].as_bool().unwrap_or(false) {
+            "allowed"
+        } else {
+            "off"
+        },
+        if m["no_scrub"].as_bool().unwrap_or(false) {
+            "off"
+        } else {
+            "on"
+        },
+        m["upstreams"]
+            .as_array()
+            .map(|a| a
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", "))
+            .unwrap_or_default()
+    );
+    if allow_injection == Some(true) {
+        println!(
+            "Note: programs started with `usk run --with VAR={name}` will see the real value."
+        );
+    }
+    Ok(())
 }
 
 fn presets(json: bool) -> Result<(), CliError> {

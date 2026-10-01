@@ -1,9 +1,10 @@
 //! [`SecretBytes`]: the only container for plaintext secret material.
 
+use super::platform;
 use alloc::vec::Vec;
 use core::fmt;
 use subtle::ConstantTimeEq;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::Zeroize;
 
 /// Owned bytes that are wiped from memory on drop and can never be printed.
 ///
@@ -11,27 +12,30 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 /// - There is deliberately no `Serialize`; the only way to persist a secret is
 ///   through the vault's encryption path.
 /// - Equality is constant-time.
+/// - The buffer is locked in memory on a best-effort basis (no swap, no core
+///   dump) for as long as it lives.
 /// - The contents are reachable only through [`SecretBytes::expose`], so every
 ///   use site is greppable.
-#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+#[derive(Zeroize)]
 pub struct SecretBytes(Vec<u8>);
 
 impl SecretBytes {
     /// Take ownership of `bytes`. The caller must not keep another copy.
-    pub fn new(bytes: Vec<u8>) -> Self {
+    pub fn new(mut bytes: Vec<u8>) -> Self {
+        platform::lock(&mut bytes);
         Self(bytes)
     }
 
     /// Copy `bytes` into a new secret.
     pub fn from_slice(bytes: &[u8]) -> Self {
-        Self(bytes.to_vec())
+        Self::new(bytes.to_vec())
     }
 
     /// A secret of `len` fresh random bytes from the OS CSPRNG.
     pub fn random(len: usize) -> Self {
         let mut v = alloc::vec![0u8; len];
         super::random_bytes(&mut v);
-        Self(v)
+        Self::new(v)
     }
 
     /// Borrow the plaintext. Keep the borrow as short as possible.
@@ -47,6 +51,19 @@ impl SecretBytes {
     /// True if the secret is empty.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+}
+
+impl Clone for SecretBytes {
+    fn clone(&self) -> Self {
+        Self::new(self.0.clone())
+    }
+}
+
+impl Drop for SecretBytes {
+    fn drop(&mut self) {
+        platform::unlock(&mut self.0);
+        self.0.zeroize();
     }
 }
 
@@ -108,5 +125,18 @@ mod tests {
         let b = SecretBytes::random(32);
         assert_eq!(a.len(), 32);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn clone_and_drop_many() {
+        // Exercises lock/unlock on many small buffers; must never fail or panic
+        // even when the platform refuses to lock more pages.
+        let originals: alloc::vec::Vec<SecretBytes> = (0..500)
+            .map(|i| SecretBytes::from_slice(&[i as u8; 40]))
+            .collect();
+        let clones: alloc::vec::Vec<SecretBytes> = originals.to_vec();
+        assert_eq!(originals, clones);
+        drop(originals);
+        assert_eq!(clones[3].expose(), &[3u8; 40]);
     }
 }

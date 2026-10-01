@@ -77,8 +77,11 @@ usk handle ls | usk handle revoke <label|id>
 usk policy ls | usk policy show <id> | usk policy edit <id> (opens $EDITOR, validates, explains)
 usk policy explain <id>
 
-usk env <name> [--policy chat]   print the export lines for the provider preset (creates handle)
-usk run --with VAR=name [...] -- <cmd…>
+usk env <name> [--policy chat] [--shell sh|powershell|cmd|dotenv]   print the variables for the provider preset (creates handle)
+usk run --with VAR=name [...] -- <cmd…>   inject secrets into a child's environment (needs --allow-injection); output scrubbed; exit code propagates
+usk secret set <name> [--allow-injection bool] [--no-scrub bool] [--notes …] [--tag …] [--upstream host]
+usk guard scan [.env]            which lines look like secrets, and which can become handles
+usk guard fix  [.env] [--dry-run] move them into the vault, rewrite the file with handles + base-URL variables
 usk mcp                          stdio MCP server
 usk mcp install [claude|cursor|windsurf|all]   write MCP config for detected clients
 usk log [--since 1h] [--kind use] [--json]

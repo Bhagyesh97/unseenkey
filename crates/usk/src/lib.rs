@@ -7,5 +7,7 @@
 pub mod cli;
 pub mod client;
 pub mod daemon;
+pub mod guard;
 pub mod io;
 pub mod platform;
+pub mod run;

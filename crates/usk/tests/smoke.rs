@@ -256,6 +256,132 @@ fn import_from_env() {
 }
 
 #[test]
+fn run_injection_and_env_guard() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    let _stop = StopDaemon(&vault);
+    assert!(usk(&vault, &["init", "--profile", "light"], PW)
+        .status
+        .success());
+    let key = "sk_live_51Habcdefghijklmnop";
+    let o = usk(
+        &vault,
+        &["add", "stripe", "--stdin"],
+        &format!("{PW}{key}\n"),
+    );
+    assert!(o.status.success(), "{}", err(&o));
+
+    // Injection is off by default: `usk run` refuses with a clear hint.
+    let (shell, flag, echo) = if cfg!(windows) {
+        ("cmd", "/c", "echo %K%")
+    } else {
+        ("sh", "-c", "echo $K")
+    };
+    let o = usk(
+        &vault,
+        &["run", "--with", "K=stripe", "--", shell, flag, echo],
+        "",
+    );
+    assert!(!o.status.success());
+    assert!(err(&o).contains("injection is off"), "{}", err(&o));
+    assert!(!out(&o).contains(key));
+
+    // Enable it, run again: the program sees the value, we only ever see it redacted.
+    let o = usk(
+        &vault,
+        &["secret", "set", "stripe", "--allow-injection", "true"],
+        "",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(out(&o).contains("injection allowed"), "{}", out(&o));
+    let o = usk(
+        &vault,
+        &["run", "--with", "K=stripe", "--", shell, flag, echo],
+        "",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(out(&o).contains("[REDACTED:usk:stripe]"), "{}", out(&o));
+    assert!(!out(&o).contains(key), "child output must be scrubbed");
+    assert!(
+        err(&o).contains("is a shell"),
+        "shell warning expected: {}",
+        err(&o)
+    );
+    assert!(err(&o).contains("redacted 1 occurrence"), "{}", err(&o));
+    // Exit codes propagate.
+    let o = usk(
+        &vault,
+        &["run", "--with", "K=stripe", "--", shell, flag, "exit 7"],
+        "",
+    );
+    assert_eq!(o.status.code(), Some(7));
+    // Audited as `inject`, never as a value.
+    let o = usk(&vault, &["--json", "log", "--kind", "inject"], "");
+    let j: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
+    assert!(j.as_array().unwrap().len() >= 2, "{}", out(&o));
+    assert!(!out(&o).contains(key));
+
+    // .env guard: an OpenAI key (fixable) and a password with no provider (left alone).
+    let env = dir.path().join(".env");
+    let openai = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEF";
+    std::fs::write(
+        &env,
+        format!("PORT=3000\nOPENAI_API_KEY={openai}\nDB_PASSWORD=hunter2hunter2\n"),
+    )
+    .unwrap();
+    let o = usk(&vault, &["guard", "scan", env.to_str().unwrap()], "");
+    assert!(o.status.success(), "{}", err(&o));
+    let t = out(&o);
+    assert!(
+        t.contains("OPENAI_API_KEY") && t.contains("replace with handle"),
+        "{t}"
+    );
+    assert!(
+        t.contains("DB_PASSWORD") && t.contains("no provider preset"),
+        "{t}"
+    );
+    assert!(!t.contains("PORT"), "{t}");
+    assert!(!t.contains(openai));
+    let o = usk(
+        &vault,
+        &["guard", "fix", env.to_str().unwrap(), "--dry-run"],
+        "",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(
+        std::fs::read_to_string(&env).unwrap().contains(openai),
+        "dry run must not write"
+    );
+    let o = usk(&vault, &["guard", "fix", env.to_str().unwrap()], "");
+    assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
+    let fixed = std::fs::read_to_string(&env).unwrap();
+    assert!(!fixed.contains(openai), "{fixed}");
+    assert!(fixed.contains("OPENAI_API_KEY=usk_h_"), "{fixed}");
+    assert!(
+        fixed.contains("OPENAI_BASE_URL=http://127.0.0.1:"),
+        "{fixed}"
+    );
+    assert!(fixed.contains("/p/openai/v1"), "{fixed}");
+    assert!(
+        fixed.contains("PORT=3000") && fixed.contains("DB_PASSWORD=hunter2hunter2"),
+        "{fixed}"
+    );
+    let o = usk(&vault, &["--json", "ls"], "");
+    let j: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
+    assert!(
+        j.as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["name"] == "openai-api-key"),
+        "{}",
+        out(&o)
+    );
+    // Second fix is a no-op: the key is already a handle.
+    let o = usk(&vault, &["guard", "fix", env.to_str().unwrap()], "");
+    assert!(out(&o).contains("nothing to fix"), "{}", out(&o));
+}
+
+#[test]
 fn status_without_vault() {
     let dir = tempfile::tempdir().unwrap();
     let vault = dir.path().join("vault.db");

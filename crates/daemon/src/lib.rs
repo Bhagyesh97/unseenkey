@@ -16,6 +16,7 @@
 pub mod api;
 pub mod config;
 pub mod guard;
+pub mod logging;
 pub mod paths;
 pub mod proxy;
 pub mod server;

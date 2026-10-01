@@ -46,14 +46,16 @@ fn init_logging(paths: &VaultPaths, to_file: bool) {
             let _ = tracing_subscriber::fmt()
                 .with_env_filter(filter)
                 .with_ansi(false)
-                .with_writer(std::sync::Mutex::new(file))
+                .with_writer(unseenkey_daemon::logging::RedactingWriter::new(file))
                 .try_init();
             return;
         }
     }
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
-        .with_writer(std::io::stderr)
+        .with_writer(unseenkey_daemon::logging::RedactingWriter::new(
+            std::io::stderr(),
+        ))
         .try_init();
 }
 

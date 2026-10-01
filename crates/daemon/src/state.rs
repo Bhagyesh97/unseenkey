@@ -1,7 +1,7 @@
 //! Shared daemon state.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::RwLock;
+use std::sync::{OnceLock, RwLock};
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, watch, Mutex};
 use unseenkey_core::broker::scrub::{Guarded, Scrubber};
@@ -14,6 +14,28 @@ use unseenkey_core::vault::Vault;
 
 /// The vault type the daemon holds.
 pub type DaemonVault = Vault<SqliteStorage, SystemClock>;
+
+/// Process-wide copy of the scrubber for the log writer, which exists before
+/// any [`AppState`] does.
+static REDACTOR: OnceLock<RwLock<Scrubber>> = OnceLock::new();
+
+fn redactor_cell() -> &'static RwLock<Scrubber> {
+    REDACTOR.get_or_init(|| RwLock::new(Scrubber::empty()))
+}
+
+/// Replace the process-wide redactor.
+pub fn set_redactor(s: Scrubber) {
+    *redactor_cell().write().unwrap_or_else(|e| e.into_inner()) = s;
+}
+
+/// Scrub `data` with the process-wide redactor.
+pub fn redact(data: &[u8]) -> Vec<u8> {
+    redactor_cell()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .scrub(data)
+        .0
+}
 
 /// Events pushed to `/v1/events` subscribers. Never carry secret material.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -187,11 +209,13 @@ impl AppState {
             .map(|(n, v)| Guarded { name: n, value: v })
             .collect();
         let scrubber = Scrubber::new(&guarded);
+        set_redactor(scrubber.clone());
         *self.scrubber.write().unwrap_or_else(|e| e.into_inner()) = scrubber;
     }
 
     /// Drop all guarded values (on lock).
     pub fn clear_scrubber(&self) {
+        set_redactor(Scrubber::empty());
         *self.scrubber.write().unwrap_or_else(|e| e.into_inner()) = Scrubber::empty();
     }
 
