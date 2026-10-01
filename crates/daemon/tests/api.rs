@@ -31,6 +31,8 @@ async fn start(dir: &std::path::Path, write_files: bool) -> Running {
         write_runtime_files: write_files,
         upstream_overrides: vec![],
         mcp_allow_store: false,
+        lock_on_sleep: false,
+        lock_on_session_lock: false,
     })
     .await
     .unwrap()
@@ -293,9 +295,115 @@ async fn refuses_non_loopback() {
         write_runtime_files: false,
         upstream_overrides: vec![],
         mcp_allow_store: false,
+        lock_on_sleep: false,
+        lock_on_session_lock: false,
     })
     .await
     .err()
     .unwrap();
     assert!(err.to_string().contains("non-loopback"));
+}
+
+/// Device unlock methods: enroll while unlocked, list while locked, unlock with
+/// the KEK, refuse wrong KEKs and unknown ids, remove.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn device_unlock_methods() {
+    use base64::Engine as _;
+    let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let dir = tempfile::tempdir().unwrap();
+    let r = start(dir.path(), false).await;
+    let c = C::new(&r);
+    let kek = [0x5au8; 32];
+    let salt = [0x11u8; 32];
+
+    // Needs an unlocked vault.
+    let (code, body) = c.post(
+        "/v1/unlock-methods",
+        json!({ "kind": "hello", "label": "laptop", "salt": b64(&salt), "kek": b64(&kek) }),
+    );
+    assert_eq!(code, 401, "{body}");
+    assert_eq!(c.post("/v1/unlock", json!({ "password": PW })).0, 200);
+    let (code, body) = c.post(
+        "/v1/unlock-methods",
+        json!({ "kind": "hello", "label": "laptop", "salt": b64(&salt), "kek": b64(&kek) }),
+    );
+    assert_eq!(code, 200, "{body}");
+    let id = body["id"].as_str().unwrap().to_string();
+
+    // Bad inputs.
+    assert_eq!(
+        c.post(
+            "/v1/unlock-methods",
+            json!({ "kind": "Bad Kind", "label": "", "salt": b64(&salt), "kek": b64(&kek) })
+        )
+        .0,
+        400
+    );
+    assert_eq!(
+        c.post(
+            "/v1/unlock-methods",
+            json!({ "kind": "hello", "label": "", "salt": b64(&salt[..8]), "kek": b64(&kek) })
+        )
+        .0,
+        400
+    );
+
+    // Listed, with the public salt, including while locked.
+    assert_eq!(c.post("/v1/lock", json!({})).0, 200);
+    let (code, list) = c.get("/v1/unlock-methods");
+    assert_eq!(code, 200);
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    assert_eq!(list[0]["id"], id);
+    assert_eq!(list[0]["kind"], "hello");
+    assert_eq!(list[0]["salt"], b64(&salt));
+
+    // Unlock: malformed bodies (not counted as attempts), a wrong KEK, then the
+    // right one. The limiter allows five credential attempts a minute, so the
+    // test keeps to four in total.
+    assert_eq!(c.post("/v1/unlock", json!({})).0, 400);
+    assert_eq!(c.post("/v1/unlock", json!({ "wrap_id": id })).0, 400);
+    assert_eq!(
+        c.post(
+            "/v1/unlock",
+            json!({ "password": PW, "wrap_id": id, "kek": b64(&kek) })
+        )
+        .0,
+        400
+    );
+    let (code, body) = c.post(
+        "/v1/unlock",
+        json!({ "wrap_id": id, "kek": b64(&[1u8; 32]) }),
+    );
+    assert_eq!(code, 401, "{body}");
+    assert_eq!(body["error"], "wrong_password");
+    let (code, body) = c.post("/v1/unlock", json!({ "wrap_id": id, "kek": b64(&kek) }));
+    assert_eq!(code, 200, "{body}");
+    assert_eq!(c.get("/v1/status").1["locked"], false);
+
+    // Audit shows the method and the enrollment.
+    let (_, audit) = c.get("/v1/audit?since=1&limit=100");
+    let kinds: Vec<&str> = audit
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap())
+        .collect();
+    assert!(kinds.contains(&"unlock_method_added"));
+    assert!(audit
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["kind"] == "unlock" && e["body"]["method"] == "device"));
+
+    // Remove; the KEK no longer unlocks; the password still does.
+    assert_eq!(c.delete(&format!("/v1/unlock-methods/{id}")).0, 200);
+    assert_eq!(c.delete(&format!("/v1/unlock-methods/{id}")).0, 404);
+    assert_eq!(c.get("/v1/unlock-methods").1.as_array().unwrap().len(), 0);
+    assert_eq!(c.post("/v1/lock", json!({})).0, 200);
+    assert_eq!(
+        c.post("/v1/unlock", json!({ "wrap_id": id, "kek": b64(&kek) }))
+            .0,
+        404
+    );
+    r.shutdown().await;
 }

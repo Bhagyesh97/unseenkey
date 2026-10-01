@@ -161,6 +161,11 @@ SSO/SCIM, browser autofill, HSM, Kubernetes operator, WebSocket proxying, spend 
 **Context:** Delegation is the only uncontested and only unvalidated part of the product, and the original plan reached it in week 22.
 **Decision (approved 2026-09-30):** Weeks 1–8 Phase 0 + Phase 1 (core, vault, local broker, CLI). Weeks 9–10 MCP server only. Weeks 11–18 **delegation-lite**: accounts, grants, invites, KMS-backed hosted broker, a simple web dashboard for owners (developers use the CLI). Week 19+ desktop app, transparent mode, importers, then Phase 4 assurance. Ten customer conversations (five agencies/freelancers, five clients) happen before week 11 and gate the hosted build. Repo is private until the Phase 1 alpha, then public with the threat model as README. Details in [11](11-implementation-plan.md).
 
+## D-28 Device unlock through native credentials, not WebAuthn PRF
+
+**Context:** M2.2 planned passkey unlock via WebAuthn PRF in the webview. WebView2 only exposes the PRF extension for some authenticators, WKWebView has no WebAuthn at all without a browser entitlement, and a `tauri dev` origin is an IP address, which WebAuthn refuses. None of that is fixable from our side.
+**Decision (2026-10-01):** The vault header carries zero or more *device wraps*: the vault key wrapped under a 32-byte KEK that a platform credential derives on demand. Windows uses Windows Hello (`KeyCredentialManager`: a TPM-backed key pair per vault; `KEK = HKDF(sign(salt), "usk/kek/hello/v1")`, deterministic because the signature is RSA PKCS#1 v1.5). Each wrap has its own id bound into the AAD, a public 32-byte salt, and is enrolled or removed only while the vault is unlocked. The password and recovery phrase stay; a device wrap is a convenience that is exactly as strong as the OS credential. macOS (Touch ID through the Secure Enclave) and Linux follow the same shape when they land. The daemon speaks `GET/POST/DELETE /v1/unlock-methods` and `POST /v1/unlock { wrap_id, kek }`; the desktop app is the only caller today.
+
 ## Open items (defaults chosen; revisit when data arrives)
 
 - **Open-1: Pricing tiers.** Default in [15](15-business-and-gtm.md). Validate with 20 customer conversations.

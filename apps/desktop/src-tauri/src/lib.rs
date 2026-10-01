@@ -5,6 +5,8 @@
 //! loopback management API, starting the daemon when needed. Daemon events
 //! (SSE) are pumped into Tauri events so the UI can show approval prompts live.
 
+mod hello;
+
 use serde_json::{json, Value};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -196,6 +198,115 @@ pub fn run_daemon(args: &[String]) -> Result<(), usk::io::CliError> {
     usk::daemon::run(opts, &paths, true)
 }
 
+fn b64(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+fn unb64_32(s: &str) -> Result<[u8; 32], String> {
+    use base64::Engine as _;
+    let v = base64::engine::general_purpose::STANDARD
+        .decode(s)
+        .map_err(|_| "invalid: salt is not base64".to_string())?;
+    v.try_into().map_err(|_| "invalid: salt length".to_string())
+}
+
+/// Device unlock methods on the vault plus whether this machine can use them.
+#[tauri::command(async)]
+fn device_unlock_status(state: tauri::State<'_, AppData>) -> Result<Value, String> {
+    let methods = match Client::try_connect(&state.paths) {
+        Some(c) => c.get("/v1/unlock-methods").map_err(err_string)?,
+        None => json!([]),
+    };
+    let enrolled = methods
+        .as_array()
+        .map(|a| a.iter().any(|m| m["kind"] == hello::KIND))
+        .unwrap_or(false);
+    Ok(json!({
+        "available": hello::available(),
+        "enrolled": enrolled,
+        "methods": methods,
+    }))
+}
+
+/// Enroll Windows Hello for this vault (vault must be unlocked). Replaces any
+/// earlier Hello enrollment.
+#[tauri::command(async)]
+fn device_unlock_enroll(state: tauri::State<'_, AppData>) -> Result<String, String> {
+    if !hello::available() {
+        return Err("unsupported: Windows Hello is not set up on this computer".into());
+    }
+    let c = client(&state)?;
+    let status = c.get("/v1/status").map_err(err_string)?;
+    if status["locked"].as_bool().unwrap_or(true) {
+        return Err("locked: unlock the vault first".into());
+    }
+    let vault_id = status["vault_id"].as_str().unwrap_or_default().to_string();
+    hello::create_key(&vault_id)?;
+    let salt = unseenkey_core::crypto::random_array::<32>();
+    let kek = hello::derive_kek(&vault_id, &salt)?;
+    // One Hello wrap per vault: drop stale ones first.
+    let existing = c.get("/v1/unlock-methods").map_err(err_string)?;
+    for m in existing.as_array().into_iter().flatten() {
+        if m["kind"] == hello::KIND {
+            if let Some(id) = m["id"].as_str() {
+                let _ = c.delete(&format!("/v1/unlock-methods/{id}"));
+            }
+        }
+    }
+    let label = hello::device_label();
+    c.post(
+        "/v1/unlock-methods",
+        json!({ "kind": hello::KIND, "label": label, "salt": b64(&salt), "kek": b64(kek.expose()) }),
+    )
+    .map_err(err_string)?;
+    Ok(label)
+}
+
+/// Unlock with Windows Hello.
+#[tauri::command(async)]
+fn device_unlock(state: tauri::State<'_, AppData>) -> Result<(), String> {
+    let c = client(&state)?;
+    let status = c.get("/v1/status").map_err(err_string)?;
+    let vault_id = status["vault_id"].as_str().unwrap_or_default().to_string();
+    let methods = c.get("/v1/unlock-methods").map_err(err_string)?;
+    let m = methods
+        .as_array()
+        .into_iter()
+        .flatten()
+        .rev()
+        .find(|m| m["kind"] == hello::KIND)
+        .cloned()
+        .ok_or_else(|| "not_found: Windows Hello is not enabled for this vault".to_string())?;
+    let salt = unb64_32(m["salt"].as_str().unwrap_or_default())?;
+    let kek = hello::derive_kek(&vault_id, &salt)?;
+    c.post(
+        "/v1/unlock",
+        json!({ "wrap_id": m["id"], "kek": b64(kek.expose()) }),
+    )
+    .map(|_| ())
+    .map_err(err_string)
+}
+
+/// Remove the Windows Hello enrollment (vault must be unlocked).
+#[tauri::command(async)]
+fn device_unlock_remove(state: tauri::State<'_, AppData>) -> Result<(), String> {
+    let c = client(&state)?;
+    let status = c.get("/v1/status").map_err(err_string)?;
+    let vault_id = status["vault_id"].as_str().unwrap_or_default().to_string();
+    let methods = c.get("/v1/unlock-methods").map_err(err_string)?;
+    for m in methods.as_array().into_iter().flatten() {
+        if m["kind"] == hello::KIND {
+            if let Some(id) = m["id"].as_str() {
+                c.delete(&format!("/v1/unlock-methods/{id}"))
+                    .map_err(err_string)?;
+            }
+        }
+    }
+    hello::delete_key(&vault_id);
+    Ok(())
+}
+
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -254,6 +365,8 @@ pub fn run() {
     let paths = paths().expect("vault location");
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(AppData {
             paths: paths.clone(),
             connect_lock: Mutex::new(()),
@@ -267,7 +380,11 @@ pub fn run() {
             presets,
             install_mcp,
             guard_scan,
-            guard_fix
+            guard_fix,
+            device_unlock_status,
+            device_unlock_enroll,
+            device_unlock,
+            device_unlock_remove
         ])
         .setup(move |app| {
             let open = MenuItem::with_id(app, "open", "Open Unseenkey", true, None::<&str>)?;

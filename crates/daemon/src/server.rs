@@ -4,7 +4,7 @@ use crate::api;
 use crate::guard::{ingress_guard, require_token};
 use crate::paths::VaultPaths;
 use crate::proxy;
-use crate::state::{AppState, Event};
+use crate::state::AppState;
 use crate::token::{self, SessionToken};
 use axum::middleware::from_fn_with_state;
 use axum::routing::{any, get, post};
@@ -63,6 +63,10 @@ pub struct ServeOptions {
     pub upstream_overrides: Vec<(String, String)>,
     /// Enable the MCP `store_secret` tool.
     pub mcp_allow_store: bool,
+    /// Lock when the machine suspends or wakes from a suspend.
+    pub lock_on_sleep: bool,
+    /// Lock when the interactive session locks (Windows only for now).
+    pub lock_on_session_lock: bool,
 }
 
 /// A running daemon.
@@ -85,6 +89,11 @@ impl Running {
     pub async fn shutdown(self) {
         self.state.request_shutdown();
         self.wait().await;
+    }
+
+    /// Lock the vault now (for hosts that get their own OS signals).
+    pub async fn lock_vault(&self, reason: &'static str) -> bool {
+        self.state.lock_vault(reason).await
     }
 
     /// Resolves once a shutdown has been requested (by the API or [`Running::shutdown`]).
@@ -193,6 +202,14 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
         .route("/status", get(api::status))
         .route("/unlock", post(api::unlock))
         .route("/lock", post(api::lock))
+        .route(
+            "/unlock-methods",
+            get(api::unlock_methods_list).post(api::unlock_methods_add),
+        )
+        .route(
+            "/unlock-methods/{id}",
+            axum::routing::delete(api::unlock_methods_remove),
+        )
         .route("/secrets", get(api::list_secrets).post(api::create_secret))
         .route(
             "/secrets/{r}",
@@ -241,16 +258,39 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
                 tick.tick().await;
                 let idle = s.last_activity.lock().await.elapsed();
                 if idle >= s.idle_lock {
-                    let mut v = s.vault.lock().await;
-                    if !v.is_locked() {
-                        let _ = v.audit(kinds::LOCK, serde_json::json!({ "reason": "idle" }));
-                        v.lock();
-                        s.clear_scrubber();
-                        s.emit(Event::Locked { reason: "idle" });
-                        tracing::info!("vault locked after idle timeout");
-                    }
+                    s.lock_vault("idle").await;
                 }
             }
+        });
+    }
+
+    // OS hooks: suspend and session lock. Each fires on its own thread and
+    // hands the lock to the runtime; `lock_vault` is a no-op when already locked.
+    if opts.lock_on_sleep || opts.lock_on_session_lock {
+        let (on_sleep, on_session) = (opts.lock_on_sleep, opts.lock_on_session_lock);
+        let s = state.clone();
+        let rt = tokio::runtime::Handle::current();
+        if let Err(e) = crate::platform::watch_system(move |reason| {
+            let wanted = (reason == crate::platform::REASON_SLEEP && on_sleep)
+                || (reason == crate::platform::REASON_SESSION_LOCK && on_session);
+            if wanted {
+                let s = s.clone();
+                rt.spawn(async move {
+                    s.lock_vault(reason).await;
+                });
+            }
+        }) {
+            tracing::warn!(error = %e, "system lock notifications unavailable");
+        }
+    }
+    if opts.lock_on_sleep {
+        let s = state.clone();
+        let rt = tokio::runtime::Handle::current();
+        crate::platform::watch_resume(move || {
+            let s = s.clone();
+            rt.spawn(async move {
+                s.lock_vault(crate::platform::REASON_SLEEP).await;
+            });
         });
     }
 

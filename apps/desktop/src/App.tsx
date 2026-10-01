@@ -7,6 +7,7 @@ import { Approvals } from "./pages/Approvals";
 import { Activity } from "./pages/Activity";
 import { Agents } from "./pages/Agents";
 import { Settings } from "./pages/Settings";
+import { checkForUpdate, installUpdate, type UpdateInfo } from "./updates";
 
 type Tab = "secrets" | "handles" | "approvals" | "activity" | "agents" | "settings";
 
@@ -26,6 +27,14 @@ export function App() {
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [toast, setToast] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [updating, setUpdating] = useState(false);
+
+  // One silent check at startup; failures (offline, private repo) are ignored.
+  useEffect(() => {
+    const id = setTimeout(() => void checkForUpdate().then(setUpdate).catch(() => {}), 4000);
+    return () => clearTimeout(id);
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -123,6 +132,15 @@ export function App() {
       <main className="content">
         {error && <div className="banner error">{error}</div>}
         {toast && <div className="banner info">{toast}</div>}
+        {update && (
+          <div className="banner info">
+            Unseenkey {update.version} is available.{" "}
+            <button className="link" disabled={updating} onClick={() => { setUpdating(true); void installUpdate().catch((e) => { setError((e as Error).message); setUpdating(false); }); }}>
+              {updating ? "Installing…" : "Install and restart"}
+            </button>
+            <button className="link" onClick={() => setUpdate(null)}>later</button>
+          </div>
+        )}
         {!status ? (
           <div className="muted">Connecting to the daemon…</div>
         ) : !unlocked ? (

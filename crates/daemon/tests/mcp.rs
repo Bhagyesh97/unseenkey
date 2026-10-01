@@ -136,6 +136,8 @@ async fn setup() -> Arc<Env> {
         write_runtime_files: true,
         upstream_overrides: vec![("api.stripe.com".into(), format!("http://{mock}"))],
         mcp_allow_store: false,
+        lock_on_sleep: false,
+        lock_on_session_lock: false,
     })
     .await
     .unwrap();

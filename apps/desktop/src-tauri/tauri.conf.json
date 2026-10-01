@@ -33,6 +33,18 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU5N0Y1MjFENkI1Rjg3RjcKUldUM2gxOXJIVkovNlE1RGx4SFU2MHBkaExQRmVOUHJLbDN2bXVnaFk5a1VmRjltMGRtN0NDVWgK",
+      "endpoints": [
+        "https://github.com/Bhagyesh97/unseenkey/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

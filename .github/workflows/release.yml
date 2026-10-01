@@ -99,3 +99,78 @@ jobs:
           files: dist/*
           generate_release_notes: true
           draft: true
+
+  desktop:
+    # Desktop installers, built after the CLI release exists so tauri-action
+    # attaches to the same draft. Updater bundles are signed with the minisign
+    # key in TAURI_SIGNING_PRIVATE_KEY; latest.json is merged across platforms.
+    name: desktop (${{ matrix.os }})
+    needs: release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            args: ""
+          - os: macos-latest
+            args: "--target aarch64-apple-darwin"
+          - os: macos-13
+            args: "--target x86_64-apple-darwin"
+          - os: ubuntu-22.04
+            args: ""
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+      - run: npm ci
+        working-directory: apps/desktop
+      - name: Apple signing and notarization (only when the secrets exist)
+        if: runner.os == 'macOS'
+        env:
+          HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE != '' }}
+        run: |
+          [ "$HAS_APPLE" = "true" ] || { echo "no Apple signing secrets; building unsigned"; exit 0; }
+          {
+            echo "APPLE_CERTIFICATE=${{ secrets.APPLE_CERTIFICATE }}"
+            echo "APPLE_CERTIFICATE_PASSWORD=${{ secrets.APPLE_CERTIFICATE_PASSWORD }}"
+            echo "APPLE_SIGNING_IDENTITY=${{ secrets.APPLE_SIGNING_IDENTITY }}"
+            echo "APPLE_ID=${{ secrets.APPLE_ID }}"
+            echo "APPLE_PASSWORD=${{ secrets.APPLE_PASSWORD }}"
+            echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}"
+          } >> "$GITHUB_ENV"
+      - name: Windows Authenticode (only when the secrets exist)
+        if: runner.os == 'Windows'
+        env:
+          HAS_WIN: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
+        shell: bash
+        run: |
+          [ "$HAS_WIN" = "true" ] || { echo "no Windows signing secrets; building unsigned"; exit 0; }
+          echo "${{ secrets.WINDOWS_CERTIFICATE }}" | base64 -d > "$RUNNER_TEMP/cert.pfx"
+          echo "TAURI_WINDOWS_SIGN_PFX=$RUNNER_TEMP/cert.pfx" >> "$GITHUB_ENV"
+          echo "TAURI_WINDOWS_SIGN_PFX_PASSWORD=${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}" >> "$GITHUB_ENV"
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_name }}
+          releaseDraft: true
+          includeUpdaterJson: true
+          args: ${{ matrix.args }}

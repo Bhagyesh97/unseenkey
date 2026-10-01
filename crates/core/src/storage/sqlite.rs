@@ -4,7 +4,7 @@
 //! - `header`: a single row with the wrapped vault key(s) and KDF parameters.
 //! - `records`: `(record_id, version)` primary key; ciphertext only.
 
-use super::{HeaderRow, RecordKind, Storage, StorageError, StoredRecord};
+use super::{HeaderRow, KeyWrap, RecordKind, Storage, StorageError, StoredRecord};
 use crate::audit::AuditRow;
 use crate::crypto::aead::Sealed;
 use crate::crypto::kdf::Argon2Profile;
@@ -29,6 +29,15 @@ CREATE TABLE IF NOT EXISTS header (
   vk_rec_nonce   BLOB,
   vk_rec_ct      BLOB,
   created_at     INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS key_wraps (
+  wrap_id    BLOB    PRIMARY KEY,
+  kind       TEXT    NOT NULL,
+  label      TEXT    NOT NULL,
+  salt       BLOB    NOT NULL,
+  nonce      BLOB    NOT NULL,
+  ct         BLOB    NOT NULL,
+  created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS records (
   record_id  BLOB    NOT NULL,
@@ -79,6 +88,11 @@ fn blob24(v: Vec<u8>, what: &str) -> Result<[u8; 24], StorageError> {
         .map_err(|_| StorageError::Corrupt(format!("{what}: expected 24 bytes")))
 }
 
+fn blob32(v: Vec<u8>, what: &str) -> Result<[u8; 32], StorageError> {
+    v.try_into()
+        .map_err(|_| StorageError::Corrupt(format!("{what}: expected 32 bytes")))
+}
+
 impl SqliteStorage {
     /// Open or create the vault file at `path`. Creates parent directories.
     pub fn open(path: &Path) -> Result<Self, StorageError> {
@@ -89,6 +103,45 @@ impl SqliteStorage {
         conn.execute_batch(SCHEMA).map_err(backend)?;
         restrict_permissions(path);
         Ok(Self { conn })
+    }
+
+    fn load_wraps(&self) -> Result<Vec<KeyWrap>, StorageError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT wrap_id, kind, label, salt, nonce, ct, created_at
+                 FROM key_wraps ORDER BY created_at, wrap_id",
+            )
+            .map_err(backend)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, Vec<u8>>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Vec<u8>>(3)?,
+                    r.get::<_, Vec<u8>>(4)?,
+                    r.get::<_, Vec<u8>>(5)?,
+                    r.get::<_, i64>(6)?,
+                ))
+            })
+            .map_err(backend)?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, kind, label, salt, nonce, ct, created_at) = row.map_err(backend)?;
+            out.push(KeyWrap {
+                id: Id::from_bytes(blob16(id, "wrap_id")?),
+                kind,
+                label,
+                salt: blob32(salt, "wrap salt")?,
+                wrapped_vk: Sealed {
+                    nonce: blob24(nonce, "wrap nonce")?,
+                    ciphertext: ct,
+                },
+                created_at,
+            });
+        }
+        Ok(out)
     }
 
     /// An in-memory SQLite database (for tests of the SQL layer itself).
@@ -183,6 +236,7 @@ impl Storage for SqliteStorage {
             (None, None) => None,
             _ => return Err(StorageError::Corrupt("half-present recovery wrap".into())),
         };
+        let wraps = self.load_wraps()?;
         Ok(Some(HeaderRow {
             vault_id: Id::from_bytes(blob16(vid, "vault_id")?),
             format_version: fv as u32,
@@ -198,31 +252,50 @@ impl Storage for SqliteStorage {
             },
             wrapped_vk_rec,
             created_at: created,
+            wraps,
         }))
     }
 
     fn save_header(&mut self, h: &HeaderRow) -> Result<(), StorageError> {
-        self.conn
-            .execute(
-                "INSERT OR REPLACE INTO header
+        let tx = self.conn.transaction().map_err(backend)?;
+        tx.execute(
+            "INSERT OR REPLACE INTO header
                  (id, vault_id, format_version, argon2_m, argon2_t, argon2_p, salt_pw,
                   vk_pw_nonce, vk_pw_ct, vk_rec_nonce, vk_rec_ct, created_at)
                  VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                h.vault_id.as_bytes().as_slice(),
+                h.format_version as i64,
+                h.argon2.m_cost_kib as i64,
+                h.argon2.t_cost as i64,
+                h.argon2.p_cost as i64,
+                h.salt_pw.as_slice(),
+                h.wrapped_vk_pw.nonce.as_slice(),
+                h.wrapped_vk_pw.ciphertext.as_slice(),
+                h.wrapped_vk_rec.as_ref().map(|s| s.nonce.to_vec()),
+                h.wrapped_vk_rec.as_ref().map(|s| s.ciphertext.clone()),
+                h.created_at,
+            ],
+        )
+        .map_err(backend)?;
+        tx.execute("DELETE FROM key_wraps", []).map_err(backend)?;
+        for w in &h.wraps {
+            tx.execute(
+                "INSERT INTO key_wraps (wrap_id, kind, label, salt, nonce, ct, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
-                    h.vault_id.as_bytes().as_slice(),
-                    h.format_version as i64,
-                    h.argon2.m_cost_kib as i64,
-                    h.argon2.t_cost as i64,
-                    h.argon2.p_cost as i64,
-                    h.salt_pw.as_slice(),
-                    h.wrapped_vk_pw.nonce.as_slice(),
-                    h.wrapped_vk_pw.ciphertext.as_slice(),
-                    h.wrapped_vk_rec.as_ref().map(|s| s.nonce.to_vec()),
-                    h.wrapped_vk_rec.as_ref().map(|s| s.ciphertext.clone()),
-                    h.created_at,
+                    w.id.as_bytes().as_slice(),
+                    w.kind,
+                    w.label,
+                    w.salt.as_slice(),
+                    w.wrapped_vk.nonce.as_slice(),
+                    w.wrapped_vk.ciphertext.as_slice(),
+                    w.created_at,
                 ],
             )
             .map_err(backend)?;
+        }
+        tx.commit().map_err(backend)?;
         Ok(())
     }
 
@@ -443,15 +516,47 @@ mod tests {
                 ciphertext: vec![4, 5],
             }),
             created_at: 99,
+            wraps: vec![],
         };
         s.save_header(&h).unwrap();
         assert_eq!(s.load_header().unwrap(), Some(h.clone()));
         let h2 = HeaderRow {
             wrapped_vk_rec: None,
+            wraps: vec![
+                KeyWrap {
+                    id: Id::new_v7(5),
+                    kind: "hello".into(),
+                    label: "laptop".into(),
+                    salt: [9; 32],
+                    wrapped_vk: Sealed {
+                        nonce: [4; 24],
+                        ciphertext: vec![6, 7, 8],
+                    },
+                    created_at: 5,
+                },
+                KeyWrap {
+                    id: Id::new_v7(6),
+                    kind: "touchid".into(),
+                    label: "mac".into(),
+                    salt: [8; 32],
+                    wrapped_vk: Sealed {
+                        nonce: [5; 24],
+                        ciphertext: vec![9],
+                    },
+                    created_at: 6,
+                },
+            ],
             ..h
         };
         s.save_header(&h2).unwrap();
-        assert_eq!(s.load_header().unwrap(), Some(h2));
+        assert_eq!(s.load_header().unwrap(), Some(h2.clone()));
+        // Saving again replaces the set rather than appending.
+        let h3 = HeaderRow {
+            wraps: vec![h2.wraps[1].clone()],
+            ..h2
+        };
+        s.save_header(&h3).unwrap();
+        assert_eq!(s.load_header().unwrap(), Some(h3));
     }
 
     #[test]

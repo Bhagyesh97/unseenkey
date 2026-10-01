@@ -83,6 +83,25 @@ pub struct StoredRecord {
     pub deleted: bool,
 }
 
+/// The vault key wrapped under a KEK held by a device credential (Windows
+/// Hello, Touch ID). The `salt` is the public challenge the credential signs or
+/// derives from; the KEK itself never touches disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyWrap {
+    /// Wrap identity, bound into the wrap's AAD.
+    pub id: Id,
+    /// Credential kind: `hello`, `touchid`, `passkey`.
+    pub kind: alloc::string::String,
+    /// Human label (machine name, account).
+    pub label: alloc::string::String,
+    /// Public challenge for the credential.
+    pub salt: [u8; 32],
+    /// Vault key wrapped under the credential-derived KEK.
+    pub wrapped_vk: Sealed,
+    /// Unix milliseconds of enrollment.
+    pub created_at: i64,
+}
+
 /// The vault header: everything needed to unlock, none of it secret on its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeaderRow {
@@ -100,6 +119,9 @@ pub struct HeaderRow {
     pub wrapped_vk_rec: Option<Sealed>,
     /// Unix milliseconds of creation.
     pub created_at: i64,
+    /// Device-credential wraps (Windows Hello and friends). Empty on vaults
+    /// created before format 1 grew this field; readers treat absence as empty.
+    pub wraps: Vec<KeyWrap>,
 }
 
 /// Backend failures. Messages never contain record contents.

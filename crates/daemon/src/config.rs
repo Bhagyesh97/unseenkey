@@ -29,6 +29,10 @@ pub struct DaemonConfig {
     pub listen: String,
     /// Lock the vault after this many minutes without an authenticated request. `0` disables.
     pub idle_lock_minutes: u64,
+    /// Lock when the machine suspends (and, as a fallback, when it wakes).
+    pub lock_on_sleep: bool,
+    /// Lock when the interactive session locks (Win+L, lock screen).
+    pub lock_on_session_lock: bool,
 }
 
 impl Default for DaemonConfig {
@@ -36,6 +40,8 @@ impl Default for DaemonConfig {
         Self {
             listen: "127.0.0.1:7391".into(),
             idle_lock_minutes: 15,
+            lock_on_sleep: true,
+            lock_on_session_lock: true,
         }
     }
 }
@@ -73,5 +79,10 @@ mod tests {
         let c: Config = toml::from_str("[daemon]\nidle_lock_minutes = 3\n").unwrap();
         assert_eq!(c.daemon.idle_lock_minutes, 3);
         assert_eq!(c.daemon.listen, "127.0.0.1:7391");
+        assert!(c.daemon.lock_on_sleep);
+        assert!(c.daemon.lock_on_session_lock);
+        let c: Config = toml::from_str("[daemon]\nlock_on_sleep = false\n").unwrap();
+        assert!(!c.daemon.lock_on_sleep);
+        assert!(c.daemon.lock_on_session_lock);
     }
 }

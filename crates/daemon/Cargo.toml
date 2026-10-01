@@ -24,8 +24,19 @@ reqwest = { workspace = true }
 rustls = { workspace = true }
 percent-encoding = { workspace = true }
 hex = { workspace = true, features = ["std"] }
+base64 = { workspace = true }
+
+# Session-lock and suspend notifications (see `platform.rs`, the crate's only `unsafe`).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Power",
+  "Win32_System_RemoteDesktop",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 ureq = { workspace = true }
-base64 = { workspace = true }

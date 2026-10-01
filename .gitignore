@@ -1,6 +1,8 @@
 # Rust
 /target/
 **/target/
+# Second target dir used while a running daemon/app holds target/debug/*.exe
+/target-alt/
 Cargo.lock.bak
 
 # Node / desktop UI

@@ -18,6 +18,10 @@ What it does (slice 1):
 - agents: one-click MCP install for Claude Code, Claude Desktop, Cursor, Windsurf
 - `.env` guard: scan and fix a project's `.env`
 - tray icon: Open, Lock vault, Quit; closing the window hides it to the tray
+- Windows Hello unlock (slice 2): enable in Settings; the unlock screen then
+  prompts Hello and falls back to the password
+- signed auto-updates (slice 2): silent check at startup, manual check in
+  Settings; bundles must verify against the public key in `tauri.conf.json`
 
 The app starts the daemon itself when none is running (it re-executes its own
 binary as `daemon run`), so it needs no separate `usk` install. A daemon started
@@ -39,3 +43,17 @@ The crate is excluded from the root Cargo workspace (its own `Cargo.lock`), so
 Linux needs `libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev
 librsvg2-dev`; Windows needs the WebView2 runtime (preinstalled on Windows 10
 and 11).
+
+## Release secrets
+
+The `desktop` job in `.github/workflows/release.yml` needs:
+
+| Secret | Purpose |
+| --- | --- |
+| `TAURI_SIGNING_PRIVATE_KEY` | contents of the minisign private key (`~/.tauri/unseenkey.key` on the machine that generated it); without it the updater refuses the build's bundles |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | its password (empty if generated with `--ci`) |
+| `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | optional: macOS code signing and notarization |
+| `WINDOWS_CERTIFICATE` (base64 .pfx), `WINDOWS_CERTIFICATE_PASSWORD` | optional: Authenticode for the Windows installer |
+
+Rotating the updater key means shipping a release signed with the old key
+whose `tauri.conf.json` carries the new public key, then switching.

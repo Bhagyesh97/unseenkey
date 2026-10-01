@@ -206,6 +206,27 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Lock the vault if it is unlocked: audit with `reason`, drop keys, clear
+    /// the scrubber, notify subscribers. Shared by the API, the idle timer and
+    /// the OS hooks. Returns whether anything changed.
+    pub async fn lock_vault(&self, reason: &'static str) -> bool {
+        {
+            let mut v = self.vault.lock().await;
+            if v.is_locked() {
+                return false;
+            }
+            let _ = v.audit(
+                unseenkey_core::audit::kinds::LOCK,
+                serde_json::json!({ "reason": reason }),
+            );
+            v.lock();
+        }
+        self.clear_scrubber();
+        self.emit(Event::Locked { reason });
+        tracing::info!(reason, "vault locked");
+        true
+    }
+
     /// Record activity for the idle timer.
     pub async fn touch(&self) {
         *self.last_activity.lock().await = Instant::now();

@@ -3,6 +3,7 @@
 //! ```text
 //! password ─Argon2id─▶ KEK_pw ─┐
 //! recovery ─HKDF────▶ KEK_rec ─┤ each wraps ▶ Vault Key (VK)
+//! device   ─HKDF────▶ KEK_dev ─┤ (Windows Hello, Touch ID; zero or more)
 //!                               │
 //!            HKDF(VK, "usk/dek/<record>/<version>") ▶ per-record DEK
 //!            XChaCha20-Poly1305(DEK, nonce, payload, aad = vault||record||version||kind)
@@ -25,6 +26,7 @@ mod ops;
 pub mod records;
 pub mod recovery;
 
+pub use crate::storage::KeyWrap;
 pub use records::{SecretKind, SecretMeta};
 pub use recovery::RecoveryKit;
 
@@ -52,6 +54,9 @@ pub enum VaultError {
     /// No secret with that id.
     #[error("secret not found")]
     NotFound,
+    /// No device unlock method with that id.
+    #[error("unlock method not found")]
+    UnlockMethodNotFound,
     /// A secret with that name already exists.
     #[error("a secret named {0:?} already exists")]
     NameExists(String),
@@ -251,6 +256,69 @@ impl<S: Storage, C: Clock> Vault<S, C> {
             &self.header.vault_id,
         )?;
         self.finish_unlock(vk)
+    }
+
+    /// Unlock with a device-credential KEK (see [`Vault::add_key_wrap`]).
+    pub fn unlock_with_kek(&mut self, wrap_id: &Id, kek: &SecretBytes) -> Result<(), VaultError> {
+        let wrap = self
+            .header
+            .wraps
+            .iter()
+            .find(|w| &w.id == wrap_id)
+            .ok_or(VaultError::UnlockMethodNotFound)?;
+        let vk = header::unwrap_vk(
+            kek,
+            &wrap.wrapped_vk,
+            header::KekKind::Device(wrap.id),
+            &self.header.vault_id,
+        )?;
+        self.finish_unlock(vk)
+    }
+
+    /// Device unlock methods on this vault (readable while locked; nothing in
+    /// them is secret).
+    pub fn key_wraps(&self) -> &[KeyWrap] {
+        &self.header.wraps
+    }
+
+    /// Enroll a device credential: wrap the vault key under `kek`, a 32-byte
+    /// key the caller derives from the credential (for example an HKDF of a
+    /// Windows Hello signature over `salt`). Requires an unlocked vault.
+    /// Returns the wrap id the caller must present to [`Vault::unlock_with_kek`].
+    pub fn add_key_wrap(
+        &mut self,
+        kind: &str,
+        label: &str,
+        salt: [u8; 32],
+        kek: &SecretBytes,
+    ) -> Result<Id, VaultError> {
+        let vk = self.vk()?;
+        let now = self.clock.now_unix_ms();
+        let id = Id::new_v7(now);
+        let wrapped_vk =
+            header::wrap_vk(kek, vk, header::KekKind::Device(id), &self.header.vault_id)?;
+        self.header.wraps.push(KeyWrap {
+            id,
+            kind: String::from(kind),
+            label: String::from(label),
+            salt,
+            wrapped_vk,
+            created_at: now,
+        });
+        self.storage.save_header(&self.header)?;
+        Ok(id)
+    }
+
+    /// Remove a device unlock method. Requires an unlocked vault.
+    pub fn remove_key_wrap(&mut self, wrap_id: &Id) -> Result<(), VaultError> {
+        self.vk()?;
+        let before = self.header.wraps.len();
+        self.header.wraps.retain(|w| &w.id != wrap_id);
+        if self.header.wraps.len() == before {
+            return Err(VaultError::UnlockMethodNotFound);
+        }
+        self.storage.save_header(&self.header)?;
+        Ok(())
     }
 
     fn finish_unlock(&mut self, vk: SecretBytes) -> Result<(), VaultError> {
@@ -515,5 +583,91 @@ impl<S: Storage, C: Clock> Vault<S, C> {
     /// True if no secrets are stored (or the vault is locked).
     pub fn is_empty(&self) -> bool {
         self.index.is_empty()
+    }
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod device_wrap_tests {
+    use super::*;
+    use crate::storage::sqlite::SqliteStorage;
+    use crate::time::SystemClock;
+
+    fn vault(path: &std::path::Path) -> Vault<SqliteStorage, SystemClock> {
+        let (v, _kit) = Vault::create(
+            SqliteStorage::open(path).unwrap(),
+            SystemClock,
+            &SecretBytes::from("a-long-enough-password"),
+            Argon2Profile::MINIMUM,
+        )
+        .unwrap();
+        v
+    }
+
+    #[test]
+    fn enroll_unlock_remove_and_persist() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("v.db");
+        let mut v = vault(&path);
+        let kek = SecretBytes::random(32);
+        let salt = [7u8; 32];
+        let id = v.add_key_wrap("hello", "laptop", salt, &kek).unwrap();
+        assert_eq!(v.key_wraps().len(), 1);
+        assert_eq!(v.key_wraps()[0].kind, "hello");
+        assert_eq!(v.key_wraps()[0].salt, salt);
+
+        v.lock();
+        assert!(v.is_locked());
+        // Wrong KEK and unknown id are refused; the right one unlocks.
+        assert!(matches!(
+            v.unlock_with_kek(&id, &SecretBytes::random(32)),
+            Err(VaultError::WrongCredential)
+        ));
+        assert!(matches!(
+            v.unlock_with_kek(&Id::new_v7(5), &kek),
+            Err(VaultError::UnlockMethodNotFound)
+        ));
+        v.unlock_with_kek(&id, &kek).unwrap();
+        assert!(!v.is_locked());
+
+        // Survives reopening the file (the daemon reloads the header before each unlock).
+        drop(v);
+        let mut v2 = Vault::open(SqliteStorage::open(&path).unwrap(), SystemClock).unwrap();
+        assert_eq!(v2.key_wraps().len(), 1);
+        v2.unlock_with_kek(&id, &kek).unwrap();
+
+        // Enrollment needs an unlocked vault; removal too.
+        v2.lock();
+        assert!(matches!(
+            v2.add_key_wrap("hello", "x", [1; 32], &kek),
+            Err(VaultError::Locked)
+        ));
+        v2.unlock_with_password(&SecretBytes::from("a-long-enough-password"))
+            .unwrap();
+        v2.remove_key_wrap(&id).unwrap();
+        assert!(v2.key_wraps().is_empty());
+        assert!(matches!(
+            v2.remove_key_wrap(&id),
+            Err(VaultError::UnlockMethodNotFound)
+        ));
+        v2.lock();
+        assert!(matches!(
+            v2.unlock_with_kek(&id, &kek),
+            Err(VaultError::UnlockMethodNotFound)
+        ));
+    }
+
+    #[test]
+    fn password_change_keeps_device_wraps_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut v = vault(&dir.path().join("v.db"));
+        let kek = SecretBytes::random(32);
+        let id = v.add_key_wrap("hello", "laptop", [3; 32], &kek).unwrap();
+        v.change_password(
+            &SecretBytes::from("another-long-password"),
+            Argon2Profile::MINIMUM,
+        )
+        .unwrap();
+        v.lock();
+        v.unlock_with_kek(&id, &kek).unwrap();
     }
 }

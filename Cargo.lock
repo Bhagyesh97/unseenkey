@@ -2402,6 +2402,7 @@ dependencies = [
  "tracing-subscriber",
  "unseenkey-core",
  "ureq",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 

@@ -31,6 +31,8 @@ pub fn resolve_options(
         write_runtime_files: true,
         upstream_overrides: vec![],
         mcp_allow_store: cfg.mcp.allow_store,
+        lock_on_sleep: cfg.daemon.lock_on_sleep,
+        lock_on_session_lock: cfg.daemon.lock_on_session_lock,
     })
 }
 

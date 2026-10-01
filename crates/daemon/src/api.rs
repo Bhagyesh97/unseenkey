@@ -60,6 +60,7 @@ impl From<VaultError> for ApiError {
             VaultError::Locked => (S::UNAUTHORIZED, "vault_locked"),
             VaultError::WrongCredential => (S::UNAUTHORIZED, "wrong_password"),
             VaultError::NotFound => (S::NOT_FOUND, "not_found"),
+            VaultError::UnlockMethodNotFound => (S::NOT_FOUND, "unlock_method_not_found"),
             VaultError::NameExists(_) => (S::CONFLICT, "name_exists"),
             VaultError::InvalidName => (S::BAD_REQUEST, "invalid_name"),
             VaultError::Recovery => (S::BAD_REQUEST, "invalid_recovery_phrase"),
@@ -116,11 +117,42 @@ pub async fn status(State(s): State<Arc<AppState>>) -> ApiResult<Status> {
     }))
 }
 
-/// `POST /v1/unlock` body.
+/// `POST /v1/unlock` body: either the password, or a device unlock method's
+/// `wrap_id` with the 32-byte KEK (base64) the device derived for it.
 #[derive(Deserialize)]
 pub struct UnlockRequest {
     /// The vault password. Zeroized after use (JSON parser buffers excepted).
-    pub password: Zeroizing<String>,
+    #[serde(default)]
+    pub password: Option<Zeroizing<String>>,
+    /// Device unlock method id (hex), from `GET /v1/unlock-methods`.
+    #[serde(default)]
+    pub wrap_id: Option<String>,
+    /// The method's KEK, base64, 32 bytes. Zeroized after use.
+    #[serde(default)]
+    pub kek: Option<Zeroizing<String>>,
+}
+
+fn decode_b64_32(s: &str, what: &str) -> Result<Zeroizing<[u8; 32]>, ApiError> {
+    use base64::Engine as _;
+    let bytes = Zeroizing::new(
+        base64::engine::general_purpose::STANDARD
+            .decode(s.trim())
+            .map_err(|_| {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid",
+                    format!("{what}: not base64"),
+                )
+            })?,
+    );
+    let arr: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid",
+            format!("{what}: expected 32 bytes"),
+        )
+    })?;
+    Ok(Zeroizing::new(arr))
 }
 
 /// `POST /v1/unlock`
@@ -128,6 +160,17 @@ pub async fn unlock(
     State(s): State<Arc<AppState>>,
     Json(req): Json<UnlockRequest>,
 ) -> ApiResult<serde_json::Value> {
+    let shape_ok = matches!(
+        (&req.password, &req.wrap_id, &req.kek),
+        (Some(_), None, None) | (None, Some(_), Some(_))
+    );
+    if !shape_ok {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid",
+            "send either password, or wrap_id and kek",
+        ));
+    }
     if !s.unlock_allowed(5, Duration::from_secs(60)).await {
         return Err(ApiError::new(
             StatusCode::TOO_MANY_REQUESTS,
@@ -135,14 +178,34 @@ pub async fn unlock(
             "too many unlock attempts; wait a minute",
         ));
     }
-    let pw = SecretBytes::from_slice(req.password.as_bytes());
     let mut v = s.vault.lock().await;
-    // Argon2id takes up to a second: keep it off the async threads.
-    tokio::task::block_in_place(|| {
-        v.reload_header()?;
-        v.unlock_with_password(&pw)
-    })?;
-    let _ = v.audit(kinds::UNLOCK, serde_json::json!({}));
+    let method = match (&req.password, &req.wrap_id, &req.kek) {
+        (Some(password), None, None) => {
+            let pw = SecretBytes::from_slice(password.as_bytes());
+            // Argon2id takes up to a second: keep it off the async threads.
+            tokio::task::block_in_place(|| {
+                v.reload_header()?;
+                v.unlock_with_password(&pw)
+            })?;
+            "password"
+        }
+        (None, Some(wrap_id), Some(kek)) => {
+            let id = Id::from_hex(wrap_id.trim()).ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::NOT_FOUND,
+                    "unlock_method_not_found",
+                    "no such unlock method",
+                )
+            })?;
+            let kek = decode_b64_32(kek, "kek")?;
+            let kek = SecretBytes::from_slice(kek.as_slice());
+            v.reload_header()?;
+            v.unlock_with_kek(&id, &kek)?;
+            "device"
+        }
+        _ => unreachable!("shape checked above"),
+    };
+    let _ = v.audit(kinds::UNLOCK, serde_json::json!({ "method": method }));
     s.rebuild_scrubber(&v);
     drop(v);
     s.emit(Event::Unlocked);
@@ -152,16 +215,103 @@ pub async fn unlock(
 
 /// `POST /v1/lock`
 pub async fn lock(State(s): State<Arc<AppState>>) -> ApiResult<serde_json::Value> {
+    s.lock_vault("request").await;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// `GET /v1/unlock-methods` — device unlock methods. Readable while locked:
+/// the desktop app needs the salt before it can unlock.
+pub async fn unlock_methods_list(
+    State(s): State<Arc<AppState>>,
+) -> ApiResult<Vec<serde_json::Value>> {
+    use base64::Engine as _;
+    let mut v = s.vault.lock().await;
+    // Another process may have enrolled or removed a method.
+    let _ = v.reload_header();
+    Ok(Json(
+        v.key_wraps()
+            .iter()
+            .map(|w| {
+                serde_json::json!({
+                    "id": w.id.to_hex(), "kind": w.kind, "label": w.label,
+                    "salt": base64::engine::general_purpose::STANDARD.encode(w.salt),
+                    "created_at": w.created_at,
+                })
+            })
+            .collect(),
+    ))
+}
+
+/// `POST /v1/unlock-methods` body.
+#[derive(Deserialize)]
+pub struct AddUnlockMethod {
+    /// `hello`, `touchid`, `passkey`.
+    pub kind: String,
+    /// Human label (machine, account).
+    pub label: String,
+    /// The public challenge the device signs, base64, 32 bytes.
+    pub salt: String,
+    /// The KEK derived from the device's answer, base64, 32 bytes. Zeroized after use.
+    pub kek: Zeroizing<String>,
+}
+
+/// `POST /v1/unlock-methods` — enroll a device unlock method (vault must be unlocked).
+pub async fn unlock_methods_add(
+    State(s): State<Arc<AppState>>,
+    Json(req): Json<AddUnlockMethod>,
+) -> ApiResult<serde_json::Value> {
+    let kind = req.kind.trim();
+    if kind.is_empty()
+        || kind.len() > 32
+        || !kind
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
     {
-        let mut v = s.vault.lock().await;
-        if !v.is_locked() {
-            let _ = v.audit(kinds::LOCK, serde_json::json!({ "reason": "request" }));
-        }
-        v.lock();
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid",
+            "kind: use a-z, 0-9, _",
+        ));
     }
-    s.clear_scrubber();
-    s.emit(Event::Locked { reason: "request" });
-    tracing::info!("vault locked by request");
+    let label = req.label.trim();
+    if label.len() > 120 {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid",
+            "label too long",
+        ));
+    }
+    let salt = decode_b64_32(&req.salt, "salt")?;
+    let kek = decode_b64_32(&req.kek, "kek")?;
+    let kek = SecretBytes::from_slice(kek.as_slice());
+    let mut v = s.vault.lock().await;
+    let id = v.add_key_wrap(kind, label, *salt, &kek)?;
+    let _ = v.audit(
+        kinds::UNLOCK_METHOD_ADDED,
+        serde_json::json!({ "id": id.to_hex(), "kind": kind, "label": label }),
+    );
+    tracing::info!(kind, "device unlock method enrolled");
+    Ok(Json(serde_json::json!({ "id": id.to_hex() })))
+}
+
+/// `DELETE /v1/unlock-methods/{id}` — remove a device unlock method (vault must be unlocked).
+pub async fn unlock_methods_remove(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<serde_json::Value> {
+    let id = Id::from_hex(id.trim()).ok_or_else(|| {
+        ApiError::new(
+            StatusCode::NOT_FOUND,
+            "unlock_method_not_found",
+            "no such unlock method",
+        )
+    })?;
+    let mut v = s.vault.lock().await;
+    v.remove_key_wrap(&id)?;
+    let _ = v.audit(
+        kinds::UNLOCK_METHOD_REMOVED,
+        serde_json::json!({ "id": id.to_hex() }),
+    );
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

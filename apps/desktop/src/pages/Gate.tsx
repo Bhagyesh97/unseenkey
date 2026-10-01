@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, type Status } from "../api";
 
 /// Onboarding (create vault + recovery words) or unlock.
@@ -9,6 +9,39 @@ export function Gate({ status, onDone }: { status: Status; onDone: () => Promise
   const [err, setErr] = useState<string | null>(null);
   const [words, setWords] = useState<string[] | null>(null);
   const [ack, setAck] = useState(false);
+  const [hello, setHello] = useState<boolean>(false);
+  const helloTried = useRef(false);
+
+  const unlockWithHello = async () => {
+    setErr(null);
+    setBusy(true);
+    try {
+      await api.deviceUnlock();
+      await onDone();
+    } catch (e) {
+      const m = (e as Error).message;
+      setErr(m.startsWith("the Windows Hello prompt") ? null : m);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Offer Windows Hello when it is enrolled; prompt once automatically.
+  useEffect(() => {
+    if (!status.vault_exists || !status.daemon) return;
+    void api
+      .deviceStatus()
+      .then((d) => {
+        const ok = d.available && d.enrolled;
+        setHello(ok);
+        if (ok && !helloTried.current) {
+          helloTried.current = true;
+          void unlockWithHello();
+        }
+      })
+      .catch(() => setHello(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status.vault_exists, !!status.daemon]);
 
   const create = async () => {
     setErr(null);
@@ -96,9 +129,16 @@ export function Gate({ status, onDone }: { status: Status; onDone: () => Promise
         onKeyDown={(e) => e.key === "Enter" && void unlock()}
       />
       {err && <div className="err">{err}</div>}
-      <button className="primary" disabled={busy || !password} onClick={() => void unlock()}>
-        {busy ? "Unlocking…" : "Unlock"}
-      </button>
+      <div className="actions">
+        <button className="primary" disabled={busy || !password} onClick={() => void unlock()}>
+          {busy ? "Unlocking…" : "Unlock"}
+        </button>
+        {hello && (
+          <button disabled={busy} onClick={() => void unlockWithHello()}>
+            Unlock with Windows Hello
+          </button>
+        )}
+      </div>
       <div className="muted small">Forgot it? Run <code>usk recover</code> with your recovery phrase.</div>
     </div>
   );

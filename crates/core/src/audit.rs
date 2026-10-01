@@ -79,6 +79,10 @@ pub mod kinds {
     pub const HANDLE_REVOKED: &str = "handle_revoked";
     /// A handle's policy changed.
     pub const POLICY_CHANGED: &str = "policy_changed";
+    /// A device unlock method (Windows Hello, Touch ID) was enrolled.
+    pub const UNLOCK_METHOD_ADDED: &str = "unlock_method_added";
+    /// A device unlock method was removed.
+    pub const UNLOCK_METHOD_REMOVED: &str = "unlock_method_removed";
 }
 
 /// Genesis `prev_hash` for a vault.

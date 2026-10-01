@@ -9,8 +9,11 @@
 //! - INV-6: any request carrying browser-origin headers is rejected.
 //! - INV-3: management routes require the per-session bearer token.
 //! - Plaintext never appears in logs; only method, path and status are logged.
+//!
+//! `unsafe` is denied everywhere except the reviewed [`platform`] module, which
+//! subscribes to OS session-lock and suspend notifications.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
 
 pub mod api;
@@ -20,6 +23,7 @@ pub mod guard;
 pub mod logging;
 pub mod mcp;
 pub mod paths;
+pub mod platform;
 pub mod proxy;
 pub mod server;
 pub mod state;

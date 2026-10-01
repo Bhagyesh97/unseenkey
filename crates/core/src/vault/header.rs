@@ -20,8 +20,9 @@ pub enum KekKind {
     Password,
     /// Recovery-kit-derived KEK.
     Recovery,
-    /// Passkey (WebAuthn PRF) derived KEK. Reserved for M2.2.
-    Passkey,
+    /// KEK held by a device credential (Windows Hello, Touch ID, passkey PRF).
+    /// Each enrollment is its own wrap, identified by the wrap id.
+    Device(Id),
 }
 
 impl KekKind {
@@ -29,17 +30,21 @@ impl KekKind {
         match self {
             KekKind::Password => b"pw",
             KekKind::Recovery => b"rec",
-            KekKind::Passkey => b"pk",
+            KekKind::Device(_) => b"pk",
         }
     }
 }
 
 fn wrap_aad(kind: KekKind, vault_id: &Id) -> Vec<u8> {
-    let mut aad = Vec::with_capacity(32);
+    let mut aad = Vec::with_capacity(48);
     aad.extend_from_slice(b"usk/vk/");
     aad.extend_from_slice(kind.label());
     aad.push(b'/');
     aad.extend_from_slice(vault_id.as_bytes());
+    if let KekKind::Device(wrap_id) = kind {
+        aad.push(b'/');
+        aad.extend_from_slice(wrap_id.as_bytes());
+    }
     aad
 }
 
@@ -100,6 +105,7 @@ pub fn build(
         wrapped_vk_pw,
         wrapped_vk_rec: Some(wrapped_vk_rec),
         created_at: now,
+        wraps: Vec::new(),
     })
 }
 
@@ -121,6 +127,25 @@ mod tests {
         let other = Id::new_v7(2);
         assert!(matches!(
             unwrap_vk(&kek, &w, KekKind::Password, &other),
+            Err(VaultError::WrongCredential)
+        ));
+    }
+
+    #[test]
+    fn device_wraps_are_bound_to_their_wrap_id() {
+        let vid = Id::new_v7(1);
+        let kek = SecretBytes::random(32);
+        let vk = SecretBytes::random(32);
+        let a = Id::new_v7(10);
+        let b = Id::new_v7(11);
+        let w = wrap_vk(&kek, &vk, KekKind::Device(a), &vid).unwrap();
+        assert_eq!(unwrap_vk(&kek, &w, KekKind::Device(a), &vid).unwrap(), vk);
+        assert!(matches!(
+            unwrap_vk(&kek, &w, KekKind::Device(b), &vid),
+            Err(VaultError::WrongCredential)
+        ));
+        assert!(matches!(
+            unwrap_vk(&kek, &w, KekKind::Password, &vid),
             Err(VaultError::WrongCredential)
         ));
     }

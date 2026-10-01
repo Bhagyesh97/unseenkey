@@ -197,6 +197,8 @@ async fn setup() -> Env {
             ("127.0.0.1".into(), format!("http://{mock}")),
         ],
         mcp_allow_store: false,
+        lock_on_sleep: false,
+        lock_on_session_lock: false,
     })
     .await
     .unwrap();

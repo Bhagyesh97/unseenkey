@@ -87,6 +87,12 @@ export interface Preset {
   policies: { id: string; display: string; recommended: boolean; explanation: string }[];
 }
 
+export interface DeviceUnlock {
+  available: boolean;
+  enrolled: boolean;
+  methods: { id: string; kind: string; label: string; created_at: number }[];
+}
+
 export class ApiError extends Error {
   code: string;
   constructor(code: string, message: string) {
@@ -121,6 +127,10 @@ export const api = {
   callers: () => api.call<{ name: string; caller: string; last_seen_at: number | null }[]>("GET", "/v1/callers"),
   guardScan: (path: string) => wrap(invoke<{ line: number; key: string; detected: string | null; fixable: boolean }[]>("guard_scan", { path })),
   guardFix: (path: string) => wrap(invoke<string>("guard_fix", { path })),
+  deviceStatus: () => wrap(invoke<DeviceUnlock>("device_unlock_status")),
+  deviceEnroll: () => wrap(invoke<string>("device_unlock_enroll")),
+  deviceUnlock: () => wrap(invoke<void>("device_unlock")),
+  deviceRemove: () => wrap(invoke<void>("device_unlock_remove")),
 };
 
 export type DaemonEvent =
