@@ -41,6 +41,28 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p unseenkey-core --target wasm32-unknown-unknown --no-default-features --features wasm
 
+  browser:
+    # INV-6 in a real browser: pages must not be able to reach the daemon.
+    name: browser-origin guard (Playwright)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tests/browser
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p usk
+        working-directory: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/browser/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test
+
   supply-chain:
     name: cargo deny + audit
     runs-on: ubuntu-latest

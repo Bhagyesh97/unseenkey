@@ -775,6 +775,8 @@ pub struct HandleView {
     pub last_used_at: Option<i64>,
     /// Usable now?
     pub active: bool,
+    /// Rules the owner approved with "allow always"; cleared when the policy changes.
+    pub remembered: Vec<String>,
 }
 
 /// Creation response: the only place the handle string appears.
@@ -810,6 +812,7 @@ fn handle_view(v: &crate::state::DaemonVault, h: &HandleRecord, now: i64) -> Han
         use_count: h.use_count,
         last_used_at: h.last_used_at,
         active: h.is_active(now),
+        remembered: h.remembered.clone(),
     }
 }
 
@@ -948,6 +951,32 @@ pub async fn patch_handle(
         serde_json::json!({ "id": id.to_hex() }),
     );
     Ok(Json(handle_view(&v, v.handle(&id)?, now_ms())))
+}
+
+/// `POST /v1/handles/{ref}/forget` body.
+#[derive(Deserialize, Default)]
+pub struct ForgetRules {
+    /// Only this rule (e.g. `POST /v1/refunds`); all remembered rules when absent.
+    pub rule: Option<String>,
+}
+
+/// `POST /v1/handles/{ref}/forget` — clear "allow always" decisions.
+pub async fn forget_handle_rules(
+    State(s): State<Arc<AppState>>,
+    Path(r): Path<String>,
+    body: Option<Json<ForgetRules>>,
+) -> ApiResult<serde_json::Value> {
+    let rule = body.and_then(|Json(b)| b.rule);
+    let mut v = s.vault.lock().await;
+    let id = resolve_handle(&v, &r)?;
+    let removed = v.forget_rules(&id, rule.as_deref())?;
+    if removed > 0 {
+        let _ = v.audit(
+            kinds::APPROVAL_FORGOTTEN,
+            serde_json::json!({ "id": id.to_hex(), "rule": rule, "removed": removed }),
+        );
+    }
+    Ok(Json(serde_json::json!({ "ok": true, "removed": removed })))
 }
 
 /// `DELETE /v1/handles/{ref}` — revoke.

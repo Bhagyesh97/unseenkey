@@ -17,6 +17,10 @@ export function Handles() {
     void load();
   }, []);
 
+  const forget = async (h: HandleView, rule: string | null) => {
+    await api.call("POST", `/v1/handles/${h.id}/forget`, { rule });
+    await load();
+  };
   const revoke = async (h: HandleView) => {
     if (!confirm(`Revoke "${h.label}"? Anything using it fails immediately.`)) return;
     await api.call("DELETE", `/v1/handles/${h.id}`);
@@ -43,6 +47,17 @@ export function Handles() {
               </div>
               <div className="row-sub muted">{h.use_count} uses · last {ago(h.last_used_at)}</div>
               <pre className="policy">{h.policy_explanation}</pre>
+              {h.remembered.length > 0 && (
+                <div className="row-main">
+                  <span className="muted small">Allowed always:</span>
+                  {h.remembered.map((r) => (
+                    <span key={r} className="chip">
+                      {r} <button className="link" title="Ask again for this rule" onClick={() => void forget(h, r)}>×</button>
+                    </span>
+                  ))}
+                  <button className="small" onClick={() => void forget(h, null)}>Forget all</button>
+                </div>
+              )}
               {!h.revoked_at && (
                 <div className="actions right">
                   <button className="danger small" onClick={() => void revoke(h)}>Revoke</button>

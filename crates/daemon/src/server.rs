@@ -227,6 +227,7 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
                 .patch(api::patch_handle)
                 .delete(api::revoke_handle),
         )
+        .route("/handles/{r}/forget", post(api::forget_handle_rules))
         .route("/audit", get(api::audit_list))
         .route("/audit/verify", get(api::audit_verify))
         .route("/approvals", get(api::approvals_list))

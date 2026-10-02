@@ -357,6 +357,7 @@ pub fn run() -> Result<(), CliError> {
             HandleAction::Ls => handle_ls(&paths, cli.json),
             HandleAction::Show { r#ref } => handle_show(&paths, &r#ref, cli.json),
             HandleAction::Revoke { r#ref } => handle_revoke(&paths, &r#ref),
+            HandleAction::Forget { r#ref, rule } => handle_forget(&paths, &r#ref, rule),
             HandleAction::Policy {
                 r#ref,
                 preset,
@@ -847,6 +848,14 @@ enum HandleAction {
         /// Label or id.
         r#ref: String,
     },
+    /// Forget approvals remembered with "allow always" (all, or one rule).
+    Forget {
+        /// Label or id.
+        r#ref: String,
+        /// Only this rule, e.g. "POST /v1/refunds".
+        #[arg(long)]
+        rule: Option<String>,
+    },
     /// Replace a handle's policy.
     Policy {
         /// Label or id.
@@ -1015,6 +1024,27 @@ fn handle_show(paths: &VaultPaths, r#ref: &str, json: bool) -> Result<(), CliErr
     println!("policy:");
     for line in h["policy_explanation"].as_str().unwrap_or("").lines() {
         println!("  {line}");
+    }
+    if let Some(rules) = h["remembered"].as_array().filter(|a| !a.is_empty()) {
+        println!("remembered approvals (clear with `usk handle forget`):");
+        for r in rules {
+            println!("  {}", r.as_str().unwrap_or(""));
+        }
+    }
+    Ok(())
+}
+
+fn handle_forget(paths: &VaultPaths, r#ref: &str, rule: Option<String>) -> Result<(), CliError> {
+    let c = unlocked(paths)?;
+    let r = c.post(
+        &format!("/v1/handles/{ref}/forget"),
+        json!({ "rule": rule }),
+    )?;
+    let n = r["removed"].as_u64().unwrap_or(0);
+    match (n, rule) {
+        (0, _) => println!("Nothing was remembered for {ref}."),
+        (_, Some(rule)) => println!("Forgot \"{rule}\" for {ref}; it will ask again."),
+        (n, None) => println!("Forgot {n} remembered approval(s) for {ref}; it will ask again."),
     }
     Ok(())
 }
@@ -1288,7 +1318,7 @@ fn approvals_decide(
         r["secret"].as_str().unwrap_or(""),
         r["label"].as_str().unwrap_or(""),
         if allow && remember {
-            " (remembered for this rule)"
+            " (remembered for this rule; clear with `usk handle forget`)"
         } else {
             ""
         }

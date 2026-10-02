@@ -83,6 +83,8 @@ pub mod kinds {
     pub const UNLOCK_METHOD_ADDED: &str = "unlock_method_added";
     /// A device unlock method was removed.
     pub const UNLOCK_METHOD_REMOVED: &str = "unlock_method_removed";
+    /// Remembered ("allow always") approvals were cleared for a handle.
+    pub const APPROVAL_FORGOTTEN: &str = "approval_forgotten";
 }
 
 /// Genesis `prev_hash` for a vault.

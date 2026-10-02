@@ -34,6 +34,8 @@ pub async fn ingress_guard(
         || headers.contains_key(REFERER)
         || BROWSER_MARKERS.iter().any(|h| headers.contains_key(*h));
     if browser {
+        // Method and path only; the browser test suite counts these lines.
+        tracing::info!(method = %req.method(), path = req.uri().path(), "browser-origin request rejected");
         return ApiError::new(
             StatusCode::FORBIDDEN,
             "browser_origin_rejected",

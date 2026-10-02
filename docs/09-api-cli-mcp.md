@@ -22,6 +22,8 @@ All responses are JSON. Errors: `{ "error": "<code>", "message": "…" }`.
 | POST | `/v1/handles` | `{secret_id, policy_id, label, callers?, expires_at?}` → returns the handle **once** |
 | GET | `/v1/handles` | list (hashes, labels, counts, never handle strings) |
 | DELETE | `/v1/handles/{id}` | revoke |
+| POST | `/v1/handles/{id}/forget` | `{rule?}`: clear "allow always" decisions (one rule, or all). They live in the handle record, survive restarts, and are wiped by a policy change |
+| GET/POST/DELETE | `/v1/unlock-methods`, `/v1/unlock-methods/{id}` | device unlock methods (Windows Hello); `POST /v1/unlock` also takes `{wrap_id, kek}` |
 | GET | `/v1/callers` / POST / DELETE | manage MCP/device callers |
 | GET | `/v1/audit?since=&kind=&limit=` | decrypted events for the owner |
 | GET | `/v1/audit/verify` | re-hash the chain; returns first broken seq if any |
@@ -73,7 +75,8 @@ usk rm <name>
 usk rotate <name>                (Phase 4) run provider adapter
 
 usk handle create <name> [--policy chat] [--label "cursor"] [--caller mcp:cursor] [--expires 30d]
-usk handle ls | usk handle revoke <label|id>
+usk handle ls | usk handle show <label|id> | usk handle revoke <label|id>
+usk handle forget <label|id> [--rule "POST /v1/refunds"]   # ask again for rules approved with "always"
 usk policy ls | usk policy show <id> | usk policy edit <id> (opens $EDITOR, validates, explains)
 usk policy explain <id>
 

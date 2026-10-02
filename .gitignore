@@ -5,10 +5,13 @@
 /target-alt/
 Cargo.lock.bak
 
-# Node / desktop UI
+# Node / desktop UI / browser tests
 node_modules/
 dist/
 .vite/
+tests/browser/test-results/
+tests/browser/playwright-report/
+tests/browser/.pw-state.json
 apps/desktop/src-tauri/gen/
 
 # OS / editor

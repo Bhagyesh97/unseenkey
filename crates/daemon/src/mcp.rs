@@ -454,7 +454,10 @@ async fn request_access(s: &Arc<AppState>, caller: &str, args: &Value) -> Value 
         Ok(Ok((true, remember))) => {
             if remember {
                 if let Some(k) = &remember_key {
-                    s.remember(&handle.handle_id, k).await;
+                    let mut v = s.vault.lock().await;
+                    if let Err(e) = v.remember_rule(&handle.handle_id, k) {
+                        tracing::warn!(error = %e, "could not persist the remembered approval");
+                    }
                 }
             }
             ("allowed", true)

@@ -199,3 +199,67 @@ fn audit_chain_survives_reopen_and_detects_tampering() {
     let bytes = std::fs::read(&path).unwrap();
     assert!(!bytes.windows(14).any(|w| w == b"api.stripe.com"));
 }
+
+#[test]
+fn remembered_rules_persist_and_reset_on_policy_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vault.db");
+    let hid;
+    {
+        let (mut v, _) = Vault::create(
+            SqliteStorage::open(&path).unwrap(),
+            FixedClock(1_000),
+            &SecretBytes::from(PW),
+            FAST,
+        )
+        .unwrap();
+        let sid = v.add(stripe()).unwrap();
+        let (rec, _) = v
+            .create_handle(
+                &sid,
+                "agent",
+                presets::policy_ref("stripe:payments").unwrap(),
+                None,
+            )
+            .unwrap();
+        hid = rec.handle_id;
+        assert!(rec.remembered.is_empty());
+        v.remember_rule(&hid, "POST /v1/customers").unwrap();
+        v.remember_rule(&hid, " POST /v1/customers ").unwrap(); // duplicate, trimmed
+        v.remember_rule(&hid, "POST /v1/refunds").unwrap();
+        assert_eq!(
+            v.handle(&hid).unwrap().remembered,
+            ["POST /v1/customers", "POST /v1/refunds"]
+        );
+        assert!(matches!(
+            v.remember_rule(&hid, "   "),
+            Err(VaultError::InvalidPolicy(_))
+        ));
+        assert!(matches!(
+            v.remember_rule(&unseenkey_core::ids::Id::new_v7(9), "GET /x"),
+            Err(VaultError::HandleNotFound)
+        ));
+    }
+    // Survives reopening, like everything else in the record.
+    let mut v = Vault::open(SqliteStorage::open(&path).unwrap(), FixedClock(2_000)).unwrap();
+    v.unlock_with_password(&SecretBytes::from(PW)).unwrap();
+    assert_eq!(v.handle(&hid).unwrap().remembered.len(), 2);
+    // Forget one, then the rest.
+    assert_eq!(v.forget_rules(&hid, Some("POST /v1/refunds")).unwrap(), 1);
+    assert_eq!(v.forget_rules(&hid, Some("POST /v1/refunds")).unwrap(), 0);
+    assert_eq!(v.handle(&hid).unwrap().remembered, ["POST /v1/customers"]);
+    v.remember_rule(&hid, "DELETE /v1/customers/*").unwrap();
+    assert_eq!(v.forget_rules(&hid, None).unwrap(), 2);
+    assert!(v.handle(&hid).unwrap().remembered.is_empty());
+    // A policy change wipes standing approvals.
+    v.remember_rule(&hid, "POST /v1/customers").unwrap();
+    v.set_handle_policy(&hid, presets::policy_ref("stripe:read-only").unwrap())
+        .unwrap();
+    assert!(v.handle(&hid).unwrap().remembered.is_empty());
+    // Locked vault: refused.
+    v.lock();
+    assert!(matches!(
+        v.remember_rule(&hid, "GET /v1/balance"),
+        Err(VaultError::Locked)
+    ));
+}

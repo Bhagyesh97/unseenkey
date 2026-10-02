@@ -104,6 +104,7 @@ impl<S: Storage, C: Clock> Vault<S, C> {
             revoked_at: None,
             use_count: 0,
             last_used_at: None,
+            remembered: Vec::new(),
         };
         self.write_handle(&vk, record.clone())?;
         Ok((record, plain))
@@ -180,7 +181,53 @@ impl<S: Storage, C: Clock> Vault<S, C> {
             return Err(VaultError::PolicyWidensHosts);
         }
         h.policy = policy;
+        // Standing approvals were given against the old rules.
+        h.remembered.clear();
         self.write_handle(&vk, h)
+    }
+
+    /// Remember that the owner approved `rule` for this handle with "always".
+    /// A no-op when already remembered. Requires an unlocked vault.
+    pub fn remember_rule(&mut self, id: &Id, rule: &str) -> Result<(), VaultError> {
+        let vk = self.vk()?.clone();
+        let rule = rule.trim();
+        if rule.is_empty() || rule.len() > 200 {
+            return Err(VaultError::InvalidPolicy("invalid rule".into()));
+        }
+        let mut h = self
+            .handles
+            .get(id)
+            .ok_or(VaultError::HandleNotFound)?
+            .clone();
+        if h.remembered.iter().any(|r| r == rule) {
+            return Ok(());
+        }
+        h.remembered.push(rule.to_string());
+        self.write_handle(&vk, h)
+    }
+
+    /// Forget remembered approvals: one rule, or all of them when `rule` is
+    /// `None`. Returns how many were removed. Requires an unlocked vault.
+    pub fn forget_rules(&mut self, id: &Id, rule: Option<&str>) -> Result<usize, VaultError> {
+        let vk = self.vk()?.clone();
+        let mut h = self
+            .handles
+            .get(id)
+            .ok_or(VaultError::HandleNotFound)?
+            .clone();
+        let before = h.remembered.len();
+        match rule {
+            Some(r) => {
+                let r = r.trim();
+                h.remembered.retain(|x| x != r);
+            }
+            None => h.remembered.clear(),
+        }
+        let removed = before - h.remembered.len();
+        if removed > 0 {
+            self.write_handle(&vk, h)?;
+        }
+        Ok(removed)
     }
 
     /// Record a use in memory; persisted every [`COUNTER_FLUSH_EVERY`] uses and on lock.

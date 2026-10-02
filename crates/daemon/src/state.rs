@@ -1,6 +1,5 @@
 //! Shared daemon state.
 
-use std::collections::HashSet;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{OnceLock, RwLock};
 use std::time::{Duration, Instant};
@@ -134,11 +133,10 @@ pub struct PendingApproval {
     pub expires_at: i64,
 }
 
-/// Pending approvals and remembered decisions.
+/// Pending approvals, parked until the owner decides or they time out.
 #[derive(Default)]
 pub struct Approvals {
     pending: std::collections::HashMap<Id, (PendingApproval, oneshot::Sender<(bool, bool)>)>,
-    remembered: HashSet<(Id, String)>,
 }
 
 /// Sliding request counters for one handle.
@@ -343,24 +341,6 @@ impl AppState {
             allowed: allow,
         });
         Some(p)
-    }
-
-    /// Was (handle, rule) approved with "remember"?
-    pub async fn is_remembered(&self, handle: &Id, key: &str) -> bool {
-        self.approvals
-            .lock()
-            .await
-            .remembered
-            .contains(&(*handle, key.to_string()))
-    }
-
-    /// Remember a decision for (handle, rule) until the daemon restarts or the handle changes.
-    pub async fn remember(&self, handle: &Id, key: &str) {
-        self.approvals
-            .lock()
-            .await
-            .remembered
-            .insert((*handle, key.to_string()));
     }
 
     /// Drop all guarded values (on lock).

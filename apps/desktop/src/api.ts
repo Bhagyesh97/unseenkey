@@ -48,6 +48,7 @@ export interface HandleView {
   use_count: number;
   last_used_at: number | null;
   active: boolean;
+  remembered: string[];
 }
 
 export interface HandleCreated extends HandleView {

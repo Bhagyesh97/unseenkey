@@ -357,8 +357,10 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
             ApprovalScope::ThisRequest => None,
             ApprovalScope::FirstUse(r) | ApprovalScope::Path(r) => Some(r.to_string()),
         };
+        // Remembered decisions live in the handle record, so they survive
+        // restarts and disappear with the handle or its policy.
         let already = match &remember_key {
-            Some(k) => s.is_remembered(&handle.handle_id, k).await,
+            Some(k) => handle.remembered.iter().any(|r| r == k),
             None => false,
         };
         if !already {
@@ -436,7 +438,10 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
             }
             if remember {
                 if let Some(k) = &remember_key {
-                    s.remember(&handle.handle_id, k).await;
+                    let mut vault = s.vault.lock().await;
+                    if let Err(e) = vault.remember_rule(&handle.handle_id, k) {
+                        tracing::warn!(error = %e, "could not persist the remembered approval");
+                    }
                 }
             }
         }

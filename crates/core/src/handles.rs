@@ -58,6 +58,10 @@ pub struct HandleRecord {
     /// Last use, if any.
     #[serde(default)]
     pub last_used_at: Option<i64>,
+    /// Rules the owner approved with "allow always" (for example
+    /// `POST /v1/refunds`). Cleared whenever the policy is replaced.
+    #[serde(default)]
+    pub remembered: Vec<String>,
 }
 
 impl HandleRecord {
@@ -102,6 +106,7 @@ mod tests {
             revoked_at: None,
             use_count: 0,
             last_used_at: None,
+            remembered: Vec::new(),
         };
         assert!(r.is_active(99));
         assert!(!r.is_active(100));
