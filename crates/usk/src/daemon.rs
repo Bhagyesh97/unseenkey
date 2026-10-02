@@ -65,6 +65,12 @@ fn init_logging(paths: &VaultPaths, to_file: bool) {
 /// Run the daemon until Ctrl-C or `/v1/shutdown`.
 pub fn run(opts: ServeOptions, paths: &VaultPaths, log_to_file: bool) -> Result<(), CliError> {
     init_logging(paths, log_to_file);
+    // A detached daemon has no terminal: make panics land in the log too.
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!(%info, "daemon panic");
+        previous(info);
+    }));
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

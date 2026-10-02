@@ -214,7 +214,15 @@ pub async fn unlock(
 }
 
 /// `POST /v1/lock`
-pub async fn lock(State(s): State<Arc<AppState>>) -> ApiResult<serde_json::Value> {
+///
+/// The body is taken even though it is ignored: a handler that answers while
+/// request bytes are still unread makes hyper close the connection with data
+/// pending, and Windows then discards the response already sent to the
+/// client ("connection aborted"). Seen intermittently on CI.
+pub async fn lock(
+    State(s): State<Arc<AppState>>,
+    _body: axum::body::Bytes,
+) -> ApiResult<serde_json::Value> {
     s.lock_vault("request").await;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -666,8 +674,11 @@ pub async fn events(
     Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
 }
 
-/// `POST /v1/shutdown`
-pub async fn shutdown(State(s): State<Arc<AppState>>) -> ApiResult<serde_json::Value> {
+/// `POST /v1/shutdown` (the body is consumed for the same reason as in `lock`)
+pub async fn shutdown(
+    State(s): State<Arc<AppState>>,
+    _body: axum::body::Bytes,
+) -> ApiResult<serde_json::Value> {
     // Signal after this response has been written, so the client sees a clean reply
     // instead of a dropped connection.
     tokio::spawn(async move {

@@ -41,6 +41,12 @@ const PW: &str = "a-long-enough-password\n";
 struct StopDaemon<'a>(&'a Path);
 impl Drop for StopDaemon<'_> {
     fn drop(&mut self) {
+        // On a failure, the daemon's own log is the only evidence of what it did.
+        if std::thread::panicking() {
+            let log = self.0.parent().unwrap().join("logs").join("uskd.log");
+            eprintln!("--- {} ---", log.display());
+            eprintln!("{}", std::fs::read_to_string(&log).unwrap_or_default());
+        }
         let _ = usk(self.0, &["daemon", "stop"], "");
     }
 }
@@ -107,7 +113,8 @@ fn init_add_ls_reveal_rm_with_daemon() {
     assert!(out(&o).contains("running"), "{}", out(&o));
 
     // Lock, then a wrong password exits 3.
-    assert!(usk(&vault, &["lock"], "").status.success());
+    let o = usk(&vault, &["lock"], "");
+    assert!(o.status.success(), "{}", err(&o));
     let o = usk(&vault, &["ls"], "wrong-password\n");
     assert_eq!(o.status.code(), Some(3), "{}", err(&o));
 
