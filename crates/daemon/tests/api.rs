@@ -49,7 +49,7 @@ impl C {
         Self {
             base: format!("http://{}", r.addr),
             token: r.token().to_string(),
-            agent: ureq::AgentBuilder::new().build(),
+            agent: ureq::AgentBuilder::new().max_idle_connections(0).build(),
         }
     }
     fn req(&self, method: &str, path: &str) -> ureq::Request {

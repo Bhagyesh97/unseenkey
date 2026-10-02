@@ -146,6 +146,7 @@ async fn setup() -> Arc<Env> {
         session: daemon.token().to_string(),
         mcp_token: String::new(),
         agent: ureq::AgentBuilder::new()
+            .max_idle_connections(0)
             .timeout(Duration::from_secs(20))
             .redirects(0)
             .build(),

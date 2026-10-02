@@ -30,6 +30,7 @@ impl C {
             base: format!("http://{}", r.addr),
             token: r.token().to_string(),
             agent: ureq::AgentBuilder::new()
+                .max_idle_connections(0)
                 .timeout(Duration::from_secs(20))
                 .redirects(0)
                 .build(),

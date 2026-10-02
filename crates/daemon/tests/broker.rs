@@ -207,6 +207,7 @@ async fn setup() -> Env {
         token: daemon.token().to_string(),
         // No client-side redirects: the broker must return upstream 3xx untouched.
         agent: ureq::AgentBuilder::new()
+            .max_idle_connections(0)
             .timeout(Duration::from_secs(10))
             .redirects(0)
             .build(),

@@ -19,7 +19,11 @@ impl Client {
         // Loopback connects are instant when the daemon is healthy; the connect
         // timeout only bounds the stale-file probe. 500 ms proved too tight on a
         // loaded Windows machine right after a daemon spawn.
+        // One connection per request: pooling a kept-alive connection to the
+        // daemon buys nothing on loopback and turns a server-side close into
+        // a spurious "connection aborted" on the next command.
         let agent = ureq::AgentBuilder::new()
+            .max_idle_connections(0)
             .timeout_connect(Duration::from_secs(3))
             .timeout(Duration::from_secs(30))
             .build();
