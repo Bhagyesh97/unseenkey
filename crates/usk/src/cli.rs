@@ -394,17 +394,24 @@ pub fn run() -> Result<(), CliError> {
             DaemonAction::Stop => {
                 match Client::try_connect(&paths) {
                     Some(c) => {
-                        // A dropped connection is fine as long as the daemon is actually gone.
-                        if let Err(e) = c.post("/v1/shutdown", json!({})) {
-                            let gone =
-                                daemon::wait_until(std::time::Duration::from_secs(3), || {
-                                    Client::try_connect(&paths).is_none().then_some(())
-                                });
-                            if gone.is_none() {
-                                return Err(e);
+                        // The daemon answers first and exits ~200 ms later, so a
+                        // dropped connection is fine. Either way, wait until it is
+                        // really gone: a command run right after `stop` must not
+                        // find the old daemon still answering.
+                        let posted = c.post("/v1/shutdown", json!({}));
+                        let gone = daemon::wait_until(std::time::Duration::from_secs(5), || {
+                            (Client::try_connect(&paths).is_none() && !paths.addr.exists())
+                                .then_some(())
+                        });
+                        match (posted, gone) {
+                            (_, Some(())) => println!("Daemon stopped."),
+                            (Err(e), None) => return Err(e),
+                            (Ok(_), None) => {
+                                return Err(CliError::general(
+                                    "daemon acknowledged the stop but is still running",
+                                ))
                             }
                         }
-                        println!("Daemon stopping.");
                     }
                     None => println!("Daemon is not running."),
                 }

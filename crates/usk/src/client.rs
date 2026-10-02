@@ -16,8 +16,11 @@ impl Client {
     fn from_files(paths: &VaultPaths) -> Option<Self> {
         let addr = std::fs::read_to_string(&paths.addr).ok()?;
         let token = std::fs::read_to_string(&paths.token).ok()?;
+        // Loopback connects are instant when the daemon is healthy; the connect
+        // timeout only bounds the stale-file probe. 500 ms proved too tight on a
+        // loaded Windows machine right after a daemon spawn.
         let agent = ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_millis(500))
+            .timeout_connect(Duration::from_secs(3))
             .timeout(Duration::from_secs(30))
             .build();
         let c = Self {
