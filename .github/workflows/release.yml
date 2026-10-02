@@ -31,7 +31,8 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
-          - os: macos-13
+          # No hosted Intel Mac runners any more: build x86_64 on the arm64 runner.
+          - os: macos-latest
             target: x86_64-apple-darwin
             archive: tar.gz
           - os: windows-latest
@@ -113,7 +114,7 @@ jobs:
     # Desktop installers, built after the CLI release exists so tauri-action
     # attaches to the same draft. Updater bundles are signed with the minisign
     # key in TAURI_SIGNING_PRIVATE_KEY; latest.json is merged across platforms.
-    name: desktop (${{ matrix.os }})
+    name: desktop (${{ matrix.os }} ${{ matrix.args }})
     needs: release
     runs-on: ${{ matrix.os }}
     strategy:
@@ -124,7 +125,7 @@ jobs:
             args: ""
           - os: macos-latest
             args: "--target aarch64-apple-darwin"
-          - os: macos-13
+          - os: macos-latest
             args: "--target x86_64-apple-darwin"
           - os: ubuntu-22.04
             args: ""
