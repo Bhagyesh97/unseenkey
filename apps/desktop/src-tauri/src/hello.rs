@@ -7,7 +7,9 @@
 //! deterministic, so the same salt always yields the same KEK. Nothing derived
 //! from Hello is written to disk; the salt alone is public and useless.
 
-use unseenkey_core::crypto::{kdf, SecretBytes};
+use unseenkey_core::crypto::SecretBytes;
+#[cfg(windows)]
+use unseenkey_core::crypto::kdf;
 
 /// Kind string stored with the wrap.
 pub const KIND: &str = "hello";
