@@ -57,3 +57,8 @@ The `desktop` job in `.github/workflows/release.yml` needs:
 
 Rotating the updater key means shipping a release signed with the old key
 whose `tauri.conf.json` carries the new public key, then switching.
+
+A tag `vX.Y.Z` (or `vX.Y.Z-rc.N`) must match `version` here and in the root
+`Cargo.toml`; the release workflow checks this before building. The updater
+compares the installed version with `latest.json`, so a release whose
+`tauri.conf.json` was not bumped is never offered to existing installs.

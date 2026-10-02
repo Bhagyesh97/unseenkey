@@ -12,8 +12,27 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  check:
+    # The tag must match the versions we ship: v0.1.0 or v0.1.0-rc.1 need
+    # workspace and desktop versions of 0.1.0. Catches a forgotten bump before
+    # any expensive build starts.
+    name: tag matches versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          core="${tag%%-*}"
+          ws=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          app=$(python3 -c "import json; print(json.load(open('apps/desktop/src-tauri/tauri.conf.json'))['version'])")
+          echo "tag=$tag core=$core workspace=$ws desktop=$app"
+          [ "$core" = "$ws" ] && [ "$core" = "$app" ] || { echo "::error::tag $tag does not match workspace $ws / desktop $app"; exit 1; }
+
   build:
     name: build (${{ matrix.target }})
+    needs: check
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -79,6 +98,10 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      # The SBOM is generated from the source tree (Cargo.lock, package-lock.json),
+      # not from the archives: syft cannot see inside a tarball of binaries and
+      # produced an empty document on the first run.
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -96,12 +119,18 @@ jobs:
             cosign sign-blob --yes --output-signature "$f.sig" --output-certificate "$f.pem" "$f"
           done
           ls -la
-      - name: SBOM
+      - name: SBOM (from Cargo.lock and package-lock.json)
         uses: anchore/sbom-action@v0
         with:
+          path: .
           format: cyclonedx-json
           output-file: dist/sbom.cdx.json
           upload-artifact: false
+      - name: SBOM sanity
+        run: |
+          n=$(python3 -c "import json; print(len(json.load(open('dist/sbom.cdx.json')).get('components', [])))")
+          echo "sbom components: $n"
+          [ "$n" -gt 50 ] || { echo "::error::SBOM has only $n components"; exit 1; }
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
