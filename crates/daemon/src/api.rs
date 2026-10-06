@@ -398,6 +398,12 @@ pub async fn create_secret(
     // AWS credentials arrive as several values at once (key id, secret access
     // key, perhaps a session token), pasted in one of a handful of shapes.
     let aws_text = providers::parse_aws_credentials(&req.value);
+    // An OAuth client (refresh token + client id) pasted as JSON or key=value lines.
+    let oauth_text = if aws_text.is_none() {
+        providers::parse_oauth2_client(&req.value)
+    } else {
+        None
+    };
     let detected = if aws_text.is_some() {
         providers::provider("aws").copied()
     } else {
@@ -411,6 +417,7 @@ pub async fn create_secret(
                 format!("unknown type {k:?}"),
             )
         })?,
+        None if oauth_text.is_some() => SecretKind::Oauth2Client,
         None => detected.map(|d| d.kind).unwrap_or(SecretKind::ApiKey),
     };
     let provider = req
@@ -424,7 +431,7 @@ pub async fn create_secret(
     } else {
         kind
     };
-    let upstreams = if req.upstreams.is_empty() {
+    let mut upstreams: Vec<String> = if req.upstreams.is_empty() {
         provider
             .as_deref()
             .and_then(providers::provider)
@@ -459,6 +466,71 @@ pub async fn create_secret(
                 "session_token".into(),
                 SecretBytes::from_slice(token.as_bytes()),
             );
+        }
+    }
+    // Stored shape for an OAuth client: the refresh token is the value; client
+    // id, client secret, token URL and scope are fields.
+    if kind == SecretKind::Oauth2Client {
+        if !fields.contains_key("client_id") {
+            let Some(c) = &oauth_text else {
+                return Err(ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "oauth_client_incomplete",
+                    "an OAuth client needs a client id, a refresh token and a token URL. Paste the JSON your OAuth tooling wrote (client_id, client_secret, refresh_token, token_uri), or send the refresh token as the value with fields client_id and token_url.",
+                ));
+            };
+            value = SecretBytes::from_slice(c.refresh_token.as_bytes());
+            let mut put = |name: &str, v: &str| {
+                fields.insert(name.to_string(), SecretBytes::from_slice(v.as_bytes()));
+            };
+            put("client_id", &c.client_id);
+            if let Some(v) = &c.client_secret {
+                put("client_secret", v);
+            }
+            if let Some(v) = &c.token_url {
+                put("token_url", v);
+            }
+            if let Some(v) = &c.scope {
+                put("scope", v);
+            }
+        }
+        let token_url = fields
+            .get("token_url")
+            .and_then(|v| core::str::from_utf8(v.expose()).ok())
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "oauth_client_incomplete",
+                    "an OAuth client needs its token URL (field token_url): where the refresh token is exchanged",
+                )
+            })?;
+        // https only (plain http for loopback), and a real URL.
+        let token_host = unseenkey_core::broker::Upstream::parse(&token_url)
+            .ok()
+            .filter(|_| token_url.contains("://") && reqwest::Url::parse(&token_url).is_ok())
+            .map(|u| u.host)
+            .ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_token_url",
+                    "token_url must be an https URL",
+                )
+            })?;
+        if upstreams.is_empty() && token_url == providers::GOOGLE_TOKEN_URL {
+            upstreams = vec!["*.googleapis.com".to_string()];
+        }
+        if upstreams.is_empty() {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "upstream_required",
+                "an OAuth client needs the API host(s) it is used with: pass upstreams",
+            ));
+        }
+        // The token endpoint is somewhere the secret is sent: put it on the list.
+        if !unseenkey_core::policy::eval::host_allowed(&upstreams, &token_host) {
+            upstreams.push(token_host);
         }
     }
     let new = NewSecret {

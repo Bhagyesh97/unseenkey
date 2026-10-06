@@ -509,6 +509,50 @@ fn add(
     stdin: bool,
 ) -> Result<(), CliError> {
     let c = unlocked(paths)?;
+    // An OAuth client is four values; ask for each. (Piped with --stdin, the
+    // JSON your OAuth tooling wrote is taken apart by the daemon instead.)
+    if kind == Some(SecretKind::Oauth2Client) && !stdin {
+        let ask = |prompt: &str| -> Result<String, CliError> {
+            let v = uio::read_secret_line(prompt)?;
+            Ok(std::str::from_utf8(v.expose())
+                .map_err(|_| CliError::general("input must be UTF-8 text"))?
+                .trim()
+                .to_string())
+        };
+        let client_id = ask("Client ID: ")?;
+        let client_secret = ask("Client secret (empty for a public client): ")?;
+        let refresh_token = ask("Refresh token: ")?;
+        let token_url = ask("Token URL (https://…/token): ")?;
+        if client_id.is_empty() || refresh_token.is_empty() || token_url.is_empty() {
+            return Err(CliError::general(
+                "a client id, a refresh token and a token URL are all required",
+            ));
+        }
+        let mut fields = serde_json::Map::new();
+        fields.insert("client_id".into(), json!(client_id));
+        fields.insert("token_url".into(), json!(token_url));
+        if !client_secret.is_empty() {
+            fields.insert("client_secret".into(), json!(client_secret));
+        }
+        let created = c.post(
+            "/v1/secrets",
+            json!({
+                "name": name, "type": "oauth2_client", "value": refresh_token, "fields": fields,
+                "provider": provider, "upstreams": upstreams, "tags": tags, "notes": notes,
+            }),
+        )?;
+        let ups: Vec<&str> = created["upstreams"]
+            .as_array()
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        println!("Upstream locked to: {}", ups.join(", "));
+        println!(
+            "Saved {} ({}). Handles for it stand in for an access token; the daemon refreshes the real one.",
+            created["name"].as_str().unwrap_or(""),
+            created["id"].as_str().unwrap_or("")
+        );
+        return Ok(());
+    }
     let value = if stdin {
         uio::read_secret_rest()?
     } else {

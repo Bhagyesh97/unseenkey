@@ -22,6 +22,7 @@ pub mod config;
 pub mod guard;
 pub mod logging;
 pub mod mcp;
+pub mod oauth;
 pub mod paths;
 pub mod platform;
 pub mod proxy;

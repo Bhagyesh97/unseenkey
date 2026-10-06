@@ -78,6 +78,8 @@ usk handle create <name> [--policy chat] [--label "cursor"] [--caller mcp:cursor
 usk handle ls | usk handle show <label|id> | usk handle revoke <label|id>
 usk add aws-dev            # AWS: paste the access key id, then the secret access key; or pipe a credentials section with --stdin
 usk env aws-dev --policy s3-read-only   # AWS_ENDPOINT_URL + a handle as AWS_ACCESS_KEY_ID + a placeholder secret
+usk add gdrive --type oauth2_client --upstream www.googleapis.com   # OAuth: client id, secret, refresh token, token URL; or pipe the token JSON with --stdin
+usk env openai --camouflage             # a handle shaped like the provider's own key, for tools that check the format
 usk handle forget <label|id> [--rule "POST /v1/refunds"]   # ask again for rules approved with "always"
 usk policy ls | usk policy show <id> | usk policy edit <id> (opens $EDITOR, validates, explains)
 usk policy explain <id>

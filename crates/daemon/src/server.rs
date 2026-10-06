@@ -183,6 +183,8 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
                 .join("clients.json"),
         ),
         mcp_allow_store: opts.mcp_allow_store,
+        oauth: Mutex::new(Default::default()),
+        live_tokens: RwLock::new(Vec::new()),
     });
 
     let paths = if opts.write_runtime_files {

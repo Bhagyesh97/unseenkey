@@ -603,13 +603,43 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
         (Auth::Header { .. } | Auth::Query { .. }, SecretKind::BearerToken) => Auth::Bearer {
             also_headers: Vec::new(),
         },
+        // An OAuth client's handle stands where an access token goes.
+        (_, SecretKind::Oauth2Client) => Auth::Bearer {
+            also_headers: Vec::new(),
+        },
         (a, _) => a.clone(),
     };
 
+    // OAuth: what travels upstream is a short-lived access token, obtained
+    // with the stored refresh token and kept in memory.
+    let oauth_access = if meta.kind == SecretKind::Oauth2Client {
+        match crate::oauth::access_token(&s, &meta, &revealed, now_ms()).await {
+            Ok(token) => Some(token),
+            Err(e) => {
+                let mut vault = s.vault.lock().await;
+                let _ = vault.audit(kinds::USE, json!({
+                    "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
+                    "caller": call.caller, "host": upstream.host, "method": call.method, "path": call.path,
+                    "status": e.status.as_u16(), "error": e.code, "latency_ms": started.elapsed().as_millis() as u64,
+                }));
+                return err(e.status, e.code, e.message);
+            }
+        }
+    } else {
+        None
+    };
+
     // Materialise credentials.
-    let injection = match &auth {
-        Auth::Template => Injection::default(),
-        auth => match adapters::inject(auth, &revealed) {
+    let injection = match (&oauth_access, &auth) {
+        (Some(token), _) => Injection {
+            headers: vec![(
+                "authorization".to_string(),
+                Zeroizing::new(format!("Bearer {}", token.as_str())),
+            )],
+            query: Vec::new(),
+        },
+        (None, Auth::Template) => Injection::default(),
+        (None, auth) => match adapters::inject(auth, &revealed) {
             Ok(i) => i,
             Err(e) => return broker_err(e),
         },

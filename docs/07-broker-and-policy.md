@@ -29,7 +29,7 @@ The broker is the heart of the product. It is the only component that turns a ha
    - `basic`: `Authorization: Basic base64(user:pass)`
    - `query`: `?key=<secret>` (Google AI); logged as `query_auth` risk in the audit
    - `aws_sigv4`: sign the whole request with the secret access key (see *AWS* below)
-   - `oauth2`: use cached access token; refresh with client secret + refresh token when expiring (Phase 2)
+   - `oauth2_client` secrets (any route): send a cached access token as `Authorization: Bearer`; refresh it with the stored refresh token when it is about to expire (see *OAuth2* below)
    - `template`: replace `{{usk:name}}` occurrences in URL, headers, body
 7. **Host lock**: final upstream host must be in the secret's `upstreams` list (exact host match, or `*.example.com` if configured). Else 403 `host_not_allowed`. The route's preset upstream is used for presets; `X-Usk-Upstream` for generic.
 8. **Egress guard**: scan the outgoing body and headers for the plaintext of *any other* stored secret (Aho-Corasick over all unlocked secret values ≥ 12 bytes, plus their base64 and URL-encoded forms). Hit → 403 `egress_blocked` + audit + notification.
@@ -55,6 +55,18 @@ What a key may do inside AWS is IAM's business. The broker adds a coarser fence 
 Not supported: SigV4A (multi-region access points; refused with `sigv4a_unsupported`), presigned URLs (they are made client-side, with the placeholder), and S3 object keys containing `.` or `..` path segments (the HTTP client normalises them away).
 
 Verification: `tests/vectors/sigv4.json` is generated with botocore and checked byte for byte (canonical request and signature); `crates/daemon/tests/aws_interop.rs` runs boto3 through the broker against a stand-in that re-verifies every signature with botocore (CI job `aws-interop`).
+
+## OAuth2
+
+A secret of kind `oauth2_client` holds a refresh token (the value) with fields `client_id`, `token_url` and optionally `client_secret`, `scope`, `token_auth` (`basic` to authenticate the client with HTTP Basic instead of form fields). The caller presents a handle wherever an access token would go (`Authorization: Bearer usk_h_…`), on a preset route or on `/p/generic/@<api host>/…`. The broker keeps one access token per secret in memory, refreshes it 60 seconds before the stated expiry (one refresh at a time), and sends that upstream. The caller never sees either token: the access token joins the scrubber's guarded values the moment it is obtained (`[REDACTED:usk:<name>.access_token]`).
+
+- The token endpoint is a second destination for the secret, so its host must be in the secret's own `upstreams` (added automatically when the secret is stored). A handle's policy may narrow where the *handle* goes without affecting where the secret refreshes; taking the token host off the secret makes refreshing fail with `host_not_allowed`.
+- A rotated refresh token in the provider's answer is written to the vault as a new version (audit `secret_updated`, reason `oauth_rotation`). If that write fails the request fails with `oauth_rotation_failed`, because the old refresh token may already be dead.
+- A refused refresh is answered with 502 `oauth_refresh_failed` carrying the provider's `error` and `error_description` (scrubbed), is audited, and is not cached.
+- Access tokens are forgotten on lock and when the secret's value changes.
+- Adding: paste or pipe the JSON OAuth tooling writes (`client_id`, `client_secret`, `refresh_token`, `token_uri`); gcloud's `application_default_credentials.json` needs nothing more, its token endpoint and `*.googleapis.com` are implied. `usk add <name> --type oauth2_client --upstream <api host>` asks for the four values instead.
+
+Not done: obtaining the first refresh token (the authorization-code dance), service-account JWT exchange (GCP), and client-credentials grants.
 
 ## Header hygiene
 

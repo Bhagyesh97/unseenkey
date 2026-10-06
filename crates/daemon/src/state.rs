@@ -201,6 +201,10 @@ pub struct AppState {
     pub callers: crate::callers::Callers,
     /// Whether the MCP `store_secret` tool is enabled.
     pub mcp_allow_store: bool,
+    /// OAuth access tokens held for `oauth2_client` secrets. Memory only.
+    pub oauth: Mutex<crate::oauth::TokenCache>,
+    /// The same tokens for the scrubber: (`<secret>.access_token`, value).
+    pub live_tokens: RwLock<Vec<(String, unseenkey_core::crypto::SecretBytes)>>,
 }
 
 impl AppState {
@@ -220,6 +224,11 @@ impl AppState {
             v.lock();
         }
         self.clear_scrubber();
+        self.live_tokens
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.oauth.lock().await.clear();
         self.emit(Event::Locked { reason });
         tracing::info!(reason, "vault locked");
         true
@@ -292,6 +301,14 @@ impl AppState {
                 }
             }
         }
+        // Access tokens obtained for OAuth secrets are guarded like stored values.
+        values.extend(
+            self.live_tokens
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .cloned(),
+        );
         let guarded: Vec<Guarded<'_>> = values
             .iter()
             .map(|(n, v)| Guarded { name: n, value: v })
@@ -341,6 +358,15 @@ impl AppState {
             allowed: allow,
         });
         Some(p)
+    }
+
+    /// Guard an access token just obtained for an OAuth secret (replacing the
+    /// previous one). The caller rebuilds the scrubber.
+    pub fn set_live_token(&self, secret_name: &str, token: unseenkey_core::crypto::SecretBytes) {
+        let name = format!("{secret_name}.access_token");
+        let mut live = self.live_tokens.write().unwrap_or_else(|e| e.into_inner());
+        live.retain(|(n, _)| *n != name);
+        live.push((name, token));
     }
 
     /// Drop all guarded values (on lock).

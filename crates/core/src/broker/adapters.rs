@@ -106,6 +106,50 @@ pub fn aws_credentials(secret: &Revealed) -> Result<AwsCredentials, BrokerError>
     })
 }
 
+/// An OAuth2 client taken out of a revealed secret: what it takes to trade
+/// the refresh token for an access token.
+pub struct Oauth2Client {
+    /// Client id.
+    pub client_id: Zeroizing<String>,
+    /// Client secret; absent for public clients.
+    pub client_secret: Option<Zeroizing<String>>,
+    /// The long-lived refresh token.
+    pub refresh_token: Zeroizing<String>,
+    /// The provider's token endpoint.
+    pub token_url: String,
+    /// Scope to ask for, when the provider wants it repeated.
+    pub scope: Option<String>,
+    /// Authenticate the client with HTTP Basic instead of form fields.
+    pub basic_auth: bool,
+}
+
+/// Read an OAuth2 client from a secret: the refresh token is the value (or a
+/// field `refresh_token`), with fields `client_id`, `token_url` and optional
+/// `client_secret`, `scope`, `token_auth` (`basic` or `post`).
+pub fn oauth2_client(secret: &Revealed) -> Result<Oauth2Client, BrokerError> {
+    let field = |name: &str| secret.fields.get(name).filter(|v| !v.is_empty());
+    let need = |name: &str| field(name).ok_or_else(|| BrokerError::MissingField(name.into()));
+    let refresh_token = match field("refresh_token") {
+        Some(v) => text(v)?,
+        None if !secret.value.is_empty() => text(&secret.value)?,
+        None => return Err(BrokerError::MissingField("refresh_token".into())),
+    };
+    Ok(Oauth2Client {
+        client_id: text(need("client_id")?)?,
+        client_secret: field("client_secret").map(text).transpose()?,
+        refresh_token,
+        token_url: text(need("token_url")?)?.trim().to_string(),
+        scope: field("scope")
+            .map(text)
+            .transpose()?
+            .map(|s| s.trim().to_string()),
+        basic_auth: field("token_auth")
+            .map(text)
+            .transpose()?
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case("basic")),
+    })
+}
+
 /// Placeholder opener for template injection.
 pub const TEMPLATE_OPEN: &[u8] = b"{{usk:";
 /// Placeholder closer.
@@ -263,6 +307,50 @@ mod tests {
             .err(),
             Some(BrokerError::MissingField("secret_access_key".into()))
         );
+    }
+
+    #[test]
+    fn oauth2_client_from_a_secret() {
+        let r = revealed(
+            "rt-1",
+            &[
+                ("client_id", "cid"),
+                ("client_secret", "cs"),
+                ("token_url", " https://auth.example/token "),
+                ("token_auth", "Basic"),
+            ],
+        );
+        let c = oauth2_client(&r).unwrap();
+        assert_eq!(
+            (c.client_id.as_str(), c.refresh_token.as_str()),
+            ("cid", "rt-1")
+        );
+        assert_eq!(c.client_secret.as_deref().map(String::as_str), Some("cs"));
+        assert_eq!(c.token_url, "https://auth.example/token");
+        assert!(c.basic_auth && c.scope.is_none());
+        // A refresh_token field wins over the value; public clients have no secret.
+        let r = revealed(
+            "x",
+            &[
+                ("client_id", "cid"),
+                ("refresh_token", "rt-2"),
+                ("token_url", "https://a/t"),
+                ("scope", "a b"),
+            ],
+        );
+        let c = oauth2_client(&r).unwrap();
+        assert_eq!(c.refresh_token.as_str(), "rt-2");
+        assert!(c.client_secret.is_none() && !c.basic_auth);
+        assert_eq!(c.scope.as_deref(), Some("a b"));
+        for (fields, missing) in [
+            (&[("token_url", "https://a/t")][..], "client_id"),
+            (&[("client_id", "cid")][..], "token_url"),
+        ] {
+            assert_eq!(
+                oauth2_client(&revealed("rt", fields)).err(),
+                Some(BrokerError::MissingField(missing.into()))
+            );
+        }
     }
 
     #[test]

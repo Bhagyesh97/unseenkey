@@ -441,6 +441,81 @@ pub fn parse_aws_credentials(text: &str) -> Option<AwsCredentialText> {
     }
 }
 
+/// An OAuth2 client as pasted or piped in by a user.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Oauth2ClientText {
+    /// Client id.
+    pub client_id: String,
+    /// Client secret, when there is one.
+    pub client_secret: Option<zeroize::Zeroizing<String>>,
+    /// Refresh token.
+    pub refresh_token: zeroize::Zeroizing<String>,
+    /// Token endpoint, when given or known for the file type.
+    pub token_url: Option<String>,
+    /// Scope, when given.
+    pub scope: Option<String>,
+}
+
+/// Google's token endpoint, implied by its `authorized_user` credential files.
+pub const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+
+/// Recognise an OAuth2 client with a refresh token: a JSON object with
+/// `client_id`, `refresh_token` and optionally `client_secret`, `token_uri` or
+/// `token_url`, `scope` or `scopes`. That is the shape of gcloud's
+/// `application_default_credentials.json` and of most OAuth tooling's token
+/// files. `key = value` lines with the same names work too.
+pub fn parse_oauth2_client(text: &str) -> Option<Oauth2ClientText> {
+    use zeroize::Zeroizing;
+    let text = text.trim().trim_start_matches('\u{feff}');
+    // Either shape becomes a list of (name, value) pairs.
+    let pairs: Vec<(String, String)> = if text.starts_with('{') {
+        let v: serde_json::Value = serde_json::from_str(text).ok()?;
+        v.as_object()?
+            .iter()
+            .filter_map(|(k, v)| match v {
+                serde_json::Value::String(s) => Some((k.clone(), s.clone())),
+                serde_json::Value::Array(a) => Some((
+                    k.clone(),
+                    a.iter()
+                        .filter_map(|x| x.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                )),
+                _ => None,
+            })
+            .collect()
+    } else {
+        text.lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .filter_map(|l| l.strip_prefix("export ").unwrap_or(l).split_once('='))
+            .map(|(k, v)| (k.trim().to_ascii_lowercase(), unquote(v).to_string()))
+            .collect()
+    };
+    let get = |names: &[&str]| {
+        names
+            .iter()
+            .find_map(|n| pairs.iter().find(|(k, _)| k == n).map(|(_, v)| v.clone()))
+    };
+    let kind = get(&["type"]);
+    let client_id = get(&["client_id"]).filter(|s| !s.is_empty())?;
+    let refresh_token = get(&["refresh_token"]).filter(|s| !s.is_empty())?;
+    let token_url = get(&["token_url", "token_uri"])
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            (kind.as_deref() == Some("authorized_user")).then(|| GOOGLE_TOKEN_URL.to_string())
+        });
+    Some(Oauth2ClientText {
+        client_id,
+        client_secret: get(&["client_secret"])
+            .filter(|s| !s.is_empty())
+            .map(Zeroizing::new),
+        refresh_token: Zeroizing::new(refresh_token),
+        token_url,
+        scope: get(&["scope", "scopes"]).filter(|s| !s.is_empty()),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -583,5 +658,52 @@ mod tests {
         assert!(is_aws_access_key_id("ASIAIOSFODNN7EXAMPLE"));
         assert!(!is_aws_access_key_id("AKIAiosfodnn7example"));
         assert!(!is_aws_access_key_id("AKIA"));
+    }
+
+    #[test]
+    fn oauth2_clients_in_the_usual_shapes() {
+        // gcloud's application_default_credentials.json: the token endpoint is implied.
+        let adc = r#"{"client_id":"1.apps.googleusercontent.com","client_secret":"GOCSPX-x","quota_project_id":"p","refresh_token":"1//0abc","type":"authorized_user"}"#;
+        let c = parse_oauth2_client(adc).unwrap();
+        assert_eq!(c.client_id, "1.apps.googleusercontent.com");
+        assert_eq!(
+            c.client_secret.as_deref().map(String::as_str),
+            Some("GOCSPX-x")
+        );
+        assert_eq!(c.refresh_token.as_str(), "1//0abc");
+        assert_eq!(c.token_url.as_deref(), Some(GOOGLE_TOKEN_URL));
+        // A generic token file, with scopes as a list and a public client.
+        let c = parse_oauth2_client(
+            r#"{"client_id":"pub","refresh_token":"rt","token_uri":"https://login.example/token","scopes":["a","b"]}"#,
+        )
+        .unwrap();
+        assert_eq!(c.token_url.as_deref(), Some("https://login.example/token"));
+        assert_eq!(c.scope.as_deref(), Some("a b"));
+        assert!(c.client_secret.is_none());
+        // key = value lines.
+        let c = parse_oauth2_client("CLIENT_ID=cid\nexport CLIENT_SECRET='cs'\nrefresh_token = \"rt\"\ntoken_url=https://a/t\n").unwrap();
+        assert_eq!(
+            (c.client_id.as_str(), c.refresh_token.as_str()),
+            ("cid", "rt")
+        );
+        assert_eq!(c.client_secret.as_deref().map(String::as_str), Some("cs"));
+        // Without a token endpoint it still parses; whoever stores it must supply one.
+        assert_eq!(
+            parse_oauth2_client(r#"{"client_id":"c","refresh_token":"r"}"#)
+                .unwrap()
+                .token_url,
+            None
+        );
+        // Not OAuth clients: service-account files, API keys, AWS credentials.
+        for bad in [
+            r#"{"type":"service_account","client_id":"1","private_key":"-----BEGIN"}"#,
+            r#"{"client_id":"c"}"#,
+            "sk-proj-abc",
+            "AKIAIOSFODNN7EXAMPLE\nsecret",
+            "{not json",
+            "",
+        ] {
+            assert_eq!(parse_oauth2_client(bad), None, "{bad:?}");
+        }
     }
 }
