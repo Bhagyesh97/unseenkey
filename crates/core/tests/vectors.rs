@@ -129,3 +129,71 @@ fn ed25519_rfc8032_test1() {
     let pk: [u8; 32] = h(&v.public_key_hex).try_into().unwrap();
     assert!(sign::verify(&pk, &msg, &sig).is_ok());
 }
+
+#[derive(Deserialize)]
+struct SigV4Vector {
+    name: String,
+    service: String,
+    region: String,
+    amz_date: String,
+    access_key_id: String,
+    secret_access_key: String,
+    session_token: Option<String>,
+    method: String,
+    path: String,
+    query: Option<String>,
+    headers: Vec<(String, String)>,
+    payload_hash: String,
+    body_utf8: String,
+    canonical_request: String,
+    signature: String,
+}
+
+#[derive(Deserialize)]
+struct SigV4File {
+    generator: String,
+    vectors: Vec<SigV4Vector>,
+}
+
+/// Our SigV4 signer against botocore, AWS's own (`vectors/gen_sigv4.py`).
+#[test]
+fn sigv4_matches_botocore() {
+    use unseenkey_core::broker::sigv4;
+    let file: SigV4File = serde_json::from_str(include_str!("vectors/sigv4.json")).unwrap();
+    assert!(file.generator.starts_with("botocore"), "{}", file.generator);
+    assert!(file.vectors.len() >= 12);
+    for v in file.vectors {
+        let secret = SecretBytes::from(v.secret_access_key.as_str());
+        let creds = sigv4::Credentials {
+            access_key_id: &v.access_key_id,
+            secret_access_key: &secret,
+            session_token: v.session_token.as_deref(),
+        };
+        // What an SDK encoded is already in wire form and must pass unchanged.
+        assert_eq!(sigv4::wire_path(&v.path), v.path, "{}", v.name);
+        if let Some(q) = &v.query {
+            assert_eq!(&sigv4::wire_query(q), q, "{}", v.name);
+        }
+        assert_eq!(
+            sigv4::payload_hash(v.body_utf8.as_bytes()),
+            v.payload_hash,
+            "{}",
+            v.name
+        );
+        let signed = sigv4::sign(
+            &creds,
+            &v.region,
+            &v.service,
+            &v.amz_date,
+            &sigv4::Request {
+                method: &v.method,
+                path: &v.path,
+                query: v.query.as_deref(),
+                headers: &v.headers,
+                payload_hash: &v.payload_hash,
+            },
+        );
+        assert_eq!(signed.canonical_request, v.canonical_request, "{}", v.name);
+        assert_eq!(signed.signature, v.signature, "{}", v.name);
+    }
+}

@@ -243,6 +243,8 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
     let app = Router::new()
         .route("/healthz", get(api::healthz))
         .route("/p/{preset}", any(proxy::proxy))
+        // AWS JSON and query protocols POST to the endpoint root: `/p/aws/`.
+        .route("/p/{preset}/", any(proxy::proxy))
         .route("/p/{preset}/{*rest}", any(proxy::proxy))
         .route("/mcp", post(crate::mcp::mcp_http).get(crate::mcp::mcp_get))
         .nest("/v1", v1)

@@ -201,25 +201,81 @@ pub fn evaluate(policy: &Policy, req: &Request<'_>, now_unix_ms: i64, usage: Usa
     }
 }
 
-/// Host allow-list check: exact match, or `*.example.com` matching any single
-/// or multi-level subdomain but not the apex. Case-insensitive.
+/// Host allow-list check, case-insensitive. A pattern is an exact host name
+/// or contains `*` labels: a leading `*.` stands for one or more labels
+/// (`*.example.com` covers `a.example.com` and `a.b.example.com`, never the
+/// apex); a `*` label anywhere else stands for exactly one label
+/// (`s3.*.amazonaws.com`).
 pub fn host_allowed(allowed: &[String], host: &str) -> bool {
     let h = host.trim_end_matches('.').to_ascii_lowercase();
+    let h_labels: Vec<&str> = h.split('.').collect();
+    if h_labels.iter().any(|l| l.is_empty()) {
+        return false;
+    }
     allowed.iter().any(|a| {
         let a = a.trim_end_matches('.').to_ascii_lowercase();
-        if let Some(suffix) = a.strip_prefix("*.") {
-            h.len() > suffix.len()
-                && h.ends_with(suffix)
-                && h.as_bytes()[h.len() - suffix.len() - 1] == b'.'
-        } else {
-            h == a
+        if !a.contains('*') {
+            return h == a;
         }
+        let labels: Vec<&str> = a.split('.').collect();
+        let (leading, rest) = match labels.split_first() {
+            Some((&"*", rest)) => (true, rest),
+            _ => (false, &labels[..]),
+        };
+        if rest.is_empty() {
+            return false;
+        }
+        let fits = if leading {
+            h_labels.len() > rest.len()
+        } else {
+            h_labels.len() == rest.len()
+        };
+        fits && rest
+            .iter()
+            .zip(&h_labels[h_labels.len() - rest.len()..])
+            .all(|(pattern, label)| *pattern == "*" || pattern == label)
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_patterns_with_inner_wildcards() {
+        let a = |p: &[&str], h: &str| {
+            host_allowed(&p.iter().map(|s| s.to_string()).collect::<Vec<_>>(), h)
+        };
+        // Unchanged behaviour.
+        assert!(a(&["api.stripe.com"], "API.Stripe.com."));
+        assert!(a(&["*.supabase.co"], "abc.supabase.co"));
+        assert!(a(&["*.supabase.co"], "a.b.supabase.co"));
+        assert!(!a(&["*.supabase.co"], "supabase.co"));
+        assert!(!a(&["*.supabase.co"], "evilsupabase.co"));
+        // A `*` label in the middle is exactly one label.
+        assert!(a(&["s3.*.amazonaws.com"], "s3.us-east-1.amazonaws.com"));
+        assert!(!a(&["s3.*.amazonaws.com"], "s3.amazonaws.com"));
+        assert!(!a(&["s3.*.amazonaws.com"], "s3.a.b.amazonaws.com"));
+        assert!(!a(
+            &["s3.*.amazonaws.com"],
+            "dynamodb.us-east-1.amazonaws.com"
+        ));
+        assert!(!a(
+            &["s3.*.amazonaws.com"],
+            "s3.us-east-1.amazonaws.com.evil.example"
+        ));
+        // Leading and inner together.
+        assert!(a(
+            &["*.s3.*.amazonaws.com"],
+            "bucket.s3.eu-west-1.amazonaws.com"
+        ));
+        assert!(!a(&["*.s3.*.amazonaws.com"], "s3.eu-west-1.amazonaws.com"));
+        // Degenerate patterns allow nothing.
+        assert!(!a(&["*"], "example.com"));
+        assert!(!a(&["*."], "example.com"));
+        assert!(!a(&["a*.example.com"], "ab.example.com"));
+        assert!(!a(&["*.example.com"], "a..example.com"));
+    }
     use crate::policy::schedule::Window;
     use crate::policy::{Approval, Instant, Limits, Schedule};
 

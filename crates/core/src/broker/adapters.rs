@@ -66,14 +66,44 @@ pub fn inject(auth: &Auth, secret: &Revealed) -> Result<Injection, BrokerError> 
         Auth::Query { param } => {
             inj.query.push((param.clone(), text(&secret.value)?));
         }
-        Auth::Template => {}
-        Auth::AwsSigv4 => {
-            return Err(BrokerError::MissingField(
-                "aws_sigv4 adapter arrives in M2.3".into(),
-            ));
-        }
+        // Template substitution and SigV4 signing need the whole request; the
+        // pipeline does them (see `substitute` and `sigv4::sign`).
+        Auth::Template | Auth::AwsSigv4 => {}
     }
     Ok(inj)
+}
+
+/// AWS credentials taken out of a revealed secret.
+pub struct AwsCredentials {
+    /// `AKIA…` or `ASIA…`.
+    pub access_key_id: Zeroizing<String>,
+    /// The secret access key.
+    pub secret_access_key: SecretBytes,
+    /// Session token of temporary credentials.
+    pub session_token: Option<Zeroizing<String>>,
+}
+
+/// Read AWS credentials from a secret: fields `access_key_id`,
+/// `secret_access_key` (or the secret's value) and optional `session_token`.
+pub fn aws_credentials(secret: &Revealed) -> Result<AwsCredentials, BrokerError> {
+    let field = |name: &str| secret.fields.get(name).filter(|v| !v.is_empty());
+    let access_key_id = text(
+        field("access_key_id").ok_or_else(|| BrokerError::MissingField("access_key_id".into()))?,
+    )?;
+    let secret_access_key = match field("secret_access_key") {
+        Some(v) => v.clone(),
+        None if !secret.value.is_empty() => secret.value.clone(),
+        None => return Err(BrokerError::MissingField("secret_access_key".into())),
+    };
+    if secret_access_key.expose() == access_key_id.as_bytes() {
+        return Err(BrokerError::MissingField("secret_access_key".into()));
+    }
+    let session_token = field("session_token").map(text).transpose()?;
+    Ok(AwsCredentials {
+        access_key_id,
+        secret_access_key,
+        session_token,
+    })
 }
 
 /// Placeholder opener for template injection.
@@ -193,7 +223,46 @@ mod tests {
 
         let i = inject(&Auth::Template, &r).unwrap();
         assert!(i.headers.is_empty() && i.query.is_empty());
-        assert!(inject(&Auth::AwsSigv4, &r).is_err());
+        let i = inject(&Auth::AwsSigv4, &r).unwrap();
+        assert!(i.headers.is_empty() && i.query.is_empty());
+    }
+
+    #[test]
+    fn aws_credentials_from_a_secret() {
+        // Secret access key as the value, the rest in fields.
+        let r = revealed(
+            "wJalrXUtnFEMI/K7MDENG",
+            &[("access_key_id", "AKIAIOSFODNN7EXAMPLE")],
+        );
+        let c = aws_credentials(&r).unwrap();
+        assert_eq!(*c.access_key_id, "AKIAIOSFODNN7EXAMPLE");
+        assert_eq!(c.secret_access_key.expose(), b"wJalrXUtnFEMI/K7MDENG");
+        assert!(c.session_token.is_none());
+        // Everything in fields, with a session token; the field wins over the value.
+        let r = revealed(
+            "ignored",
+            &[
+                ("access_key_id", "ASIAEXAMPLE"),
+                ("secret_access_key", "s3cr3t"),
+                ("session_token", "tok"),
+            ],
+        );
+        let c = aws_credentials(&r).unwrap();
+        assert_eq!(c.secret_access_key.expose(), b"s3cr3t");
+        assert_eq!(c.session_token.as_deref().map(String::as_str), Some("tok"));
+        // Incomplete secrets are refused, naming what is missing.
+        assert_eq!(
+            aws_credentials(&revealed("x", &[])).err(),
+            Some(BrokerError::MissingField("access_key_id".into()))
+        );
+        assert_eq!(
+            aws_credentials(&revealed(
+                "AKIAIOSFODNN7EXAMPLE",
+                &[("access_key_id", "AKIAIOSFODNN7EXAMPLE")]
+            ))
+            .err(),
+            Some(BrokerError::MissingField("secret_access_key".into()))
+        );
     }
 
     #[test]

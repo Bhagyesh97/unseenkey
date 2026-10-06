@@ -24,6 +24,7 @@ use tokio_stream::Stream;
 use unseenkey_core::audit::kinds;
 use unseenkey_core::broker::adapters::{self, Injection};
 use unseenkey_core::broker::scrub::StreamScrubber;
+use unseenkey_core::broker::sigv4;
 use unseenkey_core::broker::{
     check_host, is_stripped, split_path_query, BrokerError, Upstream, STRIP_REQUEST_HEADERS,
     STRIP_RESPONSE_HEADERS,
@@ -89,12 +90,57 @@ fn extract_handle(preset: &Preset, headers: &HeaderMap, query: Option<&str>) -> 
         Auth::Bearer { .. } | Auth::Basic => bearer(),
         Auth::Header { name } => header(name),
         Auth::Query { param } => from_query(param),
-        Auth::Template | Auth::AwsSigv4 => None,
+        // AWS SDKs put their access key id (our handle) inside the SigV4 scope.
+        Auth::AwsSigv4 => header("authorization")
+            .and_then(|v| sigv4::parse_authorization(&v))
+            .map(|scope| scope.access_key_id),
+        Auth::Template => None,
     };
     primary
         .or_else(bearer)
         .or_else(|| header("x-api-key"))
         .or_else(|| from_query("key"))
+}
+
+/// What an AWS request does, for the audit log: the `X-Amz-Target` header of
+/// JSON-protocol services or the `Action` parameter of query-protocol ones.
+/// REST services such as S3 say it with the method and path already.
+fn aws_action(headers: &HeaderMap, query: Option<&str>, body: &[u8]) -> Option<String> {
+    fn clean(s: &str) -> Option<String> {
+        let s: String = s
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+            .take(128)
+            .collect();
+        (!s.is_empty()).then_some(s)
+    }
+    fn from_pairs(s: &str) -> Option<String> {
+        s.split('&')
+            .find_map(|kv| kv.strip_prefix("Action="))
+            .and_then(clean)
+    }
+    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    if let Some(target) = header("x-amz-target") {
+        return clean(target);
+    }
+    if let Some(action) = query.and_then(from_pairs) {
+        return Some(action);
+    }
+    let form =
+        header("content-type").is_some_and(|c| c.starts_with("application/x-www-form-urlencoded"));
+    if form && body.len() <= 64 * 1024 {
+        return core::str::from_utf8(body).ok().and_then(from_pairs);
+    }
+    None
+}
+
+fn set_header(headers: &mut reqwest::header::HeaderMap, name: &str, value: &str) {
+    if let (Ok(n), Ok(v)) = (
+        reqwest::header::HeaderName::from_bytes(name.as_bytes()),
+        reqwest::header::HeaderValue::from_str(value),
+    ) {
+        headers.insert(n, v);
+    }
 }
 
 /// Remove the query parameter that carried the handle (so it is not forwarded).
@@ -173,8 +219,11 @@ pub struct CallRequest {
     pub headers: HeaderMap,
     /// Request body.
     pub body: Bytes,
-    /// Explicit upstream (`X-Usk-Upstream`), required for generic/wildcard presets.
+    /// Explicit upstream (`X-Usk-Upstream` or `/p/<preset>/@<host>/…`), required
+    /// for generic and wildcard presets.
     pub upstream_spec: Option<String>,
+    /// `(region, service)` from the caller's own SigV4 header, for AWS.
+    pub aws_scope: Option<(String, String)>,
     /// Caller identity for policy and audit.
     pub caller: String,
 }
@@ -191,7 +240,16 @@ pub async fn proxy(State(s): State<Arc<AppState>>, req: Request) -> Response {
     let _p = segs.next();
     let preset_id = segs.next().unwrap_or("").to_string();
     let rest = segs.next().unwrap_or("");
-    let path = format!("/{rest}");
+    // `/p/<preset>/@<host>/<path>` names the upstream in the URL, for SDKs that
+    // can change their base URL but cannot add an `X-Usk-Upstream` header. The
+    // host lock applies to it exactly as to the header.
+    let (path_upstream, path) = match rest.strip_prefix('@') {
+        Some(r) => {
+            let (host, tail) = r.split_once('/').unwrap_or((r, ""));
+            (Some(host.to_string()), format!("/{tail}"))
+        }
+        None => (None, format!("/{rest}")),
+    };
     let Some(preset) = presets::get(&preset_id) else {
         return err(
             StatusCode::NOT_FOUND,
@@ -199,6 +257,20 @@ pub async fn proxy(State(s): State<Arc<AppState>>, req: Request) -> Response {
             format!("no provider preset {preset_id:?}"),
         );
     };
+    // SigV4A has no handle we could read out of it; refuse it by name rather
+    // than as an unknown handle.
+    let authz = parts
+        .headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if matches!(preset.auth, Auth::AwsSigv4) && sigv4::is_sigv4a(authz) {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "sigv4a_unsupported",
+            "multi-region (SigV4A) signing is not supported; use a regional endpoint",
+        );
+    }
     let Some(handle_str) = extract_handle(preset, &parts.headers, query.as_deref()) else {
         return err(
             StatusCode::UNAUTHORIZED,
@@ -206,13 +278,37 @@ pub async fn proxy(State(s): State<Arc<AppState>>, req: Request) -> Response {
             "no handle found where this provider expects its key",
         );
     };
-    let upstream_spec = parts
+    let mut upstream_spec = parts
         .headers
         .get("x-usk-upstream")
         .and_then(|v| v.to_str().ok())
         .map(str::trim)
         .filter(|v| !v.is_empty())
-        .map(str::to_string);
+        .map(str::to_string)
+        .or(path_upstream.filter(|h| !h.is_empty()));
+    // AWS: the SDK's own SigV4 header says which region and service it signed
+    // for; that picks the endpoint unless one was named explicitly.
+    let mut aws_scope = None;
+    if matches!(preset.auth, Auth::AwsSigv4) {
+        if let Some(scope) = sigv4::parse_authorization(authz) {
+            if upstream_spec.is_none() {
+                match sigv4::host_for(&scope.service, &scope.region) {
+                    Some(host) => upstream_spec = Some(host),
+                    None => {
+                        return err(
+                            StatusCode::BAD_REQUEST,
+                            "aws_host_required",
+                            format!(
+                                "cannot tell which endpoint serves {:?} in {:?}; point the SDK at {}/p/aws/@<host>",
+                                scope.service, scope.region, s.base_url
+                            ),
+                        )
+                    }
+                }
+            }
+            aws_scope = Some((scope.region, scope.service));
+        }
+    }
     let body = match axum::body::to_bytes(body, MAX_BODY).await {
         Ok(b) => b,
         Err(_) => {
@@ -231,6 +327,7 @@ pub async fn proxy(State(s): State<Arc<AppState>>, req: Request) -> Response {
         headers: parts.headers,
         body,
         upstream_spec,
+        aws_scope,
         caller: LOCAL_CALLER.to_string(),
     };
     execute(s, HandleRef::Presented(handle_str), call).await
@@ -548,6 +645,37 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
         (call.path.clone(), q, call.body.clone())
     };
 
+    // AWS: tidy the path and query into the form that will be signed and sent,
+    // and undo aws-chunked framing (its per-chunk signatures were made with
+    // the SDK's placeholder key).
+    let mut aws_trailers: Vec<(String, String)> = Vec::new();
+    let (out_path, out_query, out_body) = if matches!(auth, Auth::AwsSigv4) {
+        let header = |name: &str| call.headers.get(name).and_then(|v| v.to_str().ok());
+        let chunked = header("x-amz-content-sha256").is_some_and(|v| v.starts_with("STREAMING-"))
+            || header("content-encoding")
+                .is_some_and(|v| v.to_ascii_lowercase().contains("aws-chunked"));
+        let body = if chunked {
+            match sigv4::decode_aws_chunked(&out_body) {
+                Ok(d) => {
+                    aws_trailers = d.trailers;
+                    Bytes::from(d.body)
+                }
+                Err(e) => return broker_err(e),
+            }
+        } else {
+            out_body
+        };
+        (
+            sigv4::wire_path(&out_path),
+            out_query
+                .map(|q| sigv4::wire_query(&q))
+                .filter(|q| !q.is_empty()),
+            body,
+        )
+    } else {
+        (out_path, out_query, out_body)
+    };
+
     // Build the upstream URL, honouring test/staging overrides only after the host lock.
     let origin = s
         .upstream_overrides
@@ -556,6 +684,7 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
         .unwrap_or_else(|| upstream.origin());
     let mut url = format!("{origin}{out_path}");
     let mut qparts: Vec<String> = out_query.into_iter().filter(|q| !q.is_empty()).collect();
+    // (for AWS the query is signed below from the final URL, exactly as sent)
     for (k, v) in &injection.query {
         let enc = percent_encoding::utf8_percent_encode(v, percent_encoding::NON_ALPHANUMERIC)
             .to_string();
@@ -604,6 +733,97 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
             headers.insert(n, v);
         }
     }
+    // AWS: sign the request exactly as it will go on the wire.
+    let mut aws_audit: Option<(String, Option<String>)> = None;
+    if matches!(auth, Auth::AwsSigv4) {
+        let creds = match adapters::aws_credentials(&revealed) {
+            Ok(c) => c,
+            Err(e) => return broker_err(e),
+        };
+        let Some((region, service)) = call.aws_scope.clone().or_else(|| {
+            sigv4::scope_for_host(&upstream.host).map(|(service, region)| (region, service))
+        }) else {
+            return err(
+                StatusCode::BAD_REQUEST,
+                "aws_scope_required",
+                "cannot tell the AWS service and region for this host; use an AWS SDK or a regional endpoint",
+            );
+        };
+        // The URL type normalises a few things (dot segments, for one); sign
+        // what it will actually send.
+        let Ok(parsed) = reqwest::Url::parse(&url) else {
+            return err(
+                StatusCode::BAD_REQUEST,
+                "malformed_request",
+                "invalid request URL",
+            );
+        };
+        aws_audit = Some((
+            format!("{service}/{region}"),
+            aws_action(&call.headers, query, &call.body),
+        ));
+        for name in [
+            "x-amz-date",
+            "x-amz-content-sha256",
+            "x-amz-security-token",
+            "x-amz-trailer",
+            "x-amz-decoded-content-length",
+        ] {
+            headers.remove(name);
+        }
+        let encoding = headers
+            .get(reqwest::header::CONTENT_ENCODING)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        if let Some(encoding) = encoding {
+            headers.remove(reqwest::header::CONTENT_ENCODING);
+            if let Some(rest) = sigv4::strip_aws_chunked(&encoding) {
+                set_header(&mut headers, "content-encoding", &rest);
+            }
+        }
+        for (name, value) in &aws_trailers {
+            set_header(&mut headers, name, value);
+        }
+        let amz_date = sigv4::amz_date(now_ms());
+        let payload_hash = sigv4::payload_hash(&out_body);
+        set_header(&mut headers, "x-amz-date", &amz_date);
+        set_header(&mut headers, "x-amz-content-sha256", &payload_hash);
+        if let Some(token) = &creds.session_token {
+            set_header(&mut headers, "x-amz-security-token", token);
+        }
+        let host_header = match upstream.port {
+            Some(p) => format!("{}:{p}", upstream.host),
+            None => upstream.host.clone(),
+        };
+        let mut to_sign = vec![("host".to_string(), host_header)];
+        for (name, value) in headers.iter() {
+            let n = name.as_str();
+            if n == "content-type" || n.starts_with("x-amz-") {
+                if let Ok(v) = value.to_str() {
+                    to_sign.push((n.to_string(), v.to_string()));
+                }
+            }
+        }
+        let signed = sigv4::sign(
+            &sigv4::Credentials {
+                access_key_id: &creds.access_key_id,
+                secret_access_key: &creds.secret_access_key,
+                session_token: creds.session_token.as_deref().map(String::as_str),
+            },
+            &region,
+            &service,
+            &amz_date,
+            &sigv4::Request {
+                method: &call.method,
+                path: parsed.path(),
+                query: parsed.query(),
+                headers: &to_sign,
+                payload_hash: &payload_hash,
+            },
+        );
+        set_header(&mut headers, "authorization", &signed.authorization);
+    }
+
     if !headers.contains_key(reqwest::header::USER_AGENT) {
         headers.insert(
             reqwest::header::USER_AGENT,
@@ -662,12 +882,19 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
     // Audit before the first response byte (INV-4). Failure means no response.
     {
         let mut vault = s.vault.lock().await;
-        let audit = vault.audit(kinds::USE, json!({
+        let mut event = json!({
             "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
             "caller": call.caller, "host": upstream.host, "method": call.method,
             "path": call.path, "status": status.as_u16(), "bytes_in": call.body.len(),
             "latency_ms": started.elapsed().as_millis() as u64, "scrubbed_headers": scrubbed_headers,
-        }));
+        });
+        if let Some((scope, action)) = &aws_audit {
+            event["aws"] = json!(scope);
+            if let Some(action) = action {
+                event["action"] = json!(action);
+            }
+        }
+        let audit = vault.audit(kinds::USE, event);
         if audit.is_err() {
             return err(
                 StatusCode::INTERNAL_SERVER_ERROR,

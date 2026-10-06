@@ -14,3 +14,8 @@ loads them and checks our wrappers against them on every target, including
 
 Never edit an expected value to make a test pass. If a vector fails, the
 implementation is wrong.
+
+`sigv4.json` is generated, not copied: `gen_sigv4.py` signs a set of requests with
+botocore (AWS's own Python signer) and records the canonical request and
+signature it produced. Regenerate with `python gen_sigv4.py > sigv4.json` in an
+environment that has `botocore` installed.

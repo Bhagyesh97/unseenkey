@@ -76,6 +76,8 @@ usk rotate <name>                (Phase 4) run provider adapter
 
 usk handle create <name> [--policy chat] [--label "cursor"] [--caller mcp:cursor] [--expires 30d]
 usk handle ls | usk handle show <label|id> | usk handle revoke <label|id>
+usk add aws-dev            # AWS: paste the access key id, then the secret access key; or pipe a credentials section with --stdin
+usk env aws-dev --policy s3-read-only   # AWS_ENDPOINT_URL + a handle as AWS_ACCESS_KEY_ID + a placeholder secret
 usk handle forget <label|id> [--rule "POST /v1/refunds"]   # ask again for rules approved with "always"
 usk policy ls | usk policy show <id> | usk policy edit <id> (opens $EDITOR, validates, explains)
 usk policy explain <id>

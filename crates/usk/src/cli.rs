@@ -512,10 +512,33 @@ fn add(
     }
     let value_str = std::str::from_utf8(value.expose())
         .map_err(|_| CliError::general("value must be UTF-8 text; use import for binary"))?;
+    // An AWS access key id on its own is half a credential: ask for the rest.
+    // (Both halves can also be given at once: two lines, a ~/.aws/credentials
+    // section or `aws sts` JSON; the daemon takes those apart.)
+    let mut fields = serde_json::Map::new();
+    let (mut kind, mut provider) = (kind, provider);
+    let other_half;
+    let value_str = if unseenkey_core::providers::is_aws_access_key_id(value_str.trim()) {
+        other_half = uio::read_secret_line("AWS secret access key (hidden): ")?;
+        if other_half.is_empty() {
+            return Err(CliError::general(
+                "an AWS access key id needs its secret access key as well",
+            ));
+        }
+        fields.insert("access_key_id".into(), json!(value_str.trim()));
+        kind = kind.or(Some(SecretKind::AwsCredentials));
+        provider = provider.or_else(|| Some("aws".into()));
+        std::str::from_utf8(other_half.expose())
+            .map_err(|_| CliError::general("value must be UTF-8 text"))?
+            .trim()
+    } else {
+        value_str
+    };
     let body = json!({
         "name": name,
         "type": kind.map(|k| k.as_str()),
         "value": value_str,
+        "fields": fields,
         "provider": provider,
         "upstreams": upstreams,
         "tags": tags,

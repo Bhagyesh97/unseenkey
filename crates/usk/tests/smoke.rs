@@ -477,6 +477,73 @@ fn mcp_install_bridge_and_remove() {
 }
 
 #[test]
+fn aws_credentials_and_sdk_environment() {
+    const AKID: &str = "AKIAIOSFODNN7EXAMPLE";
+    const SECRET: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    let _stop = StopDaemon(&vault);
+    assert!(usk(&vault, &["init", "--profile", "light"], PW)
+        .status
+        .success());
+
+    // Prompted: the key id first, then the CLI asks for the secret access key.
+    // (Not a terminal here, so each prompt reads one line: password, id, secret.)
+    let o = usk(
+        &vault,
+        &["add", "aws-dev"],
+        &format!("{PW}{AKID}\n{SECRET}\n"),
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(out(&o).contains("*.amazonaws.com"), "{}", out(&o));
+    // Piped: both halves at once, as they sit in ~/.aws/credentials.
+    let ini = format!("[prod]\naws_access_key_id = {AKID}\naws_secret_access_key = {SECRET}\n");
+    let o = usk(&vault, &["add", "aws-prod", "--stdin"], &ini);
+    assert!(o.status.success(), "{}", err(&o));
+    // A key id with nothing after it is refused.
+    let o = usk(&vault, &["add", "aws-half", "--stdin"], AKID);
+    assert!(!o.status.success());
+    assert!(err(&o).contains("secret access key"), "{}", err(&o));
+
+    let o = usk(&vault, &["--json", "ls"], "");
+    let j: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
+    let items = j.as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    for m in items {
+        assert_eq!(m["kind"], "aws_credentials", "{m}");
+        assert_eq!(m["provider"], "aws", "{m}");
+    }
+    for name in ["aws-dev", "aws-prod"] {
+        let o = usk(&vault, &["reveal", name, "--yes"], "");
+        assert_eq!(out(&o).lines().next(), Some(SECRET), "{name}: {}", err(&o));
+    }
+
+    // What an SDK needs: the broker as endpoint, a handle as the key id, and a
+    // placeholder secret.
+    let o = usk(
+        &vault,
+        &[
+            "env",
+            "aws-dev",
+            "--policy",
+            "s3-read-only",
+            "--shell",
+            "dotenv",
+        ],
+        "",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let env = out(&o);
+    assert!(
+        env.contains("AWS_ENDPOINT_URL=http://127.0.0.1:") && env.contains("/p/aws"),
+        "{env}"
+    );
+    assert!(env.contains("AWS_ACCESS_KEY_ID=usk_h_"), "{env}");
+    assert!(env.contains("AWS_SECRET_ACCESS_KEY="), "{env}");
+    assert!(!env.contains(SECRET) && !env.contains(AKID), "{env}");
+}
+
+#[test]
 fn status_without_vault() {
     let dir = tempfile::tempdir().unwrap();
     let vault = dir.path().join("vault.db");

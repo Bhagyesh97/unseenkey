@@ -8,6 +8,7 @@ The broker is the heart of the product. It is the only component that turns a ha
 |---|---|---|
 | `/p/<preset>/<path…>` | Base-URL proxy for a known provider (e.g. `/p/openai/v1/chat/completions`) | Handle in the provider's usual header |
 | `/p/generic/<path…>` | Proxy to any upstream named in `X-Usk-Upstream`, with template substitution | Handle in `X-Usk-Handle` or templates in request |
+| `/p/<preset>/@<host>/<path…>` | The upstream named in the URL instead of a header, for SDKs that can change their base URL but cannot add headers (AWS per-service endpoints, Supabase). Same host lock as the header | As for the preset |
 | `/v1/*` | Management API (vault, handles, policies, audit) | Session token |
 | `/mcp` | MCP streamable HTTP | Session token or per-client MCP token |
 | `/healthz` | Liveness | none (no info beyond `ok`) |
@@ -27,7 +28,7 @@ The broker is the heart of the product. It is the only component that turns a ha
    - `header`: `<name>: <secret>` (e.g. `x-api-key` for Anthropic)
    - `basic`: `Authorization: Basic base64(user:pass)`
    - `query`: `?key=<secret>` (Google AI); logged as `query_auth` risk in the audit
-   - `aws_sigv4`: sign with access/secret key (Phase 2)
+   - `aws_sigv4`: sign the whole request with the secret access key (see *AWS* below)
    - `oauth2`: use cached access token; refresh with client secret + refresh token when expiring (Phase 2)
    - `template`: replace `{{usk:name}}` occurrences in URL, headers, body
 7. **Host lock**: final upstream host must be in the secret's `upstreams` list (exact host match, or `*.example.com` if configured). Else 403 `host_not_allowed`. The route's preset upstream is used for presets; `X-Usk-Upstream` for generic.
@@ -36,6 +37,24 @@ The broker is the heart of the product. It is the only component that turns a ha
 10. **Scrub**: response headers and body scanned for stored secret values; replaced by `[REDACTED:usk:<name>]`. For streams, keep a trailing buffer of `max_secret_len − 1` bytes to catch values that straddle chunks.
 11. **Audit**: append `use` event (or `deny`, `egress_blocked`, `approval_*`) **before** returning the first response byte. Audit failure → 500 and the request is not forwarded (if the failure is detected before forwarding) or the response is dropped (if after; we accept this because INV-4 outranks availability).
 12. **Response** to the caller with the pass-through status code and headers (minus hop-by-hop and minus any `Set-Cookie` from upstream by default).
+
+## AWS
+
+AWS has no key to inject: every request is signed (SigV4) with the secret access key over the method, path, query, chosen headers and a hash of the body. So the SDK gets the handle as its *access key id* and any placeholder as its secret (`usk env <aws secret>` prints `AWS_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID=usk_h_…`, `AWS_SECRET_ACCESS_KEY=handled-by-unseenkey`). It signs with the placeholder. The broker:
+
+1. takes the handle and the `<region>/<service>` scope out of the SDK's `Authorization: AWS4-HMAC-SHA256 Credential=…` header and discards the SDK's signature;
+2. picks the endpoint: an explicit `X-Usk-Upstream` or `/p/aws/@<host>/…` if given, otherwise `<service>.<region>.amazonaws.com` with a short table of exceptions (`ses` → `email.…`, `ecr` → `api.ecr.…`, global `iam`/`route53`/`cloudfront`). Signing names that cover several endpoints or per-resource hosts (`bedrock`, `execute-api`, `es`, …) are refused with `aws_host_required` and need the `@<host>` form;
+3. runs the usual host lock and policy on that host;
+4. undoes `aws-chunked` upload framing (its per-chunk signatures were made with the placeholder), turning a trailing checksum into an ordinary header;
+5. sets `x-amz-date` from its own clock, `x-amz-content-sha256` to the exact body hash, `x-amz-security-token` from the stored session token if there is one, and signs `host`, `content-type` and every `x-amz-*` header with the real key (`core::broker::sigv4`).
+
+Without an SDK (curl, MCP `call_api` with `upstream=`), the handle travels in `X-Usk-Handle` and the scope is worked out from the host name.
+
+What a key may do inside AWS is IAM's business. The broker adds a coarser fence in front: which endpoints (so which services and regions) a handle reaches, and for S3, which methods and paths. Host patterns may use a `*` label for exactly one label (`s3.*.amazonaws.com`); preset policies can narrow the preset's hosts. `GET` is only treated as read-only for S3, because query-protocol services accept state-changing actions in a GET. The audit `use` event carries `aws: "<service>/<region>"` and, for JSON and query protocols, `action` (`DynamoDB_20120810.GetItem`, `SendMessage`). Rules on those actions are not implemented yet.
+
+Not supported: SigV4A (multi-region access points; refused with `sigv4a_unsupported`), presigned URLs (they are made client-side, with the placeholder), and S3 object keys containing `.` or `..` path segments (the HTTP client normalises them away).
+
+Verification: `tests/vectors/sigv4.json` is generated with botocore and checked byte for byte (canonical request and signature); `crates/daemon/tests/aws_interop.rs` runs boto3 through the broker against a stand-in that re-verifies every signature with botocore (CI job `aws-interop`).
 
 ## Header hygiene
 

@@ -63,6 +63,23 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npx playwright test
 
+  aws-interop:
+    # The real AWS SDK through the broker; a stand-in for AWS re-checks every
+    # signature with botocore, AWS's own signer.
+    name: AWS SDK interop (boto3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install boto3
+      - run: cargo test -p unseenkey-daemon --test aws_interop -- --ignored --nocapture
+        env:
+          USK_TEST_PYTHON: python
+
   supply-chain:
     name: cargo deny + audit
     runs-on: ubuntu-latest

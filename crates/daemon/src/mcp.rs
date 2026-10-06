@@ -65,7 +65,7 @@ pub fn tools(allow_store: bool) -> Vec<Value> {
         }),
         json!({
             "name": "call_api",
-            "description": "Call a provider API using a stored secret by name. The broker injects the real credential; you only see the (scrubbed) response. Paths are relative to the provider, e.g. secret=\"stripe-live\", method=\"GET\", path=\"/v1/customers?limit=3\". For generic secrets pass upstream=\"https://host\".",
+            "description": "Call a provider API using a stored secret by name. The broker injects the real credential; you only see the (scrubbed) response. Paths are relative to the provider, e.g. secret=\"stripe-live\", method=\"GET\", path=\"/v1/customers?limit=3\". For generic secrets and providers that span many hosts (AWS: upstream=\"https://s3.eu-west-1.amazonaws.com\") pass upstream=\"https://host\".",
             "inputSchema": {
                 "type": "object",
                 "required": ["secret", "method", "path"],
@@ -276,6 +276,16 @@ async fn call_api(s: &Arc<AppState>, caller: &str, args: &Value) -> Value {
             true,
         );
     }
+    if upstream_spec.is_none() && preset.upstreams.first().is_some_and(|h| h.contains('*')) {
+        return tool_text(
+            format!(
+                "{} spans many hosts; pass upstream=\"https://<host>\" (allowed: {})",
+                preset.display,
+                preset.upstreams.join(", ")
+            ),
+            true,
+        );
+    }
     let mut headers = HeaderMap::new();
     if let Some(h) = args["headers"].as_object() {
         for (k, v) in h {
@@ -306,6 +316,7 @@ async fn call_api(s: &Arc<AppState>, caller: &str, args: &Value) -> Value {
         headers,
         body,
         upstream_spec,
+        aws_scope: None,
         caller: caller.to_string(),
     };
     let resp = execute(s.clone(), HandleRef::Resolved(handle.handle_id), call).await;

@@ -9,6 +9,7 @@ use crate::policy::eval::host_allowed;
 
 pub mod adapters;
 pub mod scrub;
+pub mod sigv4;
 
 /// Broker failures, mapped to HTTP error codes at the edge.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -28,6 +29,9 @@ pub enum BrokerError {
     /// A template placeholder named a secret that does not exist or is not allowed.
     #[error("unknown or disallowed secret in placeholder {0:?}")]
     UnknownPlaceholder(String),
+    /// Part of the request could not be parsed.
+    #[error("malformed {0}")]
+    Malformed(String),
 }
 
 impl BrokerError {
@@ -39,6 +43,7 @@ impl BrokerError {
             BrokerError::InvalidUpstream(_) => "invalid_upstream",
             BrokerError::MissingField(_) => "secret_shape",
             BrokerError::UnknownPlaceholder(_) => "unknown_placeholder",
+            BrokerError::Malformed(_) => "malformed_request",
         }
     }
 }

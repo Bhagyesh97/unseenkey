@@ -32,7 +32,8 @@ pub enum Auth {
     },
     /// `{{usk:name}}` placeholders anywhere in the request.
     Template,
-    /// AWS SigV4 signing (adapter arrives in M2.3).
+    /// AWS Signature Version 4: the broker signs each request with the real
+    /// key (`broker::sigv4`); the SDK is given a handle as its access key id.
     AwsSigv4,
 }
 
@@ -50,6 +51,10 @@ pub struct PresetPolicy {
     /// Deny rules.
     #[serde(default)]
     pub deny: Vec<Rule>,
+    /// Hosts this policy is limited to, when narrower than the preset's
+    /// (for example only the S3 endpoints of AWS).
+    #[serde(default)]
+    pub upstreams: Vec<String>,
     /// Recommended for delegation to others?
     #[serde(default)]
     pub recommended: bool,
@@ -76,6 +81,10 @@ pub struct Preset {
     /// Environment variable names SDKs read for the base URL and key, for `usk env`.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Variables the SDK insists on that carry no secret: name to literal value
+    /// (AWS SDKs refuse to start without a secret access key, any will do).
+    #[serde(default)]
+    pub env_static: BTreeMap<String, String>,
     /// Policies, first is the default suggestion.
     #[serde(default)]
     pub policies: Vec<PresetPolicy>,
@@ -86,7 +95,11 @@ impl Preset {
     pub fn policy(&self, policy_id: &str) -> Option<Policy> {
         let pp = self.policies.iter().find(|p| p.id == policy_id)?;
         Some(Policy {
-            upstreams: self.upstreams.clone(),
+            upstreams: if pp.upstreams.is_empty() {
+                self.upstreams.clone()
+            } else {
+                pp.upstreams.clone()
+            },
             allow: pp.allow.clone(),
             deny: pp.deny.clone(),
             notes: Some(format!("{}: {}", self.display, pp.display)),
@@ -119,6 +132,7 @@ pub const EMBEDDED: &[(&str, &str)] = embedded![
     "slack",
     "notion",
     "cloudflare",
+    "aws",
     "generic",
 ];
 
@@ -147,6 +161,15 @@ fn parse(id: &str, text: &str) -> Result<Preset, PolicyError> {
         if pol.allow.is_empty() {
             return Err(PolicyError::Invalid(format!(
                 "preset {id} policy {} allows nothing",
+                pol.id
+            )));
+        }
+        // A policy may narrow the preset's hosts, never widen them.
+        if let Some(wide) = pol.upstreams.iter().find(|u| {
+            !p.upstreams.contains(u) && !crate::policy::eval::host_allowed(&p.upstreams, u)
+        }) {
+            return Err(PolicyError::Invalid(format!(
+                "preset {id} policy {} names host {wide}, outside the preset's hosts",
                 pol.id
             )));
         }
@@ -198,7 +221,7 @@ mod tests {
     #[test]
     fn every_embedded_preset_parses_and_explains() {
         let ids: Vec<&str> = EMBEDDED.iter().map(|(id, _)| *id).collect();
-        assert_eq!(ids.len(), 17);
+        assert_eq!(ids.len(), 18);
         for id in ids {
             let p = get(id).unwrap_or_else(|| panic!("missing {id}"));
             assert!(!p.policies.is_empty(), "{id} has no policies");
@@ -271,6 +294,80 @@ mod tests {
             evaluate(&p, &r("GET", "/v1/organization/users"), 0, Usage::default()),
             Decision::Deny(_)
         ));
+    }
+
+    #[test]
+    fn aws_policies_narrow_hosts() {
+        let aws = get("aws").unwrap();
+        assert_eq!(aws.auth, Auth::AwsSigv4);
+        assert!(aws.env_static.contains_key("AWS_SECRET_ACCESS_KEY"));
+        let r = |m: &'static str, host: &'static str, path: &'static str| Request {
+            method: m,
+            path,
+            host,
+            body_len: None,
+            caller: None,
+        };
+        let ro = policy_ref("aws:s3-read-only").unwrap();
+        let s3 = "s3.eu-west-1.amazonaws.com";
+        assert!(evaluate(&ro, &r("GET", s3, "/bucket/key"), 0, Usage::default()).is_allow());
+        assert!(evaluate(
+            &ro,
+            &r("HEAD", "s3.amazonaws.com", "/bucket"),
+            0,
+            Usage::default()
+        )
+        .is_allow());
+        assert!(matches!(
+            evaluate(&ro, &r("PUT", s3, "/bucket/key"), 0, Usage::default()),
+            Decision::Deny(_)
+        ));
+        // GET is not "read-only" outside S3 (query APIs take actions in a GET).
+        assert!(matches!(
+            evaluate(
+                &ro,
+                &r("GET", "ec2.eu-west-1.amazonaws.com", "/"),
+                0,
+                Usage::default()
+            ),
+            Decision::Deny(_)
+        ));
+        let s3_all = policy_ref("aws:s3").unwrap();
+        assert!(evaluate(&s3_all, &r("PUT", s3, "/bucket/key"), 0, Usage::default()).is_allow());
+        assert!(matches!(
+            evaluate(
+                &s3_all,
+                &r("POST", "dynamodb.eu-west-1.amazonaws.com", "/"),
+                0,
+                Usage::default()
+            ),
+            Decision::Deny(_)
+        ));
+        let full = policy_ref("aws:full").unwrap();
+        assert!(evaluate(
+            &full,
+            &r("POST", "dynamodb.eu-west-1.amazonaws.com", "/"),
+            0,
+            Usage::default()
+        )
+        .is_allow());
+        assert!(matches!(
+            evaluate(&full, &r("GET", "evil.example", "/"), 0, Usage::default()),
+            Decision::Deny(_)
+        ));
+        // Narrowing that widens is rejected at load time.
+        let bad = r#"
+id = "x"
+display = "X"
+upstreams = ["api.example.com"]
+auth = { kind = "bearer" }
+[[policies]]
+id = "full"
+display = "f"
+allow = ["* /**"]
+upstreams = ["other.example.com"]
+"#;
+        assert!(parse("x", bad).is_err());
     }
 
     #[test]

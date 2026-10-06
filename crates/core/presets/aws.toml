@@ -1,0 +1,36 @@
+id = "aws"
+display = "Amazon Web Services"
+upstreams = ["*.amazonaws.com"]
+auth = { kind = "aws_sigv4" }
+docs = "https://console.aws.amazon.com/iam/home#/security_credentials"
+base_path = ""
+
+# The SDK gets the handle as its access key id and signs with a placeholder
+# secret; the broker signs again with the real key. What a key may do in AWS is
+# decided by IAM. These policies add a second, coarser fence in front of it:
+# which endpoints (service and region) the handle can reach, and for S3, which
+# HTTP methods.
+[env]
+base_url = "AWS_ENDPOINT_URL"
+api_key = "AWS_ACCESS_KEY_ID"
+
+[env_static]
+AWS_SECRET_ACCESS_KEY = "handled-by-unseenkey"
+
+[[policies]]
+id = "s3-read-only"
+display = "S3: download and list objects only"
+recommended = true
+upstreams = ["s3.amazonaws.com", "s3.*.amazonaws.com", "*.s3.amazonaws.com", "*.s3.*.amazonaws.com"]
+allow = ["GET /**", "HEAD /**"]
+
+[[policies]]
+id = "s3"
+display = "S3: read, upload and delete objects"
+upstreams = ["s3.amazonaws.com", "s3.*.amazonaws.com", "*.s3.amazonaws.com", "*.s3.*.amazonaws.com"]
+allow = ["* /**"]
+
+[[policies]]
+id = "full"
+display = "Every AWS service the key itself is allowed to use"
+allow = ["* /**"]

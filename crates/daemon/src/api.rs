@@ -395,11 +395,14 @@ pub async fn create_secret(
             "value is empty",
         ));
     }
-    let detected = providers::detect(req.value.as_bytes());
-    let provider = req
-        .provider
-        .clone()
-        .or_else(|| detected.map(|d| d.provider.to_string()));
+    // AWS credentials arrive as several values at once (key id, secret access
+    // key, perhaps a session token), pasted in one of a handful of shapes.
+    let aws_text = providers::parse_aws_credentials(&req.value);
+    let detected = if aws_text.is_some() {
+        providers::provider("aws").copied()
+    } else {
+        providers::detect(req.value.as_bytes())
+    };
     let kind = match &req.kind {
         Some(k) => SecretKind::parse(k).ok_or_else(|| {
             ApiError::new(
@@ -410,6 +413,17 @@ pub async fn create_secret(
         })?,
         None => detected.map(|d| d.kind).unwrap_or(SecretKind::ApiKey),
     };
+    let provider = req
+        .provider
+        .clone()
+        .or_else(|| detected.map(|d| d.provider.to_string()))
+        .or_else(|| (kind == SecretKind::AwsCredentials).then(|| "aws".to_string()));
+    let is_aws = kind == SecretKind::AwsCredentials || provider.as_deref() == Some("aws");
+    let kind = if is_aws && req.kind.is_none() {
+        SecretKind::AwsCredentials
+    } else {
+        kind
+    };
     let upstreams = if req.upstreams.is_empty() {
         provider
             .as_deref()
@@ -419,15 +433,38 @@ pub async fn create_secret(
     } else {
         req.upstreams.clone()
     };
-    let fields = req
+    let mut fields: BTreeMap<String, SecretBytes> = req
         .fields
         .iter()
         .map(|(k, v)| (k.clone(), SecretBytes::from_slice(v.as_bytes())))
         .collect();
+    let mut value = SecretBytes::from_slice(req.value.as_bytes());
+    // Stored shape for AWS: the secret access key is the value, the key id and
+    // any session token are fields.
+    if is_aws && !fields.contains_key("access_key_id") {
+        let Some(c) = &aws_text else {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "aws_credentials_incomplete",
+                "AWS needs an access key id and a secret access key. Paste both (two lines, a ~/.aws/credentials section, the console's CSV, or the JSON printed by `aws sts`), or send the secret access key as the value with a field access_key_id.",
+            ));
+        };
+        value = SecretBytes::from_slice(c.secret_access_key.as_bytes());
+        fields.insert(
+            "access_key_id".into(),
+            SecretBytes::from_slice(c.access_key_id.as_bytes()),
+        );
+        if let Some(token) = &c.session_token {
+            fields.insert(
+                "session_token".into(),
+                SecretBytes::from_slice(token.as_bytes()),
+            );
+        }
+    }
     let new = NewSecret {
         name: req.name.clone(),
         kind,
-        value: SecretBytes::from_slice(req.value.as_bytes()),
+        value,
         fields,
         provider: provider.clone(),
         upstreams: upstreams.clone(),
@@ -891,6 +928,10 @@ pub async fn create_handle(
         };
         if let Some(var) = key_var {
             env.insert(var.clone(), plain.clone());
+        }
+        // Variables the SDK insists on that carry nothing secret.
+        for (name, value) in &p.env_static {
+            env.insert(name.clone(), value.clone());
         }
     }
     tracing::info!(handle = %record.handle_id, label = %record.label, "handle created");

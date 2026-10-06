@@ -18,6 +18,8 @@ argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
 hkdf = "0.12"
 sha2 = { version = "0.10", default-features = false }
+# HMAC-SHA256 for AWS SigV4 (already in the tree through hkdf).
+hmac = { version = "0.12", default-features = false }
 blake3 = "1"
 ed25519-dalek = { version = "2", default-features = false, features = ["alloc", "zeroize"] }
 rand_core = { version = "0.6", features = ["getrandom"] }

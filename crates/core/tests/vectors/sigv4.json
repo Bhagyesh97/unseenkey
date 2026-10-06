@@ -1,0 +1,403 @@
+{
+ "generator": "botocore 1.43.108",
+ "vectors": [
+  {
+   "name": "iam-list-users (the AWS General Reference example)",
+   "service": "iam",
+   "region": "us-east-1",
+   "amz_date": "20150830T123600Z",
+   "access_key_id": "AKIDEXAMPLE",
+   "secret_access_key": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+   "session_token": null,
+   "method": "GET",
+   "path": "/",
+   "query": "Action=ListUsers&Version=2010-05-08",
+   "headers": [
+    [
+     "content-type",
+     "application/x-www-form-urlencoded; charset=utf-8"
+    ],
+    [
+     "host",
+     "iam.amazonaws.com"
+    ],
+    [
+     "x-amz-date",
+     "20150830T123600Z"
+    ]
+   ],
+   "payload_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body_utf8": "",
+   "canonical_request": "GET\n/\nAction=ListUsers&Version=2010-05-08\ncontent-type:application/x-www-form-urlencoded; charset=utf-8\nhost:iam.amazonaws.com\nx-amz-date:20150830T123600Z\n\ncontent-type;host;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "signature": "5d672d79c15b13162d9279b0855cfba6789a8edb4c82c400e06b5924a6f2b5d7"
+  },
+  {
+   "name": "get-vanilla",
+   "service": "service",
+   "region": "us-east-1",
+   "amz_date": "20150830T123600Z",
+   "access_key_id": "AKIDEXAMPLE",
+   "secret_access_key": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+   "session_token": null,
+   "method": "GET",
+   "path": "/",
+   "query": null,
+   "headers": [
+    [
+     "host",
+     "example.amazonaws.com"
+    ],
+    [
+     "x-amz-date",
+     "20150830T123600Z"
+    ]
+   ],
+   "payload_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body_utf8": "",
+   "canonical_request": "GET\n/\n\nhost:example.amazonaws.com\nx-amz-date:20150830T123600Z\n\nhost;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "signature": "5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31"
+  },
+  {
+   "name": "query-order-and-encoding",
+   "service": "sqs",
+   "region": "eu-west-1",
+   "amz_date": "20150830T123600Z",
+   "access_key_id": "AKIDEXAMPLE",
+   "secret_access_key": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+   "session_token": null,
+   "method": "GET",
+   "path": "/123456789012/my-queue",
+   "query": "b=2&a=2&a=1&Param=value%20with%20spaces&unreserved=-._~&slash=a%2Fb&plus=x%2By&empty=",
+   "headers": [
+    [
+     "host",
+     "sqs.eu-west-1.amazonaws.com"
+    ],
+    [
+     "x-amz-date",
+     "20150830T123600Z"
+    ]
+   ],
+   "payload_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body_utf8": "",
+   "canonical_request": "GET\n/123456789012/my-queue\nParam=value%20with%20spaces&a=1&a=2&b=2&empty=&plus=x%2By&slash=a%2Fb&unreserved=-._~\nhost:sqs.eu-west-1.amazonaws.com\nx-amz-date:20150830T123600Z\n\nhost;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "signature": "62d15c8d7f9b20c4eb4bb5f583ce7fe457baf2732841fb03f6535756b69471f4"
+  },
+  {
+   "name": "dynamodb-json-target",
+   "service": "dynamodb",
+   "region": "us-west-2",
+   "amz_date": "20261007T101112Z",
+   "access_key_id": "AKIDEXAMPLE",
+   "secret_access_key": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+   "session_token": null,
+   "method": "POST",
+   "path": "/",
+   "query": null,
+   "headers": [
+    [
+     "content-type",
+     "application/x-amz-json-1.0"
+    ],
+    [
+     "host",
+     "dynamodb.us-west-2.amazonaws.com"
+    ],
+    [
+     "x-amz-date",
+     "20261007T101112Z"
+    ],
+    [
+     "x-amz-target",
+     "DynamoDB_20120810.GetItem"
+    ]
+   ],
+   "payload_hash": "3d1ac5d25e4f90c321dcceaec134648dfc506e4167bcb5386f2fa43d52d2d28e",
+   "body_utf8": "{\"TableName\":\"users\",\"Key\":{\"id\":{\"S\":\"42\"}}}",
+   "canonical_request": "POST\n/\n\ncontent-type:application/x-amz-json-1.0\nhost:dynamodb.us-west-2.amazonaws.com\nx-amz-date:20261007T101112Z\nx-amz-target:DynamoDB_20120810.GetItem\n\ncontent-type;host;x-amz-date;x-amz-target\n3d1ac5d25e4f90c321dcceaec134648dfc506e4167bcb5386f2fa43d52d2d28e",
+   "signature": "1875dab09550e9e29abba2f0ca72c3a53e42bfecfecd9b079625ca904ef3f690"
+  },
+  {
+   "name": "session-token",
+   "service": "sts",
+   "region": "ap-south-1",
+   "amz_date": "20261007T101112Z",
+   "access_key_id": "AKIDEXAMPLE",
+   "secret_access_key": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+   "session_token": "AQoDYXdzEPT//////////wEXAMPLEtc764bNrC9SAPBSM22wDOk4x4HIZ8j4FZTwdQWLWsKWHGBuFqwAeMicRXmxfpSPfIeoIYRqTflfKD8YUuwthAx7mSEI/qkPpKPi/kMcGdQrmGdeehM4IC1NtBmUpp2wUE8phUZampKsburEDy0KPkyQDYwT7WZ0wq5VSXDvp75YU9HFvlRd8Tx6q6fE8YQcHNVXAkiY9q6d+xo0rKwT38xVqr7ZD0u0iPPkUL64lIZbqBAz+scqKmlzm8FDrypNC9Yjc8fPOLn9FX9KSYvKTr4rvx3iSIlTJabIQwj2ICCR/oLxBA==",
+   "method": "POST",
+   "path": "/",
+   "query": null,
+   "headers": [
+    [
+     "content-type",
+     "application/x-www-form-urlencoded; charset=utf-8"
+    ],
+    [
+     "host",
+     "sts.ap-south-1.amazonaws.com"
+    ],
+    [
+     "x-amz-date",
+     "20261007T101112Z"
+    ],
+    [
+     "x-amz-security-token",
+     "AQoDYXdzEPT//////////wEXAMPLEtc764bNrC9SAPBSM22wDOk4x4HIZ8j4FZTwdQWLWsKWHGBuFqwAeMicRXmxfpSPfIeoIYRqTflfKD8YUuwthAx7mSEI/qkPpKPi/kMcGdQrmGdeehM4IC1NtBmUpp2wUE8phUZampKsburEDy0KPkyQDYwT7WZ0wq5VSXDvp75YU9HFvlRd8Tx6q6fE8YQcHNVXAkiY9q6d+xo0rKwT38xVqr7ZD0u0iPPkUL64lIZbqBAz+scqKmlzm8FDrypNC9Yjc8fPOLn9FX9KSYvKTr4rvx3iSIlTJabIQwj2ICCR/oLxBA=="
+    ]
+   ],
+   "payload_hash": "ab821ae955788b0e33ebd34c208442ccfc2d406e2edc5e7a39bd6458fbb4f843",
+   "body_utf8": "Action=GetCallerIdentity&Version=2011-06-15",
+   "canonical_request": "POST\n/\n\ncontent-type:application/x-www-form-urlencoded; charset=utf-8\nhost:sts.ap-south-1.amazonaws.com\nx-amz-date:20261007T101112Z\nx-amz-security-token:AQoDYXdzEPT//////////wEXAMPLEtc764bNrC9SAPBSM22wDOk4x4HIZ8j4FZTwdQWLWsKWHGBuFqwAeMicRXmxfpSPfIeoIYRqTflfKD8YUuwthAx7mSEI/qkPpKPi/kMcGdQrmGdeehM4IC1NtBmUpp2wUE8phUZampKsburEDy0KPkyQDYwT7WZ0wq5VSXDvp75YU9HFvlRd8Tx6q6fE8YQcHNVXAkiY9q6d+xo0rKwT38xVqr7ZD0u0iPPkUL64lIZbqBAz+scqKmlzm8FDrypNC9Yjc8fPOLn9FX9KSYvKTr4rvx3iSIlTJabIQwj2ICCR/oLxBA==\n\ncontent-type;host;x-amz-date;x-amz-security-token\nab821ae955788b0e33ebd34c208442ccfc2d406e2edc5e7a39bd6458fbb4f843",
+   "signature": "9b172504f6b29b9b75a010ca3c93ca948b5381b7891ac8e76639d299c08cef6e"
+  },
+  {
+   "name": "execute-api-path-is-encoded-twice",
+   "service": "execute-api",
+   "region": "us-east-1",
+   "amz_date": "20150830T123600Z",
+   "access_key_id": "AKIDEXAMPLE",
+   "secret_access_key": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+   "session_token": null,
+   "method": "GET",
+   "path": "/prod/items/a%20b/caf%C3%A9",
+   "query": "q=1",
+   "headers": [
+    [
+     "host",
+     "abc123.execute-api.us-east-1.amazonaws.com"
+    ],
+    [
+     "x-amz-date",
+     "20150830T123600Z"
+    ]
+   ],
+   "payload_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body_utf8": "",
+   "canonical_request": "GET\n/prod/items/a%2520b/caf%25C3%25A9\nq=1\nhost:abc123.execute-api.us-east-1.amazonaws.com\nx-amz-date:20150830T123600Z\n\nhost;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "signature": "6796af8831f6f367d4bb790ceba8284e840dce69c21959afd2f27005f6023084"
+  },
+  {
+   "name": "non-s3-path-normalised",
+   "service": "lambda",
+   "region": "us-east-1",
+   "amz_date": "20150830T123600Z",
+   "access_key_id": "AKIDEXAMPLE",
+   "secret_access_key": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+   "session_token": null,
+   "method": "GET",
+   "path": "/2015-03-31/./functions/../functions//my-fn/",
+   "query": null,
+   "headers": [
+    [
+     "host",
+     "lambda.us-east-1.amazonaws.com"
+    ],
+    [
+     "x-amz-date",
+     "20150830T123600Z"
+    ]
+   ],
+   "payload_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body_utf8": "",
+   "canonical_request": "GET\n/2015-03-31/functions/my-fn/\n\nhost:lambda.us-east-1.amazonaws.com\nx-amz-date:20150830T123600Z\n\nhost;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "signature": "3a47a2344da3a9cde8a99ef8f601e9f7f0e62e5444857ac08dd54fcd8632c97b"
+  },
+  {
+   "name": "header-whitespace-collapsed",
+   "service": "service",
+   "region": "us-east-1",
+   "amz_date": "20150830T123600Z",
+   "access_key_id": "AKIDEXAMPLE",
+   "secret_access_key": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+   "session_token": null,
+   "method": "GET",
+   "path": "/",
+   "query": null,
+   "headers": [
+    [
+     "host",
+     "example.amazonaws.com"
+    ],
+    [
+     "x-amz-date",
+     "20150830T123600Z"
+    ],
+    [
+     "x-amz-meta-note",
+     "  a   b    c  "
+    ]
+   ],
+   "payload_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body_utf8": "",
+   "canonical_request": "GET\n/\n\nhost:example.amazonaws.com\nx-amz-date:20150830T123600Z\nx-amz-meta-note:a b c\n\nhost;x-amz-date;x-amz-meta-note\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "signature": "79a3a25ec5a1a1db4ace45d231100a9175c7458b03532cc9eb5f900b20ecdb5f"
+  },
+  {
+   "name": "s3-get-object-special-characters",
+   "service": "s3",
+   "region": "us-east-1",
+   "amz_date": "20130524T000000Z",
+   "access_key_id": "AKIDEXAMPLE",
+   "secret_access_key": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+   "session_token": null,
+   "method": "GET",
+   "path": "/examplebucket/photos/2026/a%20b%2Bc%3Dd.jpg",
+   "query": null,
+   "headers": [
+    [
+     "host",
+     "s3.us-east-1.amazonaws.com"
+    ],
+    [
+     "range",
+     "bytes=0-9"
+    ],
+    [
+     "x-amz-content-sha256",
+     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ],
+    [
+     "x-amz-date",
+     "20130524T000000Z"
+    ]
+   ],
+   "payload_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body_utf8": "",
+   "canonical_request": "GET\n/examplebucket/photos/2026/a%20b%2Bc%3Dd.jpg\n\nhost:s3.us-east-1.amazonaws.com\nrange:bytes=0-9\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:20130524T000000Z\n\nhost;range;x-amz-content-sha256;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "signature": "da4700d0844de35b7d2155d64915e3bcda236a80b5083af33a86116668a9bf5b"
+  },
+  {
+   "name": "s3-path-not-normalised",
+   "service": "s3",
+   "region": "eu-central-1",
+   "amz_date": "20130524T000000Z",
+   "access_key_id": "AKIDEXAMPLE",
+   "secret_access_key": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+   "session_token": null,
+   "method": "GET",
+   "path": "/examplebucket/a/./b/../c//d",
+   "query": null,
+   "headers": [
+    [
+     "host",
+     "s3.eu-central-1.amazonaws.com"
+    ],
+    [
+     "x-amz-content-sha256",
+     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ],
+    [
+     "x-amz-date",
+     "20130524T000000Z"
+    ]
+   ],
+   "payload_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body_utf8": "",
+   "canonical_request": "GET\n/examplebucket/a/./b/../c//d\n\nhost:s3.eu-central-1.amazonaws.com\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:20130524T000000Z\n\nhost;x-amz-content-sha256;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "signature": "68a5a8a0b5d61e7aeca3fa277d028a1819c30e1641b7547f0e856ed3260ce92e"
+  },
+  {
+   "name": "s3-put-object",
+   "service": "s3",
+   "region": "us-east-1",
+   "amz_date": "20130524T000000Z",
+   "access_key_id": "AKIDEXAMPLE",
+   "secret_access_key": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+   "session_token": null,
+   "method": "PUT",
+   "path": "/examplebucket/test%24file.text",
+   "query": null,
+   "headers": [
+    [
+     "content-type",
+     "text/plain"
+    ],
+    [
+     "host",
+     "s3.us-east-1.amazonaws.com"
+    ],
+    [
+     "x-amz-content-sha256",
+     "44ce7dd67c959e0d3524ffac1771dfbba87d2b6b4b4e99e42034a8b803f8b072"
+    ],
+    [
+     "x-amz-date",
+     "20130524T000000Z"
+    ],
+    [
+     "x-amz-storage-class",
+     "REDUCED_REDUNDANCY"
+    ]
+   ],
+   "payload_hash": "44ce7dd67c959e0d3524ffac1771dfbba87d2b6b4b4e99e42034a8b803f8b072",
+   "body_utf8": "Welcome to Amazon S3.",
+   "canonical_request": "PUT\n/examplebucket/test%24file.text\n\ncontent-type:text/plain\nhost:s3.us-east-1.amazonaws.com\nx-amz-content-sha256:44ce7dd67c959e0d3524ffac1771dfbba87d2b6b4b4e99e42034a8b803f8b072\nx-amz-date:20130524T000000Z\nx-amz-storage-class:REDUCED_REDUNDANCY\n\ncontent-type;host;x-amz-content-sha256;x-amz-date;x-amz-storage-class\n44ce7dd67c959e0d3524ffac1771dfbba87d2b6b4b4e99e42034a8b803f8b072",
+   "signature": "b2ea73692bde10f73681e9dd204659377570496ed3027edd69db6757dafd750c"
+  },
+  {
+   "name": "s3-list-objects-v2",
+   "service": "s3",
+   "region": "us-east-1",
+   "amz_date": "20130524T000000Z",
+   "access_key_id": "AKIDEXAMPLE",
+   "secret_access_key": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+   "session_token": null,
+   "method": "GET",
+   "path": "/examplebucket",
+   "query": "list-type=2&max-keys=2&prefix=J%2F",
+   "headers": [
+    [
+     "host",
+     "s3.us-east-1.amazonaws.com"
+    ],
+    [
+     "x-amz-content-sha256",
+     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ],
+    [
+     "x-amz-date",
+     "20130524T000000Z"
+    ]
+   ],
+   "payload_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body_utf8": "",
+   "canonical_request": "GET\n/examplebucket\nlist-type=2&max-keys=2&prefix=J%2F\nhost:s3.us-east-1.amazonaws.com\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:20130524T000000Z\n\nhost;x-amz-content-sha256;x-amz-date\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "signature": "bdfca6f5d6db7eb5bc34966e88017dc59c3a5ea6db9875aa3cc77d6de6eeded1"
+  },
+  {
+   "name": "s3-session-token",
+   "service": "s3",
+   "region": "us-east-1",
+   "amz_date": "20261007T101112Z",
+   "access_key_id": "AKIDEXAMPLE",
+   "secret_access_key": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+   "session_token": "AQoDYXdzEPT//////////wEXAMPLEtc764bNrC9SAPBSM22wDOk4x4HIZ8j4FZTwdQWLWsKWHGBuFqwAeMicRXmxfpSPfIeoIYRqTflfKD8YUuwthAx7mSEI/qkPpKPi/kMcGdQrmGdeehM4IC1NtBmUpp2wUE8phUZampKsburEDy0KPkyQDYwT7WZ0wq5VSXDvp75YU9HFvlRd8Tx6q6fE8YQcHNVXAkiY9q6d+xo0rKwT38xVqr7ZD0u0iPPkUL64lIZbqBAz+scqKmlzm8FDrypNC9Yjc8fPOLn9FX9KSYvKTr4rvx3iSIlTJabIQwj2ICCR/oLxBA==",
+   "method": "HEAD",
+   "path": "/examplebucket/key",
+   "query": null,
+   "headers": [
+    [
+     "host",
+     "s3.us-east-1.amazonaws.com"
+    ],
+    [
+     "x-amz-content-sha256",
+     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    ],
+    [
+     "x-amz-date",
+     "20261007T101112Z"
+    ],
+    [
+     "x-amz-security-token",
+     "AQoDYXdzEPT//////////wEXAMPLEtc764bNrC9SAPBSM22wDOk4x4HIZ8j4FZTwdQWLWsKWHGBuFqwAeMicRXmxfpSPfIeoIYRqTflfKD8YUuwthAx7mSEI/qkPpKPi/kMcGdQrmGdeehM4IC1NtBmUpp2wUE8phUZampKsburEDy0KPkyQDYwT7WZ0wq5VSXDvp75YU9HFvlRd8Tx6q6fE8YQcHNVXAkiY9q6d+xo0rKwT38xVqr7ZD0u0iPPkUL64lIZbqBAz+scqKmlzm8FDrypNC9Yjc8fPOLn9FX9KSYvKTr4rvx3iSIlTJabIQwj2ICCR/oLxBA=="
+    ]
+   ],
+   "payload_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "body_utf8": "",
+   "canonical_request": "HEAD\n/examplebucket/key\n\nhost:s3.us-east-1.amazonaws.com\nx-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nx-amz-date:20261007T101112Z\nx-amz-security-token:AQoDYXdzEPT//////////wEXAMPLEtc764bNrC9SAPBSM22wDOk4x4HIZ8j4FZTwdQWLWsKWHGBuFqwAeMicRXmxfpSPfIeoIYRqTflfKD8YUuwthAx7mSEI/qkPpKPi/kMcGdQrmGdeehM4IC1NtBmUpp2wUE8phUZampKsburEDy0KPkyQDYwT7WZ0wq5VSXDvp75YU9HFvlRd8Tx6q6fE8YQcHNVXAkiY9q6d+xo0rKwT38xVqr7ZD0u0iPPkUL64lIZbqBAz+scqKmlzm8FDrypNC9Yjc8fPOLn9FX9KSYvKTr4rvx3iSIlTJabIQwj2ICCR/oLxBA==\n\nhost;x-amz-content-sha256;x-amz-date;x-amz-security-token\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "signature": "099cf9899710f3e3b8582b8c0eac137dcf8ee8e5b0d2191cbd81df908511a86b"
+  }
+ ]
+}
