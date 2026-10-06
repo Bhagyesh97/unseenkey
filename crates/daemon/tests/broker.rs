@@ -589,6 +589,93 @@ async fn locked_vault_and_browser_origin_on_proxy_routes() {
     env.daemon.shutdown().await;
 }
 
+/// D-26: a handle shaped like the provider's key behaves like any other handle.
+#[tokio::test(flavor = "multi_thread")]
+async fn camouflage_handles_work_like_any_other() {
+    let env = setup().await;
+    let (code, h) = env.post(
+        "/v1/handles",
+        json!({ "secret": "openai", "label": "picky tool", "preset_policy": "openai:chat", "camouflage": true }),
+    );
+    assert_eq!(code, 201, "{h}");
+    let handle = h["handle"].as_str().unwrap().to_string();
+    // The real key is a project key, so the handle takes that shape, with the marker.
+    assert!(handle.starts_with("sk-proj-usk-"), "{handle}");
+    assert_eq!(h["env"]["OPENAI_API_KEY"], handle);
+    let (code, body, _) = env.proxy(
+        "POST",
+        "/p/openai/v1/chat/completions",
+        ("Authorization", &format!("Bearer {handle}")),
+        Some(json!({ "model": "x" })),
+    );
+    assert_eq!(code, 200, "{body}");
+    assert_eq!(body["auth_prefix"], "Bearer sk-pr");
+    assert_eq!(
+        body["auth_len"],
+        ("Bearer ".len() + OPENAI_KEY.len()) as u64
+    );
+    assert!(!body.to_string().contains(&handle));
+
+    // The same shape, never issued, is just an unknown handle.
+    let fake = format!("sk-proj-usk-{}", "a".repeat(40));
+    let (code, body, _) = env.proxy(
+        "POST",
+        "/p/openai/v1/chat/completions",
+        ("Authorization", &format!("Bearer {fake}")),
+        Some(json!({})),
+    );
+    assert_eq!(code, 401, "{body}");
+    assert_eq!(body["error"], "unknown_handle");
+
+    // Stripe: the format follows the mode of the real key.
+    let (code, h) = env.post(
+        "/v1/handles",
+        json!({ "secret": "stripe-live", "label": "plugin", "camouflage": true }),
+    );
+    assert_eq!(code, 201, "{h}");
+    assert!(
+        h["handle"].as_str().unwrap().starts_with("sk_live_usk"),
+        "{h}"
+    );
+
+    // Revoking works by id as for any handle; the string then fails.
+    let id = h["id"].as_str().unwrap();
+    let stripe_handle = h["handle"].as_str().unwrap().to_string();
+    let (code, _, _) = Env::call(env.mgmt("DELETE", &format!("/v1/handles/{id}")).call());
+    assert_eq!(code, 200);
+    let (code, _, _) = env.proxy(
+        "GET",
+        "/p/stripe/v1/customers",
+        ("Authorization", &format!("Bearer {stripe_handle}")),
+        None,
+    );
+    assert_eq!(code, 401);
+
+    // A secret whose provider has no key-shaped format: refused, nothing created.
+    let (code, _) = env.post(
+        "/v1/secrets",
+        json!({ "name": "example", "value": "tok_abcdefghijklmnop", "provider": "generic", "upstreams": ["127.0.0.1"] }),
+    );
+    assert_eq!(code, 201);
+    let (_, before) = env.get("/v1/handles");
+    let (code, body) = env.post(
+        "/v1/handles",
+        json!({ "secret": "example", "label": "nope", "camouflage": true }),
+    );
+    assert_eq!(code, 400, "{body}");
+    assert_eq!(body["error"], "no_camouflage_format");
+    let (_, after) = env.get("/v1/handles");
+    assert_eq!(
+        before.as_array().unwrap().len(),
+        after.as_array().unwrap().len()
+    );
+
+    // By default handles stay canonical.
+    let (plain, _) = create_handle(&env, "openai", "normal", Some("openai:chat"));
+    assert!(plain.starts_with("usk_h_"));
+    env.daemon.shutdown().await;
+}
+
 #[allow(dead_code)]
 fn _bytes_in_scope(_: Bytes) {}
 #[allow(dead_code)]

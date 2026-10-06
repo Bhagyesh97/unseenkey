@@ -60,3 +60,21 @@ deny = [
 id = "full"
 display = "Full access (not recommended for delegation)"
 allow = ["* /**"]
+
+# Key-shaped handles for tools that check the key format (opt-in, D-26).
+
+[[handle_formats]]
+when = "sk_live_"
+format = "sk_live_usk{24}"
+
+[[handle_formats]]
+when = "sk_test_"
+format = "sk_test_usk{24}"
+
+[[handle_formats]]
+when = "rk_live_"
+format = "rk_live_usk{24}"
+
+[[handle_formats]]
+when = "rk_test_"
+format = "rk_test_usk{24}"

@@ -180,6 +180,10 @@ enum Command {
         /// Output form.
         #[arg(long, value_enum)]
         shell: Option<Shell>,
+        /// Shape the handle like the provider's own keys, for tools that
+        /// check the key format. It is still only a handle.
+        #[arg(long)]
+        camouflage: bool,
     },
     /// Show the audit log.
     Log {
@@ -345,6 +349,7 @@ pub fn run() -> Result<(), CliError> {
                 policy,
                 policy_file,
                 expires_days,
+                camouflage,
             } => handle_create(
                 &paths,
                 &secret,
@@ -352,6 +357,7 @@ pub fn run() -> Result<(), CliError> {
                 policy,
                 policy_file,
                 expires_days,
+                camouflage,
                 cli.json,
             ),
             HandleAction::Ls => handle_ls(&paths, cli.json),
@@ -369,7 +375,8 @@ pub fn run() -> Result<(), CliError> {
             policy,
             label,
             shell,
-        } => env_cmd(&paths, &secret, policy, label, shell),
+            camouflage,
+        } => env_cmd(&paths, &secret, policy, label, shell, camouflage),
         Command::Log {
             action,
             kind,
@@ -858,6 +865,10 @@ enum HandleAction {
         /// Expire after this many days.
         #[arg(long)]
         expires_days: Option<u32>,
+        /// Shape the handle like the provider's own keys, for tools that
+        /// check the key format. It is still only a handle.
+        #[arg(long)]
+        camouflage: bool,
     },
     /// List handles.
     Ls,
@@ -975,10 +986,11 @@ fn handle_create(
     policy: Option<String>,
     policy_file: Option<PathBuf>,
     expires_days: Option<u32>,
+    camouflage: bool,
     json: bool,
 ) -> Result<(), CliError> {
     let c = unlocked(paths)?;
-    let mut body = json!({ "secret": secret, "label": label, "expires_in_days": expires_days });
+    let mut body = json!({ "secret": secret, "label": label, "expires_in_days": expires_days, "camouflage": camouflage });
     if let Some(spec) = policy {
         body["preset_policy"] = json!(qualify_policy(&c, secret, &spec)?);
     } else if let Some(f) = policy_file {
@@ -1113,10 +1125,11 @@ fn env_cmd(
     policy: Option<String>,
     label: Option<String>,
     shell: Option<Shell>,
+    camouflage: bool,
 ) -> Result<(), CliError> {
     let c = unlocked(paths)?;
     let label = label.unwrap_or_else(|| format!("{secret} env"));
-    let mut body = json!({ "secret": secret, "label": label });
+    let mut body = json!({ "secret": secret, "label": label, "camouflage": camouflage });
     if let Some(spec) = policy {
         body["preset_policy"] = json!(qualify_policy(&c, secret, &spec)?);
     }

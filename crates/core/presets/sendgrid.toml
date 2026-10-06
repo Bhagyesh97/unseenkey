@@ -25,3 +25,9 @@ deny = ["DELETE /**", "* /v3/api_keys/**", "* /v3/user/**", "* /v3/teammates/**"
 id = "full"
 display = "Full access (not recommended for delegation)"
 allow = ["* /**"]
+
+# Key-shaped handles for tools that check the key format (opt-in, D-26).
+
+[[handle_formats]]
+when = "SG."
+format = "SG.usk{19}.{43}"

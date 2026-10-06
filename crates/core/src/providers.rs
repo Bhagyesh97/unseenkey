@@ -184,6 +184,10 @@ pub fn detect(value: &[u8]) -> Option<Detection> {
     if s.is_empty() {
         return None;
     }
+    // A handle is not a key, however much a camouflage handle looks like one.
+    if crate::presets::is_handle(s) {
+        return None;
+    }
     let p = |id: &str| *provider(id).expect("known provider");
 
     // Order matters: most specific prefixes first.

@@ -33,3 +33,9 @@ deny = [
 id = "full"
 display = "Full access (not recommended for delegation)"
 allow = ["* /**"]
+
+# Key-shaped handles for tools that check the key format (opt-in, D-26).
+
+[[handle_formats]]
+when = "sk-or-"
+format = "sk-or-v1-usk{40}"

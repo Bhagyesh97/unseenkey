@@ -544,6 +544,71 @@ fn aws_credentials_and_sdk_environment() {
 }
 
 #[test]
+fn camouflage_handles_from_the_cli() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    let _stop = StopDaemon(&vault);
+    assert!(usk(&vault, &["init", "--profile", "light"], PW)
+        .status
+        .success());
+    let key = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEF";
+    let o = usk(&vault, &["add", "openai", "--stdin"], &format!("{PW}{key}"));
+    assert!(o.status.success(), "{}", err(&o));
+
+    let o = usk(
+        &vault,
+        &[
+            "env",
+            "openai",
+            "--policy",
+            "chat",
+            "--camouflage",
+            "--shell",
+            "dotenv",
+        ],
+        "",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let env_text = out(&o);
+    let handle = env_text
+        .lines()
+        .find_map(|l| l.strip_prefix("OPENAI_API_KEY="))
+        .expect("OPENAI_API_KEY line")
+        .to_string();
+    assert!(handle.starts_with("sk-proj-usk-"), "{handle}");
+    assert_ne!(handle, key);
+
+    // A project .env that already holds the camouflage handle: the guard knows
+    // it is a handle, not a leaked OpenAI key, and leaves it alone.
+    let env_file = dir.path().join(".env");
+    std::fs::write(&env_file, format!("PORT=3000\n{env_text}")).unwrap();
+    let o = usk(&vault, &["guard", "fix", env_file.to_str().unwrap()], "");
+    assert!(o.status.success(), "{}", err(&o));
+    let after = std::fs::read_to_string(&env_file).unwrap();
+    assert!(
+        after.contains(&format!("OPENAI_API_KEY={handle}")),
+        "{after}"
+    );
+    let o = usk(&vault, &["--json", "ls"], "");
+    let j: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
+    assert_eq!(
+        j.as_array().unwrap().len(),
+        1,
+        "the handle was not imported as a secret"
+    );
+
+    // Without the flag, the canonical form.
+    let o = usk(
+        &vault,
+        &[
+            "env", "openai", "--policy", "chat", "--label", "plain", "--shell", "dotenv",
+        ],
+        "",
+    );
+    assert!(out(&o).contains("OPENAI_API_KEY=usk_h_"), "{}", out(&o));
+}
+
+#[test]
 fn status_without_vault() {
     let dir = tempfile::tempdir().unwrap();
     let vault = dir.path().join("vault.db");

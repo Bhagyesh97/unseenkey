@@ -81,6 +81,7 @@ function CreateHandle({ onDone, onCancel }: { onDone: () => void; onCancel: () =
   const [policy, setPolicy] = useState("");
   const [label, setLabel] = useState("");
   const [days, setDays] = useState<string>("");
+  const [camouflage, setCamouflage] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [created, setCreated] = useState<HandleCreated | null>(null);
@@ -101,6 +102,7 @@ function CreateHandle({ onDone, onCancel }: { onDone: () => void; onCancel: () =
       const body: Record<string, unknown> = { secret, label: label || null };
       if (policy) body.preset_policy = `${preset!.id}:${policy}`;
       if (days) body.expires_in_days = Number(days);
+      if (camouflage && preset?.camouflage) body.camouflage = true;
       setCreated(await api.call<HandleCreated>("POST", "/v1/handles", body));
     } catch (e) {
       setErr((e as Error).message);
@@ -163,6 +165,12 @@ function CreateHandle({ onDone, onCancel }: { onDone: () => void; onCancel: () =
         <p className="muted small">This secret has no provider preset; the handle allows any request to its locked hosts.</p>
       )}
       <label>Expires after (days, optional)<input type="number" min={1} value={days} onChange={(e) => setDays(e.target.value)} /></label>
+      {preset?.camouflage && (
+        <label className="check">
+          <input type="checkbox" checked={camouflage} onChange={(e) => setCamouflage(e.target.checked)} />
+          Make it look like a real {preset.display} key (only for tools that reject other formats; it is still just a handle)
+        </label>
+      )}
       {err && <div className="err">{err}</div>}
       <div className="actions">
         <button onClick={onCancel}>Cancel</button>

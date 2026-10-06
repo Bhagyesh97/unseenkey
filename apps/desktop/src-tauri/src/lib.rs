@@ -130,6 +130,7 @@ fn presets() -> Vec<Value> {
         .map(|p| {
             json!({
                 "id": p.id, "display": p.display, "upstreams": p.upstreams, "docs": p.docs,
+                "camouflage": !p.handle_formats.is_empty(),
                 "policies": p.policies.iter().map(|pp| json!({
                     "id": pp.id, "display": pp.display, "recommended": pp.recommended,
                     "explanation": p.policy(&pp.id).map(|pol| unseenkey_core::policy::explain(&pol)).unwrap_or_default(),
@@ -165,7 +166,8 @@ fn guard_scan(path: String) -> Result<Vec<Value>, String> {
                 .detection
                 .and_then(|d| unseenkey_core::presets::get(d.provider))
                 .is_some()
-                && !e.value.expose().starts_with(b"usk_h_");
+                && !core::str::from_utf8(e.value.expose())
+                    .is_ok_and(|s| unseenkey_core::presets::is_handle(s.trim()));
             json!({ "line": e.line, "key": e.key, "detected": e.detection.map(|d| d.display), "fixable": fixable })
         })
         .collect())

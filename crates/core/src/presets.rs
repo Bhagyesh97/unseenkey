@@ -60,6 +60,17 @@ pub struct PresetPolicy {
     pub recommended: bool,
 }
 
+/// A key-shaped handle format, optionally only for real keys with a given prefix.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HandleFormat {
+    /// Applies when the real key starts with this text (empty: any key).
+    #[serde(default)]
+    pub when: String,
+    /// The format, see [`crate::handles::Format`].
+    pub format: String,
+}
+
 /// A provider preset.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -88,9 +99,21 @@ pub struct Preset {
     /// Policies, first is the default suggestion.
     #[serde(default)]
     pub policies: Vec<PresetPolicy>,
+    /// Camouflage handle formats (D-26), most specific `when` first. Used only
+    /// when a handle is created with camouflage asked for.
+    #[serde(default)]
+    pub handle_formats: Vec<HandleFormat>,
 }
 
 impl Preset {
+    /// The camouflage format for a real key of this provider, if there is one.
+    pub fn handle_format_for(&self, real_key: &[u8]) -> Option<crate::handles::Format> {
+        self.handle_formats
+            .iter()
+            .find(|f| real_key.starts_with(f.when.as_bytes()))
+            .and_then(|f| crate::handles::Format::parse(&f.format).ok())
+    }
+
     /// Build a full [`Policy`] from one of this preset's policies.
     pub fn policy(&self, policy_id: &str) -> Option<Policy> {
         let pp = self.policies.iter().find(|p| p.id == policy_id)?;
@@ -150,6 +173,10 @@ fn parse(id: &str, text: &str) -> Result<Preset, PolicyError> {
             "preset {id} has no upstreams"
         )));
     }
+    for f in &p.handle_formats {
+        crate::handles::Format::parse(&f.format)
+            .map_err(|e| PolicyError::Invalid(format!("preset {id} handle format: {e}")))?;
+    }
     let mut seen = std::collections::HashSet::new();
     for pol in &p.policies {
         if !seen.insert(pol.id.as_str()) {
@@ -189,6 +216,28 @@ fn table() -> &'static BTreeMap<&'static str, Preset> {
             })
             .collect()
     })
+}
+
+/// Is `s` a camouflage handle, that is, does it have exactly the shape of one
+/// of the presets' handle formats?
+pub fn is_camouflage_handle(s: &str) -> bool {
+    static FORMATS: OnceLock<Vec<crate::handles::Format>> = OnceLock::new();
+    FORMATS
+        .get_or_init(|| {
+            table()
+                .values()
+                .flat_map(|p| &p.handle_formats)
+                .filter_map(|f| crate::handles::Format::parse(&f.format).ok())
+                .collect()
+        })
+        .iter()
+        .any(|f| f.matches(s))
+}
+
+/// Is `s` a handle of either kind (canonical `usk_h_…` or camouflage)? Shape
+/// only: whether it exists is the vault's business.
+pub fn is_handle(s: &str) -> bool {
+    crate::handles::is_handle_shaped(s) || is_camouflage_handle(s)
 }
 
 /// All built-in presets, by id.
@@ -294,6 +343,97 @@ mod tests {
             evaluate(&p, &r("GET", "/v1/organization/users"), 0, Usage::default()),
             Decision::Deny(_)
         ));
+    }
+
+    #[test]
+    fn camouflage_handles_look_like_keys_and_are_never_mistaken_for_them() {
+        let real: &[(&str, &str, &str)] = &[
+            (
+                "openai",
+                "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEF",
+                "sk-proj-usk-",
+            ),
+            (
+                "openai",
+                "sk-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKL",
+                "sk-usk-",
+            ),
+            (
+                "anthropic",
+                "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789",
+                "sk-ant-api03-usk-",
+            ),
+            (
+                "anthropic",
+                "sk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123456789",
+                "sk-ant-oat01-usk-",
+            ),
+            ("stripe", "sk_live_51Habcdefghijklmnop", "sk_live_usk"),
+            ("stripe", "sk_test_51Habcdefghijklmnop", "sk_test_usk"),
+            ("stripe", "rk_live_51Habcdefghijklmnop", "rk_live_usk"),
+            (
+                "github",
+                "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+                "ghp_usk",
+            ),
+            (
+                "github",
+                "github_pat_11ABCDEFG0abcdefghijkl_mnopqrstuvwxyz",
+                "github_pat_usk",
+            ),
+            ("slack", "xoxb-1234567890-abcdefghijklmnop", "xoxb-usk-"),
+            (
+                "sendgrid",
+                "SG.abcdefghijklmnopqrstuv.abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG",
+                "SG.usk",
+            ),
+            (
+                "google-ai",
+                "AIzaSyA-abcdefghijklmnopqrstuvwxyz01234",
+                "AIzaSyusk",
+            ),
+            (
+                "groq",
+                "gsk_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOP",
+                "gsk_usk",
+            ),
+        ];
+        for (provider, key, prefix) in real {
+            let preset = get(provider).unwrap();
+            let format = preset
+                .handle_format_for(key.as_bytes())
+                .unwrap_or_else(|| panic!("no format for {provider} key {key}"));
+            let handle = format.generate();
+            assert!(handle.starts_with(prefix), "{provider}: {handle}");
+            assert!(handle.contains(crate::handles::MARKER));
+            assert!(
+                is_camouflage_handle(&handle) && is_handle(&handle),
+                "{handle}"
+            );
+            // A camouflage handle is never detected as the provider's key...
+            assert_eq!(
+                crate::providers::detect(handle.as_bytes()),
+                None,
+                "{handle}"
+            );
+            // ...and a real key is never taken for a handle.
+            assert!(!is_handle(key), "{key}");
+        }
+        // GitHub's classic token length is kept exactly.
+        let ghp = get("github")
+            .unwrap()
+            .handle_format_for(b"ghp_x")
+            .unwrap()
+            .generate();
+        assert_eq!(ghp.len(), 40);
+        // No format for keys of an unknown shape, or for providers without one.
+        assert!(get("stripe")
+            .unwrap()
+            .handle_format_for(b"whsec_abc")
+            .is_none());
+        assert!(get("aws").unwrap().handle_format_for(b"anything").is_none());
+        assert!(is_handle(&crate::handles::generate()));
+        assert!(!is_handle("sk-usk-short"));
     }
 
     #[test]

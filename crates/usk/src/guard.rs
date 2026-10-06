@@ -32,7 +32,7 @@ fn findings(entries: &[DotenvEntry]) -> Vec<Finding<'_>> {
 }
 
 fn already_handle(e: &DotenvEntry) -> bool {
-    e.value.expose().starts_with(b"usk_h_")
+    core::str::from_utf8(e.value.expose()).is_ok_and(|s| presets::is_handle(s.trim()))
 }
 
 /// Report what the file contains. Returns the number of fixable findings.
@@ -160,7 +160,7 @@ pub fn fix(paths: &VaultPaths, path: &Path, dry_run: bool) -> Result<(), CliErro
         if let Some(env) = created["env"].as_object() {
             for (var, val) in env {
                 let val = val.as_str().unwrap_or("");
-                if val.starts_with("usk_h_") {
+                if presets::is_handle(val) {
                     continue;
                 }
                 let prefix = format!("{var}=");

@@ -791,6 +791,11 @@ pub struct CreateHandle {
     pub policy: Option<Policy>,
     /// Expiry in days from now.
     pub expires_in_days: Option<u32>,
+    /// Give the handle the shape of the provider's own keys (D-26), for tools
+    /// that refuse anything else. Off by default: the canonical `usk_h_…` form
+    /// cannot be mistaken for a key.
+    #[serde(default)]
+    pub camouflage: bool,
 }
 
 /// What a handle looks like to owners. Never includes the handle string
@@ -905,10 +910,30 @@ pub async fn create_handle(
         .unwrap_or_else(|| meta.name.clone());
     let now = now_ms();
     let expires_at = req.expires_in_days.map(|d| now + d as i64 * 86_400_000);
-    let (record, plain) = v.create_handle(&secret_id, &label, policy, expires_at)?;
+    let format = if req.camouflage {
+        // The format can depend on the kind of key (live or test, project or
+        // legacy), so look at the real one.
+        let real = v.reveal(&secret_id)?;
+        let format = meta
+            .provider
+            .as_deref()
+            .and_then(presets::get)
+            .and_then(|p| p.handle_format_for(real.value.expose()));
+        Some(format.ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "no_camouflage_format",
+                "there is no key-shaped handle format for this provider and kind of key; create a normal handle",
+            )
+        })?)
+    } else {
+        None
+    };
+    let (record, plain) =
+        v.create_handle_formatted(&secret_id, &label, policy, expires_at, format.as_ref())?;
     let _ = v.audit(
         kinds::HANDLE_CREATED,
-        serde_json::json!({ "id": record.handle_id.to_hex(), "label": record.label, "secret": meta.name, "expires_at": expires_at }),
+        serde_json::json!({ "id": record.handle_id.to_hex(), "label": record.label, "secret": meta.name, "expires_at": expires_at, "camouflage": req.camouflage }),
     );
     let view = handle_view(&v, &record, now);
     drop(v);

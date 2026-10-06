@@ -28,6 +28,133 @@ pub fn is_handle_shaped(s: &str) -> bool {
         && s[PREFIX.len()..].bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
+/// The marker every handle carries, canonical or camouflaged.
+pub const MARKER: &str = "usk";
+/// Fewest random characters a camouflage format may have (base62, about 131 bits).
+pub const MIN_RANDOM: usize = 22;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Part {
+    Literal(String),
+    Random(usize),
+}
+
+/// A camouflage handle format (D-26): literal text with `{N}` runs of N random
+/// base62 characters, for example `sk-usk-{32}`. Some tools refuse a key that
+/// does not look like the provider's; a handle in this shape gets past the
+/// check and is still only a handle. The literal part must contain the
+/// [`MARKER`] so a person or a scanner can tell it from a real key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Format {
+    parts: Vec<Part>,
+}
+
+impl Format {
+    /// Parse and validate a format.
+    pub fn parse(spec: &str) -> Result<Self, String> {
+        let mut parts: Vec<Part> = Vec::new();
+        let mut literal = String::new();
+        let mut chars = spec.chars();
+        while let Some(c) = chars.next() {
+            if c == '{' {
+                let mut digits = String::new();
+                let mut closed = false;
+                for d in chars.by_ref() {
+                    if d == '}' {
+                        closed = true;
+                        break;
+                    }
+                    digits.push(d);
+                }
+                if !closed {
+                    return Err(format!("unterminated placeholder in {spec:?}"));
+                }
+                let n: usize = digits
+                    .parse()
+                    .map_err(|_| format!("bad placeholder {{{digits}}} in {spec:?}"))?;
+                if n == 0 || n > 128 {
+                    return Err(format!("placeholder length {n} out of range in {spec:?}"));
+                }
+                if !literal.is_empty() {
+                    parts.push(Part::Literal(core::mem::take(&mut literal)));
+                } else if matches!(parts.last(), Some(Part::Random(_))) {
+                    return Err(format!("adjacent placeholders in {spec:?}"));
+                }
+                parts.push(Part::Random(n));
+            } else if c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.') {
+                literal.push(c);
+            } else {
+                return Err(format!("character {c:?} not allowed in {spec:?}"));
+            }
+        }
+        if !literal.is_empty() {
+            parts.push(Part::Literal(literal));
+        }
+        let format = Self { parts };
+        let fixed: String = format
+            .parts
+            .iter()
+            .filter_map(|p| match p {
+                Part::Literal(l) => Some(l.as_str()),
+                Part::Random(_) => None,
+            })
+            .collect();
+        if !fixed.contains(MARKER) {
+            return Err(format!("{spec:?} lacks the {MARKER:?} marker"));
+        }
+        if format.random_len() < MIN_RANDOM {
+            return Err(format!(
+                "{spec:?} has fewer than {MIN_RANDOM} random characters"
+            ));
+        }
+        Ok(format)
+    }
+
+    fn random_len(&self) -> usize {
+        self.parts
+            .iter()
+            .map(|p| match p {
+                Part::Random(n) => *n,
+                Part::Literal(_) => 0,
+            })
+            .sum()
+    }
+
+    /// A fresh handle string in this format.
+    pub fn generate(&self) -> String {
+        self.parts
+            .iter()
+            .map(|p| match p {
+                Part::Literal(l) => l.clone(),
+                Part::Random(n) => random_base62(*n),
+            })
+            .collect()
+    }
+
+    /// Does `s` have exactly this shape?
+    pub fn matches(&self, s: &str) -> bool {
+        let mut rest = s;
+        for part in &self.parts {
+            match part {
+                Part::Literal(l) => match rest.strip_prefix(l.as_str()) {
+                    Some(r) => rest = r,
+                    None => return false,
+                },
+                Part::Random(n) => {
+                    if rest.len() < *n
+                        || !rest.is_char_boundary(*n)
+                        || !rest[..*n].bytes().all(|b| b.is_ascii_alphanumeric())
+                    {
+                        return false;
+                    }
+                    rest = &rest[*n..];
+                }
+            }
+        }
+        rest.is_empty()
+    }
+}
+
 /// Lookup key for a handle string.
 pub fn hash_of(handle: &str) -> Digest {
     handle_hash(handle.as_bytes())
@@ -91,6 +218,42 @@ mod tests {
         assert!(!is_handle_shaped(&format!("usk_h_{}", "-".repeat(32))));
         assert_eq!(hash_of(&h), hash_of(&h));
         assert_ne!(hash_of(&h), hash_of(&generate()));
+    }
+
+    #[test]
+    fn camouflage_formats() {
+        let f = Format::parse("sk-usk-{32}").unwrap();
+        let h = f.generate();
+        assert_eq!(h.len(), 7 + 32);
+        assert!(h.starts_with("sk-usk-"));
+        assert!(f.matches(&h));
+        assert_ne!(f.generate(), h);
+        assert!(!f.matches(&h[..h.len() - 1]));
+        assert!(!f.matches(&format!("{h}x")));
+        assert!(!f.matches(&h.replace("sk-usk-", "sk-abc-")));
+        assert!(!f.matches(&format!("sk-usk-{}", "-".repeat(32))));
+        assert!(!f.matches("sk-usk-éééééééééééééééééééééééééééééééé"));
+        // Several random runs with literals between them.
+        let g = Format::parse("SG.usk{19}.{43}").unwrap();
+        let h = g.generate();
+        assert_eq!(h.len(), 3 + 3 + 19 + 1 + 43);
+        assert!(g.matches(&h) && !f.matches(&h));
+        // Refused: no marker, too little randomness, odd characters, bad placeholders.
+        for bad in [
+            "sk-{40}",
+            "sk-usk-{21}",
+            "sk usk {32}",
+            "sk-usk-{}",
+            "sk-usk-{0}",
+            "sk-usk-{999}",
+            "sk-usk-{16}{16}",
+            "sk-usk-{32",
+            "{usk}{32}",
+        ] {
+            assert!(Format::parse(bad).is_err(), "{bad}");
+        }
+        // The marker has to be in the fixed text, where it survives every draw.
+        assert!(Format::parse("usk{22}").is_ok());
     }
 
     #[test]

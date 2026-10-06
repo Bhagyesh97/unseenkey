@@ -25,3 +25,13 @@ deny = ["* /api/chat.delete", "* /api/admin.*", "* /api/conversations.kick", "* 
 id = "full"
 display = "Full access (not recommended for delegation)"
 allow = ["* /**"]
+
+# Key-shaped handles for tools that check the key format (opt-in, D-26).
+
+[[handle_formats]]
+when = "xoxb-"
+format = "xoxb-usk-{32}"
+
+[[handle_formats]]
+when = "xoxp-"
+format = "xoxp-usk-{32}"

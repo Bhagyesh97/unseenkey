@@ -70,6 +70,19 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         policy: Policy,
         expires_at: Option<i64>,
     ) -> Result<(HandleRecord, String), VaultError> {
+        self.create_handle_formatted(secret_id, label, policy, expires_at, None)
+    }
+
+    /// [`Vault::create_handle`] with the handle string in a camouflage format
+    /// (D-26) instead of the canonical `usk_h_…` one.
+    pub fn create_handle_formatted(
+        &mut self,
+        secret_id: &Id,
+        label: &str,
+        policy: Policy,
+        expires_at: Option<i64>,
+        format: Option<&handles::Format>,
+    ) -> Result<(HandleRecord, String), VaultError> {
         let vk = self.vk()?.clone();
         let meta = self.index.get(secret_id).ok_or(VaultError::NotFound)?;
         policy
@@ -91,7 +104,10 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         {
             return Err(VaultError::LabelExists(label.to_string()));
         }
-        let plain = handles::generate();
+        let plain = match format {
+            Some(f) => f.generate(),
+            None => handles::generate(),
+        };
         let now = self.clock.now_unix_ms();
         let record = HandleRecord {
             handle_id: Id::new_v7(now),
@@ -138,7 +154,7 @@ impl<S: Storage, C: Clock> Vault<S, C> {
     /// the caller decides how to respond (identically for unknown and revoked).
     pub fn handle_by_string(&self, presented: &str) -> Result<Option<&HandleRecord>, VaultError> {
         self.vk()?;
-        if !handles::is_handle_shaped(presented) {
+        if !crate::presets::is_handle(presented) {
             return Ok(None);
         }
         let hash = handles::hash_of(presented);

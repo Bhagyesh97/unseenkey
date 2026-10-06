@@ -85,6 +85,7 @@ export interface Preset {
   display: string;
   upstreams: string[];
   docs: string;
+  camouflage: boolean;
   policies: { id: string; display: string; recommended: boolean; explanation: string }[];
 }
 
