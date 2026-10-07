@@ -127,7 +127,7 @@ SSO/SCIM, browser autofill, HSM, Kubernetes operator, WebSocket proxying, spend 
 
 ---
 
-## Decisions from competitive research (2026-09-30, see [16](16-competitive-research.md))
+## Decisions from competitive research (2026-09-30; the survey itself is kept outside the repository)
 
 ## D-23 Opt-in transparent proxy mode (partly supersedes D-05)
 

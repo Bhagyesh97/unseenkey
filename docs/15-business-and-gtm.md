@@ -4,7 +4,7 @@
 
 **Unseenkey — hire a developer, run an agent, never hand over your keys.**
 
-Supporting lines, in order (D-25): *Leaks become harmless* (handles, not keys) · *Made for the person who owns the keys* (plain-English policies, approvals on your phone, Windows too) · *Verify, don't trust* (open core, public threat model, attested broker). "Your AI can use the key but never see it" remains true and stays in the copy as a proof point; it is no longer the headline because ten other projects say it (see [16](16-competitive-research.md)).
+Supporting lines, in order (D-25): *Leaks become harmless* (handles, not keys) · *Made for the person who owns the keys* (plain-English policies, approvals on your phone, Windows too) · *Verify, don't trust* (open core, public threat model, attested broker). "Your AI can use the key but never see it" remains true and stays in the copy as a proof point; it is no longer the headline because ten other projects say it (internal survey, 2026-09-30).
 
 ## Pricing (Open-1: validate before launch)
 

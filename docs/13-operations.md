@@ -12,6 +12,13 @@ Covers running the local daemon well, deploying the cloud (Phase 3+), and respon
 - **Logs:** `~/.unseenkey/logs/uskd.log`, rotated at 10 MB × 5; redacting layer always on; `--log-level debug` never logs bodies.
 - **Audit log growth:** ~300 bytes per event; 1M events ≈ 300 MB. `usk log prune --before 1y --keep-checkpoints` compacts while preserving chain checkpoints.
 
+## Repository and releases
+
+- **Public repository settings** (set once, the day the repository goes public): private vulnerability reporting on; secret scanning and push protection on; Dependabot alerts on; Actions allowed only from the namespaces the workflows use (`actions/*`, `dtolnay/*`, `taiki-e/*`, `sigstore/*`, `anchore/*`, `tauri-apps/*`, `Swatinem/*`, `EmbarkStudios/*`, `softprops/*`); branch protection on `main` (`ci` and `desktop` required, no force pushes); the `TAURI_SIGNING_PRIVATE_KEY` secret stays, Apple and Authenticode secrets are added when certificates exist.
+- **Never in the repository:** customer or interview material, the competitive survey (it names individuals), signing keys, anything from `%APPDATA%\Unseenkey`. The ignored `private/` directory is the place for local notes. Before the first public push, the history is checked for secrets and personal paths (`git grep` over `git rev-list --all`).
+- **Releases:** a `v*` tag triggers `release.yml`: version check, CLI archives for five targets with Sigstore signatures, SBOM, desktop installers with minisign signatures and `latest.json` for the updater; hyphenated tags are pre-releases. The draft is published by hand after the installers have been smoke-tested on one machine per OS.
+- **Secret-scanning partnership:** once public, register the camouflage handle formats (every one contains `usk`) with GitHub's secret-scanning partner programme so a leaked handle is reported and revoked (runbook below).
+
 ## Cloud deployment (Phase 3)
 
 ### Topology

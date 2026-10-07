@@ -31,3 +31,6 @@ Thumbs.db
 /coverage/
 /sbom/
 *.log
+
+# Internal notes that must never be published (competitive research with named individuals).
+/private/

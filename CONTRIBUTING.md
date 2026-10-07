@@ -11,8 +11,12 @@ should start with a discussion.
 - Every PR touching those modules needs: tests including a negative test, no new
   `unsafe`, no new dependency without a one-line justification, and an update to
   the threat model if a boundary or assumption changed.
-- `cargo fmt`, `cargo clippy -D warnings`, `cargo test --workspace` and
-  `cargo deny check` must pass.
+- `cargo fmt`, `cargo clippy -D warnings`, `cargo test --workspace`,
+  `cargo deny check` and `cargo audit` must pass. The desktop crate
+  (`apps/desktop/src-tauri`) is outside the workspace: run `cargo fmt` and
+  `cargo clippy` there too when you touch it. The browser-origin tests
+  (`tests/browser`, Playwright) and the `#[ignore]` benchmarks and interop
+  tests run in CI; see `.github/workflows/ci.yml` for how.
 - Plaintext secret material only ever lives in `SecretBytes`. If you find
   yourself with a `Vec<u8>` or `String` holding a secret, that is a bug.
 - Never log, print or include in an error message anything that could be a

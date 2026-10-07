@@ -23,7 +23,6 @@ Name chosen 2026-09-30 after availability checks (see D-01 in [02](02-brainstorm
 | 13 | [Operations](13-operations.md) | You are deploying, running or responding to incidents |
 | 14 | [UX flows](14-ux-flows.md) | You are designing screens or the CLI experience |
 | 15 | [Business model and go-to-market](15-business-and-gtm.md) | You are thinking about pricing, launch and growth |
-| 16 | [Competitive research](16-competitive-research.md) (internal) | You want to know who else is building this, how, and where we are ahead or behind |
 
 ## One-paragraph summary
 
@@ -43,6 +42,7 @@ Every design question in these docs is answered separately for the two modes. Co
 
 ## Status
 
-- Date: 2026-09-30
-- Stage: design complete, no code yet
+- Date: 2026-10-07 (design 2026-09-30)
+- Stage: alpha. Phase 0, Phase 1, M2.1 (MCP), M2.2 (desktop) and M2.3 slice 1 (AWS SigV4, camouflage handles, OAuth2 refresh) are built and tested; see the *As built* notes in [11](11-implementation-plan.md). Delegation (Phase 3) is not built.
 - Author: Bhagyesh (product owner); design assisted by Claude
+- The competitive research that informed D-23 to D-27 is kept outside the repository; the decisions record what it concluded.

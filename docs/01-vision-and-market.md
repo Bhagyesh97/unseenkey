@@ -50,7 +50,7 @@ Unseenkey makes the secret string disappear from everyday workflows and replaces
 | Arcade.dev, Composio, Nango | Auth and tool calling for agent builders | Built for builders, not for clients who own keys; OAuth-centric |
 | GitGuardian, TruffleHog, gitleaks | Detect leaks | Reactive; nothing to do with storage or usage |
 | Cloudflare AI Gateway, Portkey, LiteLLM | LLM proxies with key management | LLM-only; no client/developer delegation; not a vault |
-| **Agent credential proxies (2026)**: Infisical Agent Vault (2.3k★, MITM proxy), OneCLI (YC, 3.5k★, MITM gateway + team agent platform, $149–499/mo), nono (4.3k★, kernel sandbox + phantom-token reverse proxy, by Sigstore's founder); small OSS: BlindKey, VeilKey, BlindVault, Veil, Trustless, agent-secrets | Agent uses the key, never sees it | All developer/DevSecOps-facing; **none** do client→developer delegation, attested brokers, owner-first UX, leak-harmless handles or first-class Windows. Full analysis in [16](16-competitive-research.md) |
+| **Agent credential proxies (2026)**: Infisical Agent Vault (2.3k★, MITM proxy), OneCLI (YC, 3.5k★, MITM gateway + team agent platform, $149–499/mo), nono (4.3k★, kernel sandbox + phantom-token reverse proxy, by Sigstore's founder); small OSS: BlindKey, VeilKey, BlindVault, Veil, Trustless, agent-secrets | Agent uses the key, never sees it | All developer/DevSecOps-facing; **none** do client→developer delegation, attested brokers, owner-first UX, leak-harmless handles or first-class Windows. (internal survey, 2026-09-30; star counts as of that date) |
 
 **What nobody packages for normal people:** *use without seeing* + *client-to-developer delegation with revoke* + *local-first, works offline*.
 
