@@ -143,11 +143,10 @@ for (const site of SITES) {
     }, base);
     await page.waitForTimeout(800);
     const subresources = rejections() - before;
-    await Promise.all([
-      page.waitForLoadState("load").catch(() => {}),
-      page.evaluate(() => (document.getElementById("f") as HTMLFormElement).submit()),
-    ]);
-    await page.waitForTimeout(800);
+    await page.evaluate(() => (document.getElementById("f") as HTMLFormElement).submit());
+    // The submission is a navigation to the daemon; wait for it rather than a fixed time.
+    await page.waitForURL(`${base}/v1/lock`, { timeout: 15_000 });
+    await page.waitForTimeout(300);
     const total = rejections() - before;
     console.log(`${site.name}: ${subresources} subresource/websocket requests and ${total - subresources} form submissions reached the daemon and were refused; ${socketErrors.length} websocket errors`);
     expectAllRejected(seen);
