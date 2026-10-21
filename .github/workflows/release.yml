@@ -214,3 +214,36 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           includeUpdaterJson: true
           args: ${{ matrix.args }}
+
+  notes:
+    # The handwritten section of CHANGELOG.md for this version, followed by
+    # GitHub's generated list of changes. Runs last so neither the CLI nor the
+    # desktop step can overwrite it. The draft stays a draft: publishing is a
+    # human decision after the installers were tried.
+    name: release notes
+    needs: [release, desktop]
+    if: always() && needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          # Lines from "## <version>" up to the next "## " heading.
+          awk -v v="$version" '
+            /^## / { on = index($0, "## " v) == 1 }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::warning::no CHANGELOG.md section for $version; using generated notes only"
+          fi
+          {
+            echo
+            echo "## Changes"
+            echo
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" -f tag_name="${GITHUB_REF_NAME}" -q .body               | sed -E '/^## What.s Changed/d'
+          } >> notes.md
+          gh release edit "${GITHUB_REF_NAME}" --notes-file notes.md

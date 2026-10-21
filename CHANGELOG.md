@@ -1,0 +1,32 @@
+# Changelog
+
+The top section of this file becomes the release notes when a `v*` tag is pushed.
+
+## 0.1.0 — 2026-10-22
+
+First public release. Alpha: the local parts work and are tested on Windows, macOS and Linux, but no external security audit has happened yet. Use it with keys you can rotate, and read the [threat model](docs/04-threat-model.md) before trusting it with anything.
+
+### What you get
+
+- **`usk` CLI and `uskd` daemon.** A password-protected vault (Argon2id, XChaCha20-Poly1305, 24-word recovery phrase, keys locked in memory) and a loopback broker that swaps handles for real keys at the last moment, enforces a per-handle policy, scrubs the key out of responses and writes every call to a hash-chained audit log.
+- **18 provider presets** with ready-made policies and plain-English explanations: Anthropic, OpenAI, Google AI, Groq, Mistral, OpenRouter, GitHub, Stripe, Slack, Notion, Cloudflare, Vercel, Supabase, Twilio, SendGrid, Resend, AWS, and `generic` for any other host.
+- **AWS SigV4:** boto3, the AWS CLI and the JS SDK sign with a placeholder; the broker re-signs with the real key. **OAuth2 refresh-token clients** (Google and any RFC 6749 token endpoint): the broker keeps the access token fresh.
+- **Camouflage handles** that pass an SDK's own key-format checks (`sk-proj-usk-…`, `sk_live_usk…`); every format carries the `usk` marker.
+- **Caps, canaries and incident responses:** `--cap 1000/day` hard stops, `--canary` tripwire handles that never work and lock the vault when used, and a per-handle response to a burst of refused requests (alert, throttle, approve, pause or lock).
+- **MCP server** for Claude Code, Claude Desktop, Cursor and Windsurf (`usk mcp install <client>`): the agent gets tools, never values. Live approvals with "allow once / always / deny".
+- **`.env` guard:** `usk guard fix .env` moves the real keys into the vault and rewrites the file with handles.
+- **Desktop app** (Windows, macOS, Linux): unlock, secrets, handles, approvals, activity with chain verification, one-click MCP setup, Windows Hello unlock, lock on sleep and screen lock, signed auto-updates.
+- **Fail closed everywhere:** host lock per secret, browser-origin requests refused, unmatched requests refused.
+
+### Not in this release
+
+- Delegation to other people through a hosted broker (designed, not built).
+- Importers (1Password, Bitwarden, OS keychains), agent-framework plugins, a transparent proxy for CLIs such as `gh` and `git`.
+- macOS Touch ID and Linux session-lock hooks (password unlock works everywhere).
+- Spend metering in currency, baseline anomaly detection, caller binding.
+
+### Installing
+
+Pick the archive for your platform below; each has a Sigstore signature (`.sig` + `.pem`) and is listed in `SHA256SUMS`. Desktop installers carry minisign signatures for the updater. The installers are not yet code-signed, so Windows SmartScreen and macOS Gatekeeper will warn on first launch.
+
+From source: `cargo install --locked --git https://github.com/Bhagyesh97/unseenkey usk` (Rust 1.85 or newer).
