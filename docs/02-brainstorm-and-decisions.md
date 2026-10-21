@@ -13,7 +13,7 @@ Legend: **D-nn** = decision. **Open** = intentionally left open with a default.
 **Options checked (npm, crates.io, PyPI, GitHub org, .com/.dev/.app):** Unseenkey (all free, incl. .com), Keyshroud (all free except .com), Sealkey, Hushkey (registries free, org and .com taken).
 **Decision:** **Unseenkey**. Says exactly what the product does, clean on every registry and domain checked, GitHub org free.
 **Conventions:** CLI `usk`, daemon `uskd`, token prefixes `usk_h_` / `usk_s_` / `usk_m_` / `usk_i_` (handle regex `usk_h_[A-Za-z0-9]{32}`), template `{{usk:name}}`, headers `X-Usk-*`, data dir `~/.unseenkey/`, crate `unseenkey-core`, repo `unseenkey`.
-**To do (owner):** register `unseenkey.com`, `.dev`, `.app`; reserve the GitHub org `unseenkey`, npm package `unseenkey` and scope `@unseenkey`, crates.io `unseenkey` and `unseenkey-core`, PyPI `unseenkey`; run a trademark search before public launch.
+**To do (owner):** `unseenkey.com` registered 2026-10-21 (Namecheap, privacy on, auto-renew); `.dev` and `.app` optional; reserve the GitHub org `unseenkey`, npm package `unseenkey` and scope `@unseenkey`, crates.io `unseenkey` and `unseenkey-core`, PyPI `unseenkey`; run a trademark search before public launch.
 
 ## D-02 First customer
 

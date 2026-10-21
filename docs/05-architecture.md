@@ -182,7 +182,7 @@ require_peer_check = false   # enable executable allow-list on loopback
 
 [cloud]
 enabled = false
-relay = "https://relay.unseenkey.dev"
+relay = "https://relay.unseenkey.com"
 ```
 
 No secret material ever appears in config.

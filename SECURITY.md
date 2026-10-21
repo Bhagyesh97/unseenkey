@@ -5,7 +5,7 @@ its own security as the most important input we get.
 
 ## Reporting a vulnerability
 
-- Email: security@unseenkey.dev (PGP key will be published here before the first public release).
+- Email: security@unseenkey.com (PGP key will be published here before the first public release).
 - Or use GitHub's private vulnerability reporting on this repository.
 - Please do not open a public issue for anything that could expose a secret.
 

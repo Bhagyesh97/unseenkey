@@ -160,7 +160,7 @@ Claude Desktop / Claude Code config written by `usk mcp install claude`:
 
 ## Hosted broker API (Phase 3)
 
-Same proxy routes at `https://broker.<region>.unseenkey.dev/p/…` with the signed-request headers from [06](06-cryptography.md). Owners' management goes through the cloud API (`https://api.unseenkey.dev/v1`, passkey-authenticated) mirroring the local management routes plus `grants`, `devices`, `workspaces`.
+Same proxy routes at `https://broker.<region>.unseenkey.com/p/…` with the signed-request headers from [06](06-cryptography.md). Owners' management goes through the cloud API (`https://api.unseenkey.com/v1`, passkey-authenticated) mirroring the local management routes plus `grants`, `devices`, `workspaces`.
 
 ## Versioning
 
