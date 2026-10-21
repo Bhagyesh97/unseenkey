@@ -42,7 +42,7 @@ Every design question in these docs is answered separately for the two modes. Co
 
 ## Status
 
-- Date: 2026-10-07 (design 2026-09-30)
+- Date: 2026-10-22 (design 2026-09-30; repository public and domain `unseenkey.com` registered 2026-10-21/22)
 - Stage: alpha. Phase 0, Phase 1, M2.1 (MCP), M2.2 (desktop) and M2.3 slice 1 (AWS SigV4, camouflage handles, OAuth2 refresh) are built and tested; see the *As built* notes in [11](11-implementation-plan.md). Delegation (Phase 3) is not built.
 - Author: Bhagyesh (product owner); design assisted by Claude
 - The competitive research that informed D-23 to D-27 is kept outside the repository; the decisions record what it concluded.
