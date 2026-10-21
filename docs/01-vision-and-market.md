@@ -69,7 +69,7 @@ Three promises:
 - "Send me your Stripe key" becomes "send me a Unseenkey grant", the way "send me the file" became "send me the link".
 - AI agents get a standard credential layer that is safe by default, which is a precondition for agents to be trusted with real business accounts.
 
-## Risks (summary; full treatment in [04-threat-model](04-threat-model.md) and [15-business](15-business-and-gtm.md))
+## Risks (summary; full treatment in [04-threat-model](04-threat-model.md))
 
 - **Honeypot.** A vault of everyone's keys is the most valuable target on the internet. Mitigated by local-first defaults, zero-knowledge storage, and enclaves for the hosted broker.
 - **Trust bootstrap.** Unknown teams do not get Stripe keys. Mitigated by open source, audits, local mode.

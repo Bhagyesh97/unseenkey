@@ -67,7 +67,7 @@ Read the [threat model](docs/04-threat-model.md) before trusting it with anythin
 
 ## Documentation
 
-[docs/00-README.md](docs/00-README.md) indexes the design: vision, decision records, product spec, threat model, architecture, cryptography, broker and policy, data model, API/CLI/MCP reference, implementation plan and as-built notes, testing and assurance, operations, UX, business.
+[docs/00-README.md](docs/00-README.md) indexes the design: vision, decision records, product spec, threat model, architecture, cryptography, broker and policy, data model, API/CLI/MCP reference, implementation plan and as-built notes, testing and assurance, operations, UX.
 
 ## Roadmap
 

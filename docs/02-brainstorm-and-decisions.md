@@ -168,7 +168,7 @@ SSO/SCIM, browser autofill, HSM, Kubernetes operator, WebSocket proxying, spend 
 
 ## Open items (defaults chosen; revisit when data arrives)
 
-- **Open-1: Pricing tiers.** Default in [15](15-business-and-gtm.md). Validate with 20 customer conversations.
+- **Open-1: Pricing tiers.** Defaults in the business plan (kept outside the repository). Validate with 20 customer conversations.
 - **Open-2: Policy language upgrade.** Cedar if the fixed schema proves insufficient.
 - **Open-3: Enclave provider.** AWS Nitro Enclaves default; alternatives Intel TDX on GCP, AMD SEV-SNP on Azure.
 - **Open-4: ML-KEM hybrid timing.** Adopt when `libcrux` or RustCrypto `ml-kem` reaches a version we consider stable and audited.
