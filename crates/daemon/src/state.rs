@@ -100,6 +100,39 @@ pub enum Event {
         /// Allowed?
         allowed: bool,
     },
+    /// A handle behaved unusually, or a canary was used.
+    Anomaly {
+        /// Handle id (hex).
+        id: String,
+        /// Handle label.
+        label: String,
+        /// Secret name.
+        secret: String,
+        /// `denial_burst` or `canary`.
+        kind: String,
+        /// One sentence for the owner.
+        detail: String,
+        /// What was done: `alert`, `throttle`, `approve`, `pause`, `lock`.
+        response: &'static str,
+    },
+}
+
+/// Policy refusals on one handle this many times within
+/// [`DENIAL_BURST_WINDOW`] are an incident: a tool probing for what it may do.
+pub const DENIAL_BURST_THRESHOLD: usize = 10;
+/// The window for [`DENIAL_BURST_THRESHOLD`].
+pub const DENIAL_BURST_WINDOW: Duration = Duration::from_secs(60);
+/// After an incident on a handle, no second one is raised for this long
+/// (the owner's resume clears it).
+pub const ANOMALY_COOLDOWN: Duration = Duration::from_secs(60 * 60);
+/// Requests a minute a throttled handle still gets.
+pub const THROTTLE_PER_MINUTE: u32 = 6;
+
+/// Policy refusals for one handle, for the burst detector.
+#[derive(Debug, Default)]
+pub struct DenialWindow {
+    times: VecDeque<Instant>,
+    last_incident: Option<Instant>,
 }
 
 /// A request parked until the owner decides.
@@ -189,6 +222,8 @@ pub struct AppState {
     pub scrubber: RwLock<Scrubber>,
     /// Per-handle sliding windows.
     pub usage: Mutex<HashMap<Id, UsageWindow>>,
+    /// Per-handle policy refusals, for the burst detector.
+    pub denials: Mutex<HashMap<Id, DenialWindow>>,
     /// Outbound HTTP client (rustls, no redirects).
     pub http: reqwest::Client,
     /// Logical host → origin to actually connect to (tests, staging).
@@ -281,6 +316,40 @@ impl AppState {
         let w = map.entry(*handle).or_default();
         w.minute.push_back(now);
         w.day.push_back(now);
+    }
+
+    /// Count a policy refusal for a handle. Returns how many refusals the
+    /// last minute holds when that count just reached the threshold and no
+    /// incident was raised on the handle in the last hour; `None` otherwise.
+    pub async fn record_denial(&self, handle: &Id) -> Option<usize> {
+        let now = Instant::now();
+        let mut map = self.denials.lock().await;
+        let w = map.entry(*handle).or_default();
+        while w
+            .times
+            .front()
+            .is_some_and(|t| now.duration_since(*t) >= DENIAL_BURST_WINDOW)
+        {
+            w.times.pop_front();
+        }
+        w.times.push_back(now);
+        if w.times.len() < DENIAL_BURST_THRESHOLD {
+            return None;
+        }
+        if w.last_incident
+            .is_some_and(|t| now.duration_since(t) < ANOMALY_COOLDOWN)
+        {
+            return None;
+        }
+        w.last_incident = Some(now);
+        let n = w.times.len();
+        w.times.clear();
+        Some(n)
+    }
+
+    /// Forget a handle's refusals and cool-down (when the owner resumes it).
+    pub async fn reset_denials(&self, handle: &Id) {
+        self.denials.lock().await.remove(handle);
     }
 
     /// Rebuild the scrubber from every secret in the (unlocked) vault.

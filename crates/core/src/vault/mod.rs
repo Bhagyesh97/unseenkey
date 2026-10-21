@@ -27,6 +27,7 @@ pub mod records;
 pub mod recovery;
 
 pub use crate::storage::KeyWrap;
+pub use ops::{HandleOptions, COUNTER_FLUSH_EVERY, THROTTLE_MS};
 pub use records::{SecretKind, SecretMeta};
 pub use recovery::RecoveryKit;
 

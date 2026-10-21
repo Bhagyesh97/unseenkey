@@ -619,3 +619,105 @@ fn status_without_vault() {
     assert!(!o.status.success());
     assert!(err(&o).contains("no vault found"));
 }
+
+#[test]
+fn caps_canaries_and_resume_from_the_cli() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    let _stop = StopDaemon(&vault);
+    assert!(usk(&vault, &["init", "--profile", "light"], PW)
+        .status
+        .success());
+    let o = usk(
+        &vault,
+        &["add", "stripe", "--stdin"],
+        &format!("{PW}sk_live_51Habcdefghijklmnop"),
+    );
+    assert!(o.status.success(), "{}", err(&o));
+
+    // Caps land in the policy and are explained back.
+    let o = usk(
+        &vault,
+        &[
+            "handle",
+            "create",
+            "stripe",
+            "--policy",
+            "read-only",
+            "--label",
+            "capped",
+            "--cap",
+            "500/day",
+            "--cap",
+            "60/min",
+            "--on-anomaly",
+            "pause",
+        ],
+        "",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let text = out(&o);
+    assert!(text.contains("60 requests per minute"), "{text}");
+    assert!(text.contains("500 per day"), "{text}");
+    let o = usk(&vault, &["handle", "show", "capped"], "");
+    assert!(out(&o).contains("on anomaly: pause"), "{}", out(&o));
+
+    // A bad cap is refused before anything is created.
+    let o = usk(
+        &vault,
+        &[
+            "handle", "create", "stripe", "--label", "bad", "--cap", "10/week",
+        ],
+        "",
+    );
+    assert!(!o.status.success());
+    assert!(err(&o).contains("day or min"), "{}", err(&o));
+
+    // A canary: shown once, listed as such, never a working handle.
+    let o = usk(
+        &vault,
+        &[
+            "handle", "create", "stripe", "--canary", "--label", "tripwire",
+        ],
+        "",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let text = out(&o);
+    assert!(text.contains("Canary created"), "{text}");
+    assert!(text.contains("usk_h_"), "{text}");
+    assert!(text.contains("\"lock\""), "{text}");
+    let o = usk(&vault, &["handle", "ls"], "");
+    let list = out(&o);
+    assert!(
+        list.contains("tripwire") && list.contains("canary"),
+        "{list}"
+    );
+    let o = usk(&vault, &["handle", "show", "tripwire"], "");
+    assert!(out(&o).contains("canary:     yes"), "{}", out(&o));
+
+    // Resume is a no-op on a normal handle and says so politely.
+    let o = usk(&vault, &["handle", "resume", "capped"], "");
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(out(&o).contains("back to normal"), "{}", out(&o));
+
+    // `usk env` takes the same flags.
+    let o = usk(
+        &vault,
+        &[
+            "env",
+            "stripe",
+            "--policy",
+            "read-only",
+            "--cap",
+            "100/day",
+            "--shell",
+            "dotenv",
+        ],
+        "",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(out(&o).contains("STRIPE_SECRET_KEY=usk_h_"), "{}", out(&o));
+    let o = usk(&vault, &["--json", "handle", "show", "stripe env"], "");
+    let j: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
+    assert_eq!(j["policy"]["limits"]["requests_per_day"], 100);
+}

@@ -69,6 +69,11 @@ export function App() {
         void api.approvals().then(setApprovals).catch(() => {});
       } else if (e.event === "egress_blocked") {
         setToast(`Blocked: a request via ${e.secret} carried ${e.leaked.join(", ")}`);
+      } else if (e.event === "anomaly") {
+        const did = { alert: "recorded", throttle: "throttled for an hour", approve: "now needs your approval for every request", pause: "paused", lock: "the vault was locked" }[e.response];
+        setToast(`${e.kind === "canary" ? "Canary tripped" : "Unusual activity"} on "${e.label}": ${e.detail}. ${did}.`);
+        if (e.response !== "lock") setTab("handles");
+        void refresh();
       } else if (e.event === "locked" || e.event === "unlocked") {
         void refresh();
       }
@@ -80,7 +85,8 @@ export function App() {
 
   useEffect(() => {
     if (!toast) return;
-    const id = setTimeout(() => setToast(null), 6000);
+    // Incidents stay up until read; the rest fade.
+    const id = setTimeout(() => setToast(null), toast.startsWith("Unusual") || toast.startsWith("Canary") ? 30_000 : 6000);
     return () => clearTimeout(id);
   }, [toast]);
 

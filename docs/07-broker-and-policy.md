@@ -183,6 +183,30 @@ The UI always starts from a preset. A custom policy is validated and rendered ba
 - Scrubber replacement keeps the JSON valid where possible by replacing inside string literals; otherwise plain replacement.
 - False positive path: if a legitimate response contains a stored value (e.g. the user stored their own account id as a secret), the owner sees `[REDACTED:usk:name]` and can mark the secret as `no_scrub`.
 
+## Caps, canaries and unusual activity
+
+A leaked key costs money until someone notices. A handle has three defences the key never had, all local and all explainable; none of them rotates the real key, which no provider lets us do safely.
+
+**Caps.** `--cap 1000/day` and `--cap 60/min` on `usk handle create` and `usk env` (API: `cap_per_day`, `cap_per_minute`) write `limits.requests_per_day` / `requests_per_minute` into the handle's policy, replacing the preset's own figure. They are hard stops: the 1,001st request of the day is refused with `rate_limited` and nothing is sent upstream. Running into a cap is the cap doing its job; it is not an incident.
+
+**Canaries.** `usk handle create <secret> --canary` makes a handle that never works: its policy is the empty one and the broker never looks the secret up for it. Plant it where only an intruder would read it (a `.env.example`, an old repository, a notes page; `--camouflage` makes it look like a real key). Any use at all is recorded as `canary_tripped`, the owner is told, and the handle's response runs: `lock` by default, since whoever sent it has the file. From outside, a canary answers exactly like an unknown handle (401 `unknown_handle`), so an intruder cannot tell it from a dead key. A canary only trips while the vault is unlocked: locked, every handle is refused before lookup.
+
+**Denial bursts.** Ten policy refusals on one handle within a minute (`policy_denied`, `host_not_allowed`, `caller_not_allowed`, `outside_schedule`, `body_too_large`; not caps, not the handle's own standing) are an incident of kind `denial_burst`: a tool that keeps trying things the policy forbids is exploring, not working. At most one incident is raised per handle per hour; `resume` clears the hour.
+
+**Responses.** Each handle carries `on_anomaly`, chosen at creation (`--on-anomaly`, API `on_anomaly`, changeable with `PATCH`), which the broker applies to a burst or a tripped canary:
+
+| response | what happens | default for |
+|---|---|---|
+| `alert` | the `anomaly` audit event, the `anomaly` SSE event, a desktop notification; nothing else | |
+| `throttle` | the same, and the handle gets at most 6 requests a minute for an hour (`throttled`, 429) | working handles |
+| `approve` | every request on the handle waits for the owner, remembered rules notwithstanding, until resumed | |
+| `pause` | the handle refuses everything (`handle_paused`, 403) until resumed | |
+| `lock` | the vault locks (audit `lock` with reason `anomaly` or `canary`) | canaries |
+
+The standing (`status`: `normal`, `throttled` with `until`, `approval_required`, `paused`) and the incident behind it (`last_anomaly`: kind, detail, time, response) live in the handle record, so they survive a restart and show in `usk handle show`, `usk handle ls` and the desktop. `usk handle resume <handle>` (`POST /v1/handles/{id}/resume`) puts the handle back to normal and restarts its burst detector; a throttle also ends by itself after the hour. The desktop app offers "Back to normal" on the handle and a drop-down for the response.
+
+What this does not do yet: baselines ("5× the usual volume for this hour"), first-seen endpoints or models, spend in currency, and binding a handle to the process that may use it. Those are the next slices; this one makes the simplest claims true: a leaked handle cannot run up a bill past its cap, a planted canary tells you the moment someone has your files, and a tool that probes gets slowed, stopped or asked.
+
 ## Injection mode (`usk run`)
 
 ```
@@ -218,7 +242,7 @@ Safety rules baked in:
 
 ## Error responses
 
-JSON body `{ "error": "<code>", "message": "<human>", "request_id": "…" }`. Codes: `browser_origin_rejected`, `unknown_handle`, `handle_revoked`, `handle_expired`, `vault_locked`, `policy_denied`, `host_not_allowed`, `egress_blocked`, `approval_required`, `approval_timeout`, `approval_denied`, `rate_limited`, `caller_not_allowed`, `upstream_error`, `audit_failure`. Messages never include the secret, the full policy (for grantees) or the upstream auth header.
+JSON body `{ "error": "<code>", "message": "<human>", "request_id": "…" }`. Codes: `browser_origin_rejected`, `unknown_handle`, `handle_revoked`, `handle_expired`, `vault_locked`, `policy_denied`, `host_not_allowed`, `egress_blocked`, `approval_required`, `approval_timeout`, `approval_denied`, `rate_limited`, `throttled`, `handle_paused`, `caller_not_allowed`, `upstream_error`, `audit_failure`. Messages never include the secret, the full policy (for grantees) or the upstream auth header.
 
 ## Performance notes
 

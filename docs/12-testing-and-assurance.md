@@ -10,6 +10,7 @@ Security tests are acceptance criteria, not a later phase. Every invariant in [0
 | Crypto vectors | JSON vectors in `crates/core/tests/vectors/` | every push, native + wasm32 |
 | Fuzz | `cargo fuzz` targets: policy parser/evaluator, glob matcher, header parser, scrubber stream, template substitution, vault record parser | nightly, 1 h each |
 | Integration | mock upstream binary; real SDK clients (openai, anthropic, stripe in JS and Python) hitting uskd | every push |
+| Incidents | `crates/daemon/tests/anomaly.rs`: caps stop at the number and never count as probing; a canary answers like an unknown handle, is logged as `canary_tripped` and locks the vault (or only alerts); ten refusals throttle, pause, ask or lock per the handle's response, one incident an hour, `resume` restores it | every push |
 | Browser-origin | Playwright (`tests/browser`): pages on a public site and on another loopback port attempt every kind of request, in stock Chromium and with its local-network-access checks off | every push |
 | E2E desktop | Tauri driver / WebdriverIO smoke: onboarding, add secret, create handle, proxied call | nightly |
 | Performance | `criterion` for pipeline stages; k6 against uskd for throughput | weekly, and before release |

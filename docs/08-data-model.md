@@ -55,9 +55,11 @@ Splitting value and metadata lets the UI list secrets after unlock without decry
 ```json
 { "handle_id": "…", "handle_hash": "<blake3 hex>", "secret_id": "…", "policy_id": "…",
   "label": "cursor on laptop", "callers": ["mcp:cursor"], "created_at": "…",
-  "expires_at": "…", "revoked_at": null, "use_count": 1234, "last_used_at": "…" }
+  "expires_at": "…", "revoked_at": null, "use_count": 1234, "last_used_at": "…",
+  "remembered": ["POST /v1/customers"], "canary": false, "on_anomaly": "throttle",
+  "status": { "state": "throttled", "until": "…" }, "last_anomaly": { "kind": "denial_burst", "detail": "…", "at": "…", "response": "throttle" } }
 ```
-The handle string itself is never stored.
+The handle string itself is never stored. `status` is one of `normal`, `throttled` (with `until`), `approval_required`, `paused`; `on_anomaly` one of `alert`, `throttle`, `approve`, `pause`, `lock` (see [07](07-broker-and-policy.md#caps-canaries-and-unusual-activity)). Records written before these fields existed read as normal, throttle-on-anomaly handles.
 
 **caller**
 ```json
@@ -78,7 +80,7 @@ The handle string itself is never stored.
 |---|---|---|
 | seq | int PK | |
 | ts | ts | cleartext (needed for range queries) |
-| kind | text | cleartext: `use`, `deny`, `egress_blocked`, `approval_requested`, `approval_decided`, `reveal`, `inject`, `unlock`, `lock`, `secret_created`, `secret_updated`, `secret_deleted`, `handle_created`, `handle_revoked`, `policy_changed`, `grant_*`, `sync_*` |
+| kind | text | cleartext: `use`, `deny`, `egress_blocked`, `approval_requested`, `approval_decided`, `reveal`, `inject`, `unlock`, `lock`, `secret_created`, `secret_updated`, `secret_deleted`, `handle_created`, `handle_revoked`, `handle_resumed`, `policy_changed`, `anomaly`, `canary_tripped`, `grant_*`, `sync_*` |
 | prev_hash | blob(32) | cleartext chain |
 | this_hash | blob(32) | BLAKE3 of canonical event |
 | nonce, ciphertext | blob | encrypted event body |

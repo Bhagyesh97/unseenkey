@@ -49,7 +49,21 @@ export interface HandleView {
   last_used_at: number | null;
   active: boolean;
   remembered: string[];
+  canary: boolean;
+  on_anomaly: AnomalyResponse;
+  status: { state: "normal" } | { state: "throttled"; until: number } | { state: "approval_required" } | { state: "paused" };
+  last_anomaly: { kind: string; detail: string; at: number; response: AnomalyResponse } | null;
 }
+
+export type AnomalyResponse = "alert" | "throttle" | "approve" | "pause" | "lock";
+
+export const RESPONSES: { id: AnomalyResponse; label: string; hint: string }[] = [
+  { id: "alert", label: "Alert only", hint: "record it and tell me; nothing else changes" },
+  { id: "throttle", label: "Throttle", hint: "a few requests a minute for an hour" },
+  { id: "approve", label: "Ask me", hint: "every request needs my approval until I resume it" },
+  { id: "pause", label: "Pause", hint: "refuse everything until I resume it" },
+  { id: "lock", label: "Lock the vault", hint: "everything stops until I unlock" },
+];
 
 export interface HandleCreated extends HandleView {
   handle: string;
@@ -143,7 +157,8 @@ export type DaemonEvent =
   | { event: "use"; secret: string; label: string; status: number }
   | { event: "egress_blocked"; secret: string; leaked: string[] }
   | { event: "approval_requested"; id: string; label: string; secret: string; caller: string; method: string; path: string; scope: string }
-  | { event: "approval_decided"; id: string; allowed: boolean };
+  | { event: "approval_decided"; id: string; allowed: boolean }
+  | { event: "anomaly"; id: string; label: string; secret: string; kind: string; detail: string; response: AnomalyResponse };
 
 export function onDaemonEvent(cb: (e: DaemonEvent) => void): Promise<UnlistenFn> {
   return listen<DaemonEvent>("usk://event", (ev) => cb(ev.payload));

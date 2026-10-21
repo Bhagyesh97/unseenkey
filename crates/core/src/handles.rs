@@ -189,12 +189,121 @@ pub struct HandleRecord {
     /// `POST /v1/refunds`). Cleared whenever the policy is replaced.
     #[serde(default)]
     pub remembered: Vec<String>,
+    /// A tripwire: the handle never resolves to anything, and any use at all
+    /// is an incident (someone has the file it was planted in).
+    #[serde(default)]
+    pub canary: bool,
+    /// What the broker does when this handle shows unusual activity (or, for
+    /// a canary, when it is used).
+    #[serde(default)]
+    pub on_anomaly: AnomalyResponse,
+    /// Current standing after an incident; `Normal` until one happens.
+    #[serde(default)]
+    pub status: HandleStatus,
+    /// The incident that set `status`, kept until the owner resumes the handle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_anomaly: Option<Anomaly>,
+}
+
+/// What the broker does to a handle that behaves unusually. The owner picks
+/// one per handle; the broker never rotates the real key on its own.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnomalyResponse {
+    /// Record it and tell the owner; nothing else changes.
+    Alert,
+    /// Drop the handle to a few requests a minute for an hour.
+    #[default]
+    Throttle,
+    /// Every request needs the owner's approval until the handle is resumed.
+    Approve,
+    /// Refuse everything until the handle is resumed.
+    Pause,
+    /// Lock the whole vault.
+    Lock,
+}
+
+impl AnomalyResponse {
+    /// Stable lowercase name, as in the API and the CLI.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Alert => "alert",
+            Self::Throttle => "throttle",
+            Self::Approve => "approve",
+            Self::Pause => "pause",
+            Self::Lock => "lock",
+        }
+    }
+
+    /// Parse the lowercase name.
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_ascii_lowercase().as_str() {
+            "alert" => Self::Alert,
+            "throttle" => Self::Throttle,
+            "approve" => Self::Approve,
+            "pause" => Self::Pause,
+            "lock" => Self::Lock,
+            _ => return None,
+        })
+    }
+}
+
+/// A handle's standing after an incident.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum HandleStatus {
+    /// Nothing special.
+    #[default]
+    Normal,
+    /// Capped to a few requests a minute until `until` (Unix ms).
+    Throttled {
+        /// When the throttle ends.
+        until: i64,
+    },
+    /// Every request waits for the owner.
+    ApprovalRequired,
+    /// Refuses everything.
+    Paused,
+}
+
+impl HandleStatus {
+    /// Stable lowercase name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Throttled { .. } => "throttled",
+            Self::ApprovalRequired => "approval_required",
+            Self::Paused => "paused",
+        }
+    }
+}
+
+/// What set a handle's status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Anomaly {
+    /// `denial_burst` or `canary`.
+    pub kind: String,
+    /// One sentence for the owner.
+    pub detail: String,
+    /// Unix ms.
+    pub at: i64,
+    /// What was done about it.
+    pub response: AnomalyResponse,
 }
 
 impl HandleRecord {
     /// Usable at `now`?
     pub fn is_active(&self, now_unix_ms: i64) -> bool {
         self.revoked_at.is_none() && self.expires_at.is_none_or(|e| now_unix_ms < e)
+    }
+
+    /// The status as it stands at `now`: a throttle that has run out reads as
+    /// normal without anyone having to clear it.
+    pub fn status_at(&self, now_unix_ms: i64) -> HandleStatus {
+        match self.status {
+            HandleStatus::Throttled { until } if now_unix_ms >= until => HandleStatus::Normal,
+            s => s,
+        }
     }
 
     /// Hash as bytes.
@@ -270,6 +379,10 @@ mod tests {
             use_count: 0,
             last_used_at: None,
             remembered: Vec::new(),
+            canary: false,
+            on_anomaly: AnomalyResponse::default(),
+            status: HandleStatus::default(),
+            last_anomaly: None,
         };
         assert!(r.is_active(99));
         assert!(!r.is_active(100));
@@ -277,5 +390,44 @@ mod tests {
         r.revoked_at = Some(5);
         assert!(!r.is_active(0));
         assert_eq!(r.hash_bytes(), Some([0u8; 32]));
+        // A throttle reads as normal once it has run out.
+        r.status = HandleStatus::Throttled { until: 50 };
+        assert_eq!(r.status_at(49), HandleStatus::Throttled { until: 50 });
+        assert_eq!(r.status_at(50), HandleStatus::Normal);
+        r.status = HandleStatus::Paused;
+        assert_eq!(r.status_at(i64::MAX), HandleStatus::Paused);
+    }
+
+    #[test]
+    fn records_written_before_incidents_existed_still_load() {
+        // A record from a vault that predates `canary`, `on_anomaly`, `status`
+        // and `last_anomaly`: the defaults are a normal, throttle-on-anomaly handle.
+        let json = r#"{"handle_id":"0192aaaa000070008000000000000001","handle_hash":"00",
+            "secret_id":"0192aaaa000070008000000000000002","label":"old","policy":{"version":1},
+            "created_at":0,"expires_at":null,"revoked_at":null}"#;
+        let r: HandleRecord = serde_json::from_str(json).unwrap();
+        assert!(!r.canary);
+        assert_eq!(r.on_anomaly, AnomalyResponse::Throttle);
+        assert_eq!(r.status, HandleStatus::Normal);
+        assert!(r.last_anomaly.is_none());
+        // Names round-trip through the API spelling.
+        for r in [
+            AnomalyResponse::Alert,
+            AnomalyResponse::Throttle,
+            AnomalyResponse::Approve,
+            AnomalyResponse::Pause,
+            AnomalyResponse::Lock,
+        ] {
+            assert_eq!(AnomalyResponse::parse(r.as_str()), Some(r));
+            assert_eq!(
+                serde_json::to_string(&r).unwrap(),
+                format!("\"{}\"", r.as_str())
+            );
+        }
+        assert_eq!(AnomalyResponse::parse("rotate"), None);
+        assert_eq!(
+            serde_json::to_string(&HandleStatus::Throttled { until: 7 }).unwrap(),
+            r#"{"state":"throttled","until":7}"#
+        );
     }
 }

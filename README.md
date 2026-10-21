@@ -25,7 +25,8 @@ usk guard fix .env                        # replace the real keys in a .env with
 usk mcp install claude-code               # or claude-desktop, cursor, windsurf: the agent gets tools, never values
 usk add aws-dev && usk env aws-dev        # boto3, the AWS CLI and the JS SDK sign with a placeholder; the broker re-signs with the real key
 usk add google-oauth                      # paste a refresh token or gcloud's ADC file; the broker keeps the access token fresh
-usk handle create stripe --policy payments --expires-days 7   # for a contractor: payments yes, refunds and payouts no, gone next week
+usk handle create stripe --policy payments --expires-days 7 --cap 500/day   # for a contractor: payments yes, refunds no, 500 calls a day, gone next week
+usk handle create stripe --canary                 # a tripwire to plant in .env.example: it never works, and any use locks the vault
 usk run --with DATABASE_URL=prod-db -- ./app   # for things that cannot be proxied (the program sees the value; audited and scrubbed)
 ```
 
@@ -56,6 +57,7 @@ The desktop app is a thin window over the same daemon (unlock, approvals, audit 
 - **Handles:** `usk_h_…` by default, or *camouflage* handles that pass the SDK's own format checks (`sk-proj-usk-…`, `sk_live_usk…`); every format carries the `usk` marker so secret scanners can learn it.
 - **Policy:** per-provider presets with plain-English `usk policy explain`; approvals in the desktop app or `usk approve`; "allow always" rules you can forget later.
 - **Fail closed:** each secret is locked to its provider's hosts, unmatched requests are refused, requests that come from a browser are refused, anything the broker cannot classify is refused.
+- **A leaked handle cannot run up a bill:** it only works through your machine, within its cap; a burst of refused requests throttles, pauses or locks (your choice per handle); a canary handle tells you the moment someone has your files.
 - **Audit:** hash-chained log with `usk log verify`; the entry is committed before the upstream request is sent.
 - **Providers:** Anthropic, OpenAI, Google AI, Groq, Mistral, OpenRouter, GitHub, Stripe, Slack, Notion, Cloudflare, Vercel, Supabase, Twilio, SendGrid, Resend, AWS (SigV4 re-signing), OAuth2 refresh-token clients (Google and anything RFC 6749), and `generic` for any other host.
 
@@ -74,7 +76,7 @@ Next is **delegation**: grant a developer or agency the use of a key with a poli
 ## Building and contributing
 
 ```
-cargo test --workspace            # core, daemon, CLI (158 tests)
+cargo test --workspace            # core, daemon, CLI (163 tests)
 cargo run -p usk -- --help
 cd apps/desktop && npm install && npm run tauri dev
 ```

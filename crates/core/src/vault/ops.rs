@@ -6,7 +6,7 @@ use crate::broker::effective_hosts;
 use crate::crypto::aead;
 use crate::crypto::hash::Digest;
 use crate::crypto::{kdf, SecretBytes};
-use crate::handles::{self, HandleRecord};
+use crate::handles::{self, Anomaly, AnomalyResponse, HandleRecord, HandleStatus};
 use crate::ids::Id;
 use crate::policy::Policy;
 use crate::storage::{RecordKind, Storage};
@@ -17,6 +17,38 @@ use alloc::vec::Vec;
 
 /// Persist handle counters after this many unrecorded uses.
 pub const COUNTER_FLUSH_EVERY: u64 = 100;
+
+/// How long a throttle set by an incident lasts.
+pub const THROTTLE_MS: i64 = 60 * 60 * 1000;
+
+/// Incident settings chosen when a handle is created.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HandleOptions {
+    /// A tripwire rather than a working handle.
+    pub canary: bool,
+    /// What unusual activity does to it.
+    pub on_anomaly: AnomalyResponse,
+}
+
+impl Default for HandleOptions {
+    /// A working handle that gets throttled when it misbehaves.
+    fn default() -> Self {
+        Self {
+            canary: false,
+            on_anomaly: AnomalyResponse::Throttle,
+        }
+    }
+}
+
+impl HandleOptions {
+    /// A canary: locks the vault when tripped unless told otherwise.
+    pub fn canary() -> Self {
+        Self {
+            canary: true,
+            on_anomaly: AnomalyResponse::Lock,
+        }
+    }
+}
 
 /// Handles by id, and handle hash → id.
 type HandleIndex = (BTreeMap<Id, HandleRecord>, BTreeMap<Digest, Id>);
@@ -83,6 +115,27 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         expires_at: Option<i64>,
         format: Option<&handles::Format>,
     ) -> Result<(HandleRecord, String), VaultError> {
+        self.create_handle_with(
+            secret_id,
+            label,
+            policy,
+            expires_at,
+            format,
+            HandleOptions::default(),
+        )
+    }
+
+    /// [`Vault::create_handle_formatted`] plus the incident settings: whether
+    /// the handle is a canary and what unusual activity does to it.
+    pub fn create_handle_with(
+        &mut self,
+        secret_id: &Id,
+        label: &str,
+        policy: Policy,
+        expires_at: Option<i64>,
+        format: Option<&handles::Format>,
+        opts: HandleOptions,
+    ) -> Result<(HandleRecord, String), VaultError> {
         let vk = self.vk()?.clone();
         let meta = self.index.get(secret_id).ok_or(VaultError::NotFound)?;
         policy
@@ -121,9 +174,72 @@ impl<S: Storage, C: Clock> Vault<S, C> {
             use_count: 0,
             last_used_at: None,
             remembered: Vec::new(),
+            canary: opts.canary,
+            on_anomaly: opts.on_anomaly,
+            status: HandleStatus::Normal,
+            last_anomaly: None,
         };
         self.write_handle(&vk, record.clone())?;
         Ok((record, plain))
+    }
+
+    /// Record an incident on a handle and the standing it leaves the handle
+    /// in. `Alert` and `Lock` responses change nothing on the handle itself
+    /// (locking is the daemon's job); the others set the status.
+    pub fn set_handle_incident(&mut self, id: &Id, anomaly: Anomaly) -> Result<(), VaultError> {
+        let vk = self.vk()?.clone();
+        let mut h = self
+            .handles
+            .get(id)
+            .ok_or(VaultError::HandleNotFound)?
+            .clone();
+        h.status = match anomaly.response {
+            AnomalyResponse::Alert | AnomalyResponse::Lock => h.status,
+            AnomalyResponse::Throttle => HandleStatus::Throttled {
+                until: anomaly.at + THROTTLE_MS,
+            },
+            AnomalyResponse::Approve => HandleStatus::ApprovalRequired,
+            AnomalyResponse::Pause => HandleStatus::Paused,
+        };
+        h.last_anomaly = Some(anomaly);
+        self.write_handle(&vk, h)
+    }
+
+    /// Put a handle back to normal after an incident. Returns whether anything
+    /// changed. Requires an unlocked vault.
+    pub fn resume_handle(&mut self, id: &Id) -> Result<bool, VaultError> {
+        let vk = self.vk()?.clone();
+        let mut h = self
+            .handles
+            .get(id)
+            .ok_or(VaultError::HandleNotFound)?
+            .clone();
+        if h.status == HandleStatus::Normal && h.last_anomaly.is_none() {
+            return Ok(false);
+        }
+        h.status = HandleStatus::Normal;
+        h.last_anomaly = None;
+        self.write_handle(&vk, h)?;
+        Ok(true)
+    }
+
+    /// Change what unusual activity does to a handle.
+    pub fn set_handle_response(
+        &mut self,
+        id: &Id,
+        on_anomaly: AnomalyResponse,
+    ) -> Result<(), VaultError> {
+        let vk = self.vk()?.clone();
+        let mut h = self
+            .handles
+            .get(id)
+            .ok_or(VaultError::HandleNotFound)?
+            .clone();
+        if h.on_anomaly == on_anomaly {
+            return Ok(());
+        }
+        h.on_anomaly = on_anomaly;
+        self.write_handle(&vk, h)
     }
 
     /// All handles, active and revoked, newest first.

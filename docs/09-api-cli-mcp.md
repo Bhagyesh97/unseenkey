@@ -19,10 +19,12 @@ All responses are JSON. Errors: `{ "error": "<code>", "message": "…" }`.
 | POST | `/v1/secrets/{id}/reveal` | requires `{confirm:true}`; returns value once; audit `reveal`; optional `reason` |
 | POST | `/v1/secrets/import` | multipart or `{format, content}` |
 | GET/POST | `/v1/policies`, `/v1/policies/{id}` | CRUD; POST validates and returns `explanation` |
-| POST | `/v1/handles` | `{secret_id, policy_id, label, callers?, expires_at?}` → returns the handle **once** |
+| POST | `/v1/handles` | `{secret, preset_policy \| policy, label?, expires_in_days?, camouflage?, cap_per_day?, cap_per_minute?, canary?, on_anomaly?}` → returns the handle **once**; the view carries `canary`, `on_anomaly`, `status` and `last_anomaly` |
 | GET | `/v1/handles` | list (hashes, labels, counts, never handle strings) |
 | DELETE | `/v1/handles/{id}` | revoke |
 | POST | `/v1/handles/{id}/forget` | `{rule?}`: clear "allow always" decisions (one rule, or all). They live in the handle record, survive restarts, and are wiped by a policy change |
+| PATCH | `/v1/handles/{id}` | `{preset_policy \| policy}` replaces the policy (and forgets remembered rules); `{on_anomaly}` changes the incident response alone |
+| POST | `/v1/handles/{id}/resume` | back to normal after an incident: ends a throttle, approval mode or pause, restarts the burst detector |
 | GET/POST/DELETE | `/v1/unlock-methods`, `/v1/unlock-methods/{id}` | device unlock methods (Windows Hello); `POST /v1/unlock` also takes `{wrap_id, kek}` |
 | GET | `/v1/callers` / POST / DELETE | manage MCP/device callers |
 | GET | `/v1/audit?since=&kind=&limit=` | decrypted events for the owner |
@@ -32,7 +34,7 @@ All responses are JSON. Errors: `{ "error": "<code>", "message": "…" }`.
 | POST | `/v1/env-guard/scan` | `{path}` → detected secrets in `.env`-like files (values not returned, only positions) |
 | POST | `/v1/env-guard/fix` | move detected secrets into the vault and rewrite the file with handles |
 
-Server-sent events at `GET /v1/events` for the desktop app: `approval_requested`, `egress_blocked`, `use`, `lock`.
+Server-sent events at `GET /v1/events` for the desktop app: `approval_requested`, `egress_blocked`, `use`, `lock`, `anomaly` (`id`, `label`, `secret`, `kind` = `denial_burst` | `canary`, `detail`, `response`).
 
 ## Proxy routes
 
@@ -81,6 +83,10 @@ usk env aws-dev --policy s3-read-only   # AWS_ENDPOINT_URL + a handle as AWS_ACC
 usk add gdrive --type oauth2_client --upstream www.googleapis.com   # OAuth: client id, secret, refresh token, token URL; or pipe the token JSON with --stdin
 usk env openai --camouflage             # a handle shaped like the provider's own key, for tools that check the format
 usk handle forget <label|id> [--rule "POST /v1/refunds"]   # ask again for rules approved with "always"
+usk handle create stripe --policy payments --cap 500/day --cap 60/min   # hard stops, whatever the preset says
+usk handle create stripe --canary [--camouflage]   # a handle that never works; any use locks the vault (--on-anomaly to change)
+usk handle create … --on-anomaly alert|throttle|approve|pause|lock     # what a burst of refused requests does to the handle
+usk handle resume <label|id>     # back to normal after an incident
 usk policy ls | usk policy show <id> | usk policy edit <id> (opens $EDITOR, validates, explains)
 usk policy explain <id>
 

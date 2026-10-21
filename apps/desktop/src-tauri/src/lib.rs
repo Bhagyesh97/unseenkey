@@ -355,6 +355,20 @@ fn event_pump(app: AppHandle, paths: VaultPaths) {
                 let body = v["scope"].as_str().unwrap_or("").to_string();
                 let _ = app.notification().builder().title(title).body(body).show();
                 show_main(&app);
+            } else if v["event"] == "anomaly" {
+                let label = v["label"].as_str().unwrap_or("a handle");
+                let title = if v["kind"] == "canary" {
+                    format!("Canary tripped: {label}")
+                } else {
+                    format!("Unusual activity on {label}")
+                };
+                let body = format!(
+                    "{}. Response: {}.",
+                    v["detail"].as_str().unwrap_or(""),
+                    v["response"].as_str().unwrap_or("")
+                );
+                let _ = app.notification().builder().title(title).body(body).show();
+                show_main(&app);
             }
             let _ = app.emit("usk://event", v);
         }

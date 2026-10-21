@@ -85,6 +85,12 @@ pub mod kinds {
     pub const UNLOCK_METHOD_REMOVED: &str = "unlock_method_removed";
     /// Remembered ("allow always") approvals were cleared for a handle.
     pub const APPROVAL_FORGOTTEN: &str = "approval_forgotten";
+    /// A handle behaved unusually (`kind`, `detail`, `response`).
+    pub const ANOMALY: &str = "anomaly";
+    /// A canary handle was used: whoever did it has the file it was planted in.
+    pub const CANARY_TRIPPED: &str = "canary_tripped";
+    /// The owner put a handle back to normal after an incident.
+    pub const HANDLE_RESUMED: &str = "handle_resumed";
 }
 
 /// Genesis `prev_hash` for a vault.

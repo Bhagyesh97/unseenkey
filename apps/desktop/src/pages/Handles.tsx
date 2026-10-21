@@ -1,5 +1,19 @@
 import { useEffect, useState } from "react";
-import { api, ago, type HandleCreated, type HandleView, type Preset, type SecretMeta } from "../api";
+import { api, ago, RESPONSES, type AnomalyResponse, type HandleCreated, type HandleView, type Preset, type SecretMeta } from "../api";
+
+function standing(h: HandleView): { text: string; cls: string } | null {
+  if (h.canary) return { text: "canary", cls: "warn" };
+  switch (h.status.state) {
+    case "throttled":
+      return { text: `throttled until ${new Date(h.status.until).toLocaleTimeString()}`, cls: "warn" };
+    case "approval_required":
+      return { text: "asks before every request", cls: "warn" };
+    case "paused":
+      return { text: "paused", cls: "off" };
+    default:
+      return null;
+  }
+}
 
 export function Handles() {
   const [handles, setHandles] = useState<HandleView[]>([]);
@@ -26,6 +40,14 @@ export function Handles() {
     await api.call("DELETE", `/v1/handles/${h.id}`);
     await load();
   };
+  const resume = async (h: HandleView) => {
+    await api.call("POST", `/v1/handles/${h.id}/resume`, {});
+    await load();
+  };
+  const setResponse = async (h: HandleView, on_anomaly: AnomalyResponse) => {
+    await api.call("PATCH", `/v1/handles/${h.id}`, { on_anomaly });
+    await load();
+  };
 
   return (
     <div className="split">
@@ -43,10 +65,30 @@ export function Handles() {
                 <span className="name">{h.label}</span>
                 <span className="chip">{h.secret}</span>
                 <span className={`chip ${h.revoked_at ? "off" : h.active ? "ok" : "warn"}`}>{h.revoked_at ? "revoked" : h.active ? "active" : "expired"}</span>
+                {standing(h) && <span className={`chip ${standing(h)!.cls}`}>{standing(h)!.text}</span>}
                 {h.policy.callers?.length ? <span className="chip">{h.policy.callers.join(", ")}</span> : null}
               </div>
               <div className="row-sub muted">{h.use_count} uses · last {ago(h.last_used_at)}</div>
-              <pre className="policy">{h.policy_explanation}</pre>
+              {h.last_anomaly && !h.revoked_at && (
+                <div className="err">
+                  {h.last_anomaly.kind === "canary" ? "Canary tripped" : "Unusual activity"} {ago(h.last_anomaly.at)}: {h.last_anomaly.detail}.
+                  {h.status.state !== "normal" && <> <button className="small" onClick={() => void resume(h)}>Back to normal</button></>}
+                  {h.status.state === "normal" && <> <button className="link" onClick={() => void resume(h)}>dismiss</button></>}
+                </div>
+              )}
+              {h.canary ? (
+                <p className="muted small">A tripwire: it never works. Plant it where only an intruder would find it; any use is an incident.</p>
+              ) : (
+                <pre className="policy">{h.policy_explanation}</pre>
+              )}
+              {!h.revoked_at && (
+                <div className="row-main">
+                  <span className="muted small">{h.canary ? "When it is used:" : "On unusual activity:"}</span>
+                  <select value={h.on_anomaly} onChange={(e) => void setResponse(h, e.target.value as AnomalyResponse)}>
+                    {RESPONSES.map((r) => <option key={r.id} value={r.id} title={r.hint}>{r.label}</option>)}
+                  </select>
+                </div>
+              )}
               {h.remembered.length > 0 && (
                 <div className="row-main">
                   <span className="muted small">Allowed always:</span>
@@ -82,6 +124,10 @@ function CreateHandle({ onDone, onCancel }: { onDone: () => void; onCancel: () =
   const [label, setLabel] = useState("");
   const [days, setDays] = useState<string>("");
   const [camouflage, setCamouflage] = useState(false);
+  const [capDay, setCapDay] = useState<string>("");
+  const [capMinute, setCapMinute] = useState<string>("");
+  const [canary, setCanary] = useState(false);
+  const [response, setResponse] = useState<AnomalyResponse | "">("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [created, setCreated] = useState<HandleCreated | null>(null);
@@ -103,6 +149,10 @@ function CreateHandle({ onDone, onCancel }: { onDone: () => void; onCancel: () =
       if (policy) body.preset_policy = `${preset!.id}:${policy}`;
       if (days) body.expires_in_days = Number(days);
       if (camouflage && preset?.camouflage) body.camouflage = true;
+      if (capDay) body.cap_per_day = Number(capDay);
+      if (capMinute) body.cap_per_minute = Number(capMinute);
+      if (canary) body.canary = true;
+      if (response) body.on_anomaly = response;
       setCreated(await api.call<HandleCreated>("POST", "/v1/handles", body));
     } catch (e) {
       setErr((e as Error).message);
@@ -117,10 +167,14 @@ function CreateHandle({ onDone, onCancel }: { onDone: () => void; onCancel: () =
     );
     return (
       <div className="form">
-        <h2>Handle created</h2>
-        <p>This is shown once. It is safe to paste into tools: it only works from this computer, only for {created.policy.upstreams?.join(", ") || "its host"}, and only within this policy.</p>
+        <h2>{created.canary ? "Canary created" : "Handle created"}</h2>
+        {created.canary ? (
+          <p>This is shown once. It never works: put it where only an intruder would find it (a .env.example, an old repo, a notes page). The moment anyone uses it, the response is "{RESPONSES.find((r) => r.id === created.on_anomaly)?.label.toLowerCase()}" and the event appears under Activity.</p>
+        ) : (
+          <p>This is shown once. It is safe to paste into tools: it only works from this computer, only for {created.policy.upstreams?.join(", ") || "its host"}, and only within this policy.</p>
+        )}
         <code className="handle">{created.handle}</code>
-        <pre className="policy">{created.policy_explanation}</pre>
+        {!created.canary && <pre className="policy">{created.policy_explanation}</pre>}
         {lines.length > 0 && (
           <>
             <div className="row-main">
@@ -165,6 +219,22 @@ function CreateHandle({ onDone, onCancel }: { onDone: () => void; onCancel: () =
         <p className="muted small">This secret has no provider preset; the handle allows any request to its locked hosts.</p>
       )}
       <label>Expires after (days, optional)<input type="number" min={1} value={days} onChange={(e) => setDays(e.target.value)} /></label>
+      {!canary && (
+        <div className="row-main">
+          <label>Cap per day<input type="number" min={1} placeholder="unlimited" value={capDay} onChange={(e) => setCapDay(e.target.value)} /></label>
+          <label>Cap per minute<input type="number" min={1} placeholder="unlimited" value={capMinute} onChange={(e) => setCapMinute(e.target.value)} /></label>
+        </div>
+      )}
+      <label>{canary ? "When it is used" : "On unusual activity (a burst of refused requests)"}
+        <select value={response} onChange={(e) => setResponse(e.target.value as AnomalyResponse | "")}>
+          <option value="">{canary ? "Lock the vault (default)" : "Throttle (default)"}</option>
+          {RESPONSES.map((r) => <option key={r.id} value={r.id}>{r.label}: {r.hint}</option>)}
+        </select>
+      </label>
+      <label className="check">
+        <input type="checkbox" checked={canary} onChange={(e) => setCanary(e.target.checked)} />
+        Make it a canary: a handle that never works, to plant where only an intruder would find it
+      </label>
       {preset?.camouflage && (
         <label className="check">
           <input type="checkbox" checked={camouflage} onChange={(e) => setCamouflage(e.target.checked)} />
@@ -174,7 +244,7 @@ function CreateHandle({ onDone, onCancel }: { onDone: () => void; onCancel: () =
       {err && <div className="err">{err}</div>}
       <div className="actions">
         <button onClick={onCancel}>Cancel</button>
-        <button className="primary" disabled={busy || !secret || (!!preset && !policy)} onClick={() => void submit()}>{busy ? "Creating…" : "Create"}</button>
+        <button className="primary" disabled={busy || !secret || (!!preset && !policy && !canary)} onClick={() => void submit()}>{busy ? "Creating…" : "Create"}</button>
       </div>
     </div>
   );

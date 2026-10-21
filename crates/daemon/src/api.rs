@@ -16,11 +16,12 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::{Stream, StreamExt};
 use unseenkey_core::audit::kinds;
 use unseenkey_core::crypto::SecretBytes;
-use unseenkey_core::handles::HandleRecord;
+use unseenkey_core::handles::{Anomaly, AnomalyResponse, HandleRecord, HandleStatus};
 use unseenkey_core::ids::Id;
 use unseenkey_core::policy::{explain, Policy};
 use unseenkey_core::presets;
 use unseenkey_core::providers;
+use unseenkey_core::vault::HandleOptions;
 use unseenkey_core::vault::{NewSecret, SecretKind, SecretMeta, VaultError};
 use zeroize::Zeroizing;
 
@@ -868,6 +869,18 @@ pub struct CreateHandle {
     /// cannot be mistaken for a key.
     #[serde(default)]
     pub camouflage: bool,
+    /// Requests per day, replacing the policy's own limit. A hard stop.
+    pub cap_per_day: Option<u32>,
+    /// Requests per minute, replacing the policy's own limit.
+    pub cap_per_minute: Option<u32>,
+    /// A canary: a handle that never works. Any use at all means whoever sent
+    /// it has the file it was planted in; the response is `on_anomaly`
+    /// (`lock` unless told otherwise).
+    #[serde(default)]
+    pub canary: bool,
+    /// What unusual activity does to the handle: `alert`, `throttle`
+    /// (default), `approve`, `pause` or `lock`.
+    pub on_anomaly: Option<AnomalyResponse>,
 }
 
 /// What a handle looks like to owners. Never includes the handle string
@@ -902,6 +915,15 @@ pub struct HandleView {
     pub active: bool,
     /// Rules the owner approved with "allow always"; cleared when the policy changes.
     pub remembered: Vec<String>,
+    /// A tripwire rather than a working handle.
+    pub canary: bool,
+    /// What unusual activity does to it.
+    pub on_anomaly: AnomalyResponse,
+    /// Standing right now: `normal`, `throttled` (with `until`),
+    /// `approval_required` or `paused`.
+    pub status: HandleStatus,
+    /// The incident behind `status`, until the owner resumes the handle.
+    pub last_anomaly: Option<Anomaly>,
 }
 
 /// Creation response: the only place the handle string appears.
@@ -938,6 +960,10 @@ fn handle_view(v: &crate::state::DaemonVault, h: &HandleRecord, now: i64) -> Han
         last_used_at: h.last_used_at,
         active: h.is_active(now),
         remembered: h.remembered.clone(),
+        canary: h.canary,
+        on_anomaly: h.on_anomaly,
+        status: h.status_at(now),
+        last_anomaly: h.last_anomaly.clone(),
     }
 }
 
@@ -962,7 +988,9 @@ pub async fn create_handle(
     let mut v = s.vault.lock().await;
     let secret_id = resolve(&v, &req.secret)?;
     let meta = v.get(&secret_id)?.clone();
-    let policy = match (&req.policy, &req.preset_policy) {
+    let mut policy = match (&req.policy, &req.preset_policy) {
+        // A canary never resolves, so its policy is the empty one: it can do nothing.
+        _ if req.canary => Policy::default(),
         (Some(p), _) => p.clone(),
         (None, Some(spec)) => presets::policy_ref(spec)
             .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, "invalid_policy", e.to_string()))?,
@@ -974,6 +1002,29 @@ pub async fn create_handle(
                 .unwrap_or_else(Policy::allow_all),
             None => Policy::allow_all(),
         },
+    };
+    for (cap, slot) in [
+        (req.cap_per_day, &mut policy.limits.requests_per_day),
+        (req.cap_per_minute, &mut policy.limits.requests_per_minute),
+    ] {
+        if let Some(n) = cap {
+            if n == 0 {
+                return Err(ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_cap",
+                    "a cap must be at least 1; revoke the handle to stop it entirely",
+                ));
+            }
+            *slot = Some(n);
+        }
+    }
+    let opts = HandleOptions {
+        canary: req.canary,
+        on_anomaly: req.on_anomaly.unwrap_or(if req.canary {
+            AnomalyResponse::Lock
+        } else {
+            AnomalyResponse::Throttle
+        }),
     };
     let label = req
         .label
@@ -1001,11 +1052,23 @@ pub async fn create_handle(
     } else {
         None
     };
-    let (record, plain) =
-        v.create_handle_formatted(&secret_id, &label, policy, expires_at, format.as_ref())?;
+    let (record, plain) = v.create_handle_with(
+        &secret_id,
+        &label,
+        policy,
+        expires_at,
+        format.as_ref(),
+        opts,
+    )?;
     let _ = v.audit(
         kinds::HANDLE_CREATED,
-        serde_json::json!({ "id": record.handle_id.to_hex(), "label": record.label, "secret": meta.name, "expires_at": expires_at, "camouflage": req.camouflage }),
+        serde_json::json!({
+            "id": record.handle_id.to_hex(), "label": record.label, "secret": meta.name,
+            "expires_at": expires_at, "camouflage": req.camouflage, "canary": record.canary,
+            "on_anomaly": record.on_anomaly.as_str(),
+            "cap_per_day": record.policy.limits.requests_per_day,
+            "cap_per_minute": record.policy.limits.requests_per_minute,
+        }),
     );
     let view = handle_view(&v, &record, now);
     drop(v);
@@ -1072,6 +1135,8 @@ pub struct PatchHandle {
     pub preset_policy: Option<String>,
     /// Replace the policy with an inline document.
     pub policy: Option<Policy>,
+    /// Change what unusual activity does to the handle.
+    pub on_anomaly: Option<AnomalyResponse>,
 }
 
 /// `PATCH /v1/handles/{ref}`
@@ -1083,22 +1148,53 @@ pub async fn patch_handle(
     let mut v = s.vault.lock().await;
     let id = resolve_handle(&v, &r)?;
     let policy = match (&p.policy, &p.preset_policy) {
-        (Some(pol), _) => pol.clone(),
-        (None, Some(spec)) => presets::policy_ref(spec)
-            .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, "invalid_policy", e.to_string()))?,
+        (Some(pol), _) => Some(pol.clone()),
+        (None, Some(spec)) => Some(presets::policy_ref(spec).map_err(|e| {
+            ApiError::new(StatusCode::BAD_REQUEST, "invalid_policy", e.to_string())
+        })?),
+        (None, None) if p.on_anomaly.is_some() => None,
         (None, None) => {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
                 "invalid",
-                "pass policy or preset_policy",
+                "pass policy, preset_policy or on_anomaly",
             ))
         }
     };
-    v.set_handle_policy(&id, policy)?;
-    let _ = v.audit(
-        kinds::POLICY_CHANGED,
-        serde_json::json!({ "id": id.to_hex() }),
-    );
+    if let Some(policy) = policy {
+        v.set_handle_policy(&id, policy)?;
+        let _ = v.audit(
+            kinds::POLICY_CHANGED,
+            serde_json::json!({ "id": id.to_hex() }),
+        );
+    }
+    if let Some(r) = p.on_anomaly {
+        v.set_handle_response(&id, r)?;
+        let _ = v.audit(
+            kinds::POLICY_CHANGED,
+            serde_json::json!({ "id": id.to_hex(), "on_anomaly": r.as_str() }),
+        );
+    }
+    Ok(Json(handle_view(&v, v.handle(&id)?, now_ms())))
+}
+
+/// `POST /v1/handles/{ref}/resume` — back to normal after an incident: the
+/// throttle, approval mode or pause ends and the burst detector starts afresh.
+pub async fn resume_handle(
+    State(s): State<Arc<AppState>>,
+    Path(r): Path<String>,
+) -> ApiResult<HandleView> {
+    let mut v = s.vault.lock().await;
+    let id = resolve_handle(&v, &r)?;
+    let changed = v.resume_handle(&id)?;
+    s.reset_denials(&id).await;
+    if changed {
+        let _ = v.audit(
+            kinds::HANDLE_RESUMED,
+            serde_json::json!({ "id": id.to_hex() }),
+        );
+        tracing::info!(handle = %id, "handle resumed");
+    }
     Ok(Json(handle_view(&v, v.handle(&id)?, now_ms())))
 }
 

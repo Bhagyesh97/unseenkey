@@ -184,6 +184,12 @@ enum Command {
         /// check the key format. It is still only a handle.
         #[arg(long)]
         camouflage: bool,
+        /// Hard cap on requests: `1000/day` or `60/min` (repeatable).
+        #[arg(long, value_name = "N/day|N/min")]
+        cap: Vec<String>,
+        /// What unusual activity does to the handle (default: throttle).
+        #[arg(long, value_enum)]
+        on_anomaly: Option<OnAnomaly>,
     },
     /// Show the audit log.
     Log {
@@ -350,6 +356,9 @@ pub fn run() -> Result<(), CliError> {
                 policy_file,
                 expires_days,
                 camouflage,
+                cap,
+                canary,
+                on_anomaly,
             } => handle_create(
                 &paths,
                 &secret,
@@ -358,12 +367,18 @@ pub fn run() -> Result<(), CliError> {
                 policy_file,
                 expires_days,
                 camouflage,
+                Incidents {
+                    cap,
+                    canary,
+                    on_anomaly,
+                },
                 cli.json,
             ),
             HandleAction::Ls => handle_ls(&paths, cli.json),
             HandleAction::Show { r#ref } => handle_show(&paths, &r#ref, cli.json),
             HandleAction::Revoke { r#ref } => handle_revoke(&paths, &r#ref),
             HandleAction::Forget { r#ref, rule } => handle_forget(&paths, &r#ref, rule),
+            HandleAction::Resume { r#ref } => handle_resume(&paths, &r#ref),
             HandleAction::Policy {
                 r#ref,
                 preset,
@@ -376,7 +391,21 @@ pub fn run() -> Result<(), CliError> {
             label,
             shell,
             camouflage,
-        } => env_cmd(&paths, &secret, policy, label, shell, camouflage),
+            cap,
+            on_anomaly,
+        } => env_cmd(
+            &paths,
+            &secret,
+            policy,
+            label,
+            shell,
+            camouflage,
+            Incidents {
+                cap,
+                canary: false,
+                on_anomaly,
+            },
+        ),
         Command::Log {
             action,
             kind,
@@ -913,9 +942,26 @@ enum HandleAction {
         /// check the key format. It is still only a handle.
         #[arg(long)]
         camouflage: bool,
+        /// Hard cap on requests: `1000/day` or `60/min` (repeatable).
+        #[arg(long, value_name = "N/day|N/min")]
+        cap: Vec<String>,
+        /// A canary: a handle that never works. Plant it where only an
+        /// intruder would find it; any use locks the vault (see --on-anomaly).
+        #[arg(long)]
+        canary: bool,
+        /// What unusual activity does to the handle (default: throttle; lock
+        /// for a canary).
+        #[arg(long, value_enum)]
+        on_anomaly: Option<OnAnomaly>,
     },
     /// List handles.
     Ls,
+    /// Put a handle back to normal after unusual activity (ends a throttle,
+    /// approval mode or pause).
+    Resume {
+        /// Label or id.
+        r#ref: String,
+    },
     /// Show one handle and its policy in plain English.
     Show {
         /// Label or id.
@@ -979,12 +1025,125 @@ fn qualify_policy(client: &Client, secret: &str, spec: &str) -> Result<String, C
     Ok(format!("{provider}:{spec}"))
 }
 
+/// `--on-anomaly` choices, in the daemon's spelling.
+#[derive(Clone, Copy, ValueEnum)]
+enum OnAnomaly {
+    /// Record it and notify; nothing else changes.
+    Alert,
+    /// A few requests a minute for an hour.
+    Throttle,
+    /// Every request needs your approval until you resume the handle.
+    Approve,
+    /// Refuse everything until you resume the handle.
+    Pause,
+    /// Lock the whole vault.
+    Lock,
+}
+
+impl OnAnomaly {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Alert => "alert",
+            Self::Throttle => "throttle",
+            Self::Approve => "approve",
+            Self::Pause => "pause",
+            Self::Lock => "lock",
+        }
+    }
+}
+
+/// Incident settings from the command line.
+struct Incidents {
+    cap: Vec<String>,
+    canary: bool,
+    on_anomaly: Option<OnAnomaly>,
+}
+
+impl Incidents {
+    /// Add the settings to a `POST /v1/handles` body.
+    fn apply(&self, body: &mut Value) -> Result<(), CliError> {
+        for cap in &self.cap {
+            let (n, unit) = cap.split_once('/').ok_or_else(|| {
+                CliError::general(format!("--cap {cap:?}: use N/day or N/min, e.g. 1000/day"))
+            })?;
+            let n: u32 = n
+                .trim()
+                .replace(['_', ','], "")
+                .parse()
+                .ok()
+                .filter(|n| *n > 0)
+                .ok_or_else(|| {
+                    CliError::general(format!("--cap {cap:?}: the number must be 1 or more"))
+                })?;
+            let field = match unit.trim().to_ascii_lowercase().as_str() {
+                "day" | "d" | "daily" => "cap_per_day",
+                "min" | "minute" | "m" => "cap_per_minute",
+                _ => {
+                    return Err(CliError::general(format!(
+                        "--cap {cap:?}: the unit must be day or min"
+                    )))
+                }
+            };
+            body[field] = json!(n);
+        }
+        if self.canary {
+            body["canary"] = json!(true);
+        }
+        if let Some(r) = self.on_anomaly {
+            body["on_anomaly"] = json!(r.as_str());
+        }
+        Ok(())
+    }
+}
+
+/// One word for a handle's standing, for lists.
+fn handle_state(h: &Value) -> &'static str {
+    if h["revoked_at"].is_i64() {
+        "revoked"
+    } else if h["active"].as_bool() == Some(false) {
+        "expired"
+    } else if h["canary"].as_bool() == Some(true) {
+        "canary"
+    } else {
+        match h["status"]["state"].as_str() {
+            Some("throttled") => "throttled",
+            Some("approval_required") => "approval",
+            Some("paused") => "paused",
+            _ => "active",
+        }
+    }
+}
+
 fn print_handle_created(created: &Value, json: bool) {
     if json {
         println!(
             "{}",
             serde_json::to_string_pretty(created).unwrap_or_default()
         );
+        return;
+    }
+    if created["canary"].as_bool() == Some(true) {
+        println!(
+            "Canary created for {} (label: {}).",
+            created["secret"].as_str().unwrap_or(""),
+            created["label"].as_str().unwrap_or("")
+        );
+        println!();
+        println!("  {}", created["handle"].as_str().unwrap_or(""));
+        println!();
+        println!("This is shown once. It never works: put it where only an intruder would find it");
+        println!("(a .env.example, an old repo, a notes page). The moment anyone uses it the");
+        println!(
+            "response is \"{}\" and the event is in `usk log --kind canary_tripped`.",
+            created["on_anomaly"].as_str().unwrap_or("lock")
+        );
+        if let Some(env) = created["env"].as_object().filter(|e| !e.is_empty()) {
+            println!();
+            println!("As the SDK would expect it:");
+            for (k, v) in env {
+                println!("  {k}={}", v.as_str().unwrap_or(""));
+            }
+        }
         return;
     }
     println!(
@@ -1031,6 +1190,7 @@ fn handle_create(
     policy_file: Option<PathBuf>,
     expires_days: Option<u32>,
     camouflage: bool,
+    incidents: Incidents,
     json: bool,
 ) -> Result<(), CliError> {
     let c = unlocked(paths)?;
@@ -1041,8 +1201,24 @@ fn handle_create(
         let p = load_policy_file(&f)?;
         body["policy"] = serde_json::from_str::<Value>(&p.to_json()).unwrap_or(Value::Null);
     }
+    incidents.apply(&mut body)?;
     let created = c.post("/v1/handles", body)?;
     print_handle_created(&created, json);
+    Ok(())
+}
+
+fn handle_resume(paths: &VaultPaths, r#ref: &str) -> Result<(), CliError> {
+    let c = unlocked(paths)?;
+    let h = c.post(&format!("/v1/handles/{ref}/resume"), json!({}))?;
+    println!(
+        "{} is back to normal ({}).",
+        h["label"].as_str().unwrap_or(r#ref),
+        h["policy_explanation"]
+            .as_str()
+            .and_then(|e| e.lines().next())
+            .unwrap_or("")
+            .trim_end_matches('.')
+    );
     Ok(())
 }
 
@@ -1066,13 +1242,7 @@ fn handle_ls(paths: &VaultPaths, json: bool) -> Result<(), CliError> {
     let (h_label, h_secret, h_state, h_uses, h_id) = ("LABEL", "SECRET", "STATE", "USES", "ID");
     println!("{h_label:<24} {h_secret:<20} {h_state:<9} {h_uses:>6}  {h_id}");
     for h in items {
-        let state = if h["revoked_at"].is_i64() {
-            "revoked"
-        } else if h["active"].as_bool() == Some(false) {
-            "expired"
-        } else {
-            "active"
-        };
+        let state = handle_state(&h);
         println!(
             "{:<24} {:<20} {:<9} {:>6}  {}",
             h["label"].as_str().unwrap_or(""),
@@ -1100,6 +1270,24 @@ fn handle_show(paths: &VaultPaths, r#ref: &str, json: bool) -> Result<(), CliErr
     println!("created_at: {}", h["created_at"]);
     println!("expires_at: {}", h["expires_at"]);
     println!("revoked_at: {}", h["revoked_at"]);
+    if h["canary"].as_bool() == Some(true) {
+        println!("canary:     yes (never works; any use is an incident)");
+    }
+    println!(
+        "on anomaly: {}",
+        h["on_anomaly"].as_str().unwrap_or("throttle")
+    );
+    let state = h["status"]["state"].as_str().unwrap_or("normal");
+    if state != "normal" {
+        println!("status:     {state} (back to normal with `usk handle resume`)");
+    }
+    if let Some(a) = h["last_anomaly"].as_object() {
+        println!(
+            "incident:   {} → {}",
+            a.get("detail").and_then(Value::as_str).unwrap_or(""),
+            a.get("response").and_then(Value::as_str).unwrap_or("")
+        );
+    }
     println!("policy:");
     for line in h["policy_explanation"].as_str().unwrap_or("").lines() {
         println!("  {line}");
@@ -1170,6 +1358,7 @@ fn env_cmd(
     label: Option<String>,
     shell: Option<Shell>,
     camouflage: bool,
+    incidents: Incidents,
 ) -> Result<(), CliError> {
     let c = unlocked(paths)?;
     let label = label.unwrap_or_else(|| format!("{secret} env"));
@@ -1177,6 +1366,7 @@ fn env_cmd(
     if let Some(spec) = policy {
         body["preset_policy"] = json!(qualify_policy(&c, secret, &spec)?);
     }
+    incidents.apply(&mut body)?;
     let created = c.post("/v1/handles", body)?;
     let env = created["env"].as_object().cloned().unwrap_or_default();
     if env.is_empty() {

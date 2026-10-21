@@ -173,6 +173,7 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
         shutdown: watch::channel(false).0,
         scrubber: RwLock::new(Scrubber::empty()),
         usage: Mutex::new(HashMap::new()),
+        denials: Mutex::new(HashMap::new()),
         http,
         upstream_overrides: opts.upstream_overrides.iter().cloned().collect(),
         base_url: format!("http://127.0.0.1:{}", addr.port()),
@@ -230,6 +231,7 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
                 .delete(api::revoke_handle),
         )
         .route("/handles/{r}/forget", post(api::forget_handle_rules))
+        .route("/handles/{r}/resume", post(api::resume_handle))
         .route("/audit", get(api::audit_list))
         .route("/audit/verify", get(api::audit_verify))
         .route("/approvals", get(api::approvals_list))

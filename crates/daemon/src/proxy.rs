@@ -10,7 +10,7 @@
 //! phases, never while waiting for an approval or for the upstream.
 
 use crate::api::ApiError;
-use crate::state::{AppState, Event, PendingApproval};
+use crate::state::{AppState, DaemonVault, Event, PendingApproval, THROTTLE_PER_MINUTE};
 use axum::body::{Body, Bytes};
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri};
@@ -29,7 +29,7 @@ use unseenkey_core::broker::{
     check_host, is_stripped, split_path_query, BrokerError, Upstream, STRIP_REQUEST_HEADERS,
     STRIP_RESPONSE_HEADERS,
 };
-use unseenkey_core::handles::HandleRecord;
+use unseenkey_core::handles::{Anomaly, AnomalyResponse, HandleRecord, HandleStatus};
 use unseenkey_core::ids::Id;
 use unseenkey_core::policy::{
     evaluate, ApprovalScope, Decision, DenyReason, Request as PolicyRequest,
@@ -194,6 +194,105 @@ impl Stream for ScrubBody {
                 }
             }
         }
+    }
+}
+
+/// An incident on a handle, before it is recorded.
+struct Incident {
+    /// `denial_burst` or `canary`.
+    kind: &'static str,
+    /// One sentence for the owner.
+    detail: String,
+}
+
+/// Record an incident: the audit event, the handle's new standing and the
+/// owner's notification. Returns whether the vault must be locked, which the
+/// caller does once it has released the vault guard.
+#[allow(clippy::too_many_arguments)]
+fn raise_incident(
+    s: &AppState,
+    vault: &mut DaemonVault,
+    handle: &HandleRecord,
+    secret: &str,
+    call: &CallRequest,
+    host: &str,
+    path: &str,
+    now: i64,
+    incident: Incident,
+) -> bool {
+    let response = handle.on_anomaly;
+    let kind = if incident.kind == "canary" {
+        kinds::CANARY_TRIPPED
+    } else {
+        kinds::ANOMALY
+    };
+    let _ = vault.audit(
+        kind,
+        json!({
+            "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": secret,
+            "caller": call.caller, "host": host, "method": call.method, "path": path,
+            "kind": incident.kind, "detail": incident.detail, "response": response.as_str(),
+        }),
+    );
+    if let Err(e) = vault.set_handle_incident(
+        &handle.handle_id,
+        Anomaly {
+            kind: incident.kind.to_string(),
+            detail: incident.detail.clone(),
+            at: now,
+            response,
+        },
+    ) {
+        tracing::warn!(error = %e, "could not persist the incident on the handle");
+    }
+    tracing::warn!(
+        handle = %handle.handle_id, label = %handle.label, kind = incident.kind,
+        response = response.as_str(), "{}", incident.detail
+    );
+    s.emit(Event::Anomaly {
+        id: handle.handle_id.to_hex(),
+        label: handle.label.clone(),
+        secret: secret.to_string(),
+        kind: incident.kind.to_string(),
+        detail: incident.detail,
+        response: response.as_str(),
+    });
+    response == AnomalyResponse::Lock
+}
+
+/// After a policy refusal: feed the burst detector and, when it fires, raise
+/// the incident. Consumes the vault guard so the lock response can run.
+#[allow(clippy::too_many_arguments)]
+async fn after_denial(
+    s: &Arc<AppState>,
+    mut vault: tokio::sync::MutexGuard<'_, DaemonVault>,
+    handle: &HandleRecord,
+    secret: &str,
+    call: &CallRequest,
+    host: &str,
+    path: &str,
+    now: i64,
+) {
+    let Some(n) = s.record_denial(&handle.handle_id).await else {
+        return;
+    };
+    let lock = raise_incident(
+        s,
+        &mut vault,
+        handle,
+        secret,
+        call,
+        host,
+        path,
+        now,
+        Incident {
+            kind: "denial_burst",
+            detail: format!("{n} requests refused by policy within a minute"),
+        },
+    );
+    drop(vault);
+    if lock {
+        s.lock_vault("anomaly").await;
     }
 }
 
@@ -367,86 +466,199 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
     let now = now_ms();
 
     // Phase 1 (vault lock): handle, secret, host lock, policy.
-    let (handle, meta, decision): (HandleRecord, SecretMeta, Decision) =
-        {
-            let mut vault = s.vault.lock().await;
-            if vault.is_locked() {
-                return err(
-                    StatusCode::UNAUTHORIZED,
-                    "vault_locked",
-                    "unlock the vault first",
-                );
-            }
-            let handle = match &handle_ref {
-                HandleRef::Presented(str) => match vault.handle_by_string(str) {
-                    Ok(Some(h)) => h.clone(),
-                    _ => return err(StatusCode::UNAUTHORIZED, "unknown_handle", "unknown handle"),
-                },
-                HandleRef::Resolved(id) => match vault.handle(id) {
-                    Ok(h) => h.clone(),
-                    Err(_) => {
-                        return err(StatusCode::UNAUTHORIZED, "unknown_handle", "unknown handle")
-                    }
-                },
-            };
-            if handle.revoked_at.is_some() {
-                return err(
-                    StatusCode::UNAUTHORIZED,
-                    "handle_revoked",
-                    "this handle was revoked",
-                );
-            }
-            if handle.expires_at.is_some_and(|e| now >= e) {
-                return err(
-                    StatusCode::UNAUTHORIZED,
-                    "handle_expired",
-                    "this handle has expired",
-                );
-            }
-            let meta = match vault.get(&handle.secret_id) {
-                Ok(m) => m.clone(),
-                Err(_) => {
-                    return err(
-                        StatusCode::NOT_FOUND,
-                        "not_found",
-                        "the handle's secret no longer exists",
-                    )
-                }
-            };
-            // Host lock (INV-2) on the logical host, before any override.
-            if let Err(e) = check_host(&meta.upstreams, &handle.policy.upstreams, &upstream.host) {
-                let _ = vault.audit(kinds::DENY, json!({
-                "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
-                "caller": call.caller, "reason": e.code(), "host": upstream.host,
-                "method": call.method, "path": pol_path,
-            }));
-                return broker_err(e);
-            }
-            let usage = s.usage_for(&handle.handle_id, handle.use_count).await;
-            let preq = PolicyRequest {
-                method: &call.method,
-                path: &pol_path,
-                host: &upstream.host,
-                body_len: Some(call.body.len() as u64),
-                caller: Some(&call.caller),
-            };
-            let decision = evaluate(&handle.policy, &preq, now, usage);
-            if let Decision::Deny(reason) = &decision {
-                let status = match reason {
-                    DenyReason::RateLimitedMinute | DenyReason::RateLimitedDay => {
-                        StatusCode::TOO_MANY_REQUESTS
-                    }
-                    _ => StatusCode::FORBIDDEN,
-                };
-                let _ = vault.audit(kinds::DENY, json!({
-                "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
-                "caller": call.caller, "reason": reason.code(), "detail": reason.message(),
-                "host": upstream.host, "method": call.method, "path": pol_path,
-            }));
-                return err(status, reason.code(), reason.message());
-            }
-            (handle, meta, decision)
+    let (handle, meta, decision): (HandleRecord, SecretMeta, Decision) = {
+        let mut vault = s.vault.lock().await;
+        if vault.is_locked() {
+            return err(
+                StatusCode::UNAUTHORIZED,
+                "vault_locked",
+                "unlock the vault first",
+            );
+        }
+        let handle = match &handle_ref {
+            HandleRef::Presented(str) => match vault.handle_by_string(str) {
+                Ok(Some(h)) => h.clone(),
+                _ => return err(StatusCode::UNAUTHORIZED, "unknown_handle", "unknown handle"),
+            },
+            HandleRef::Resolved(id) => match vault.handle(id) {
+                Ok(h) => h.clone(),
+                Err(_) => return err(StatusCode::UNAUTHORIZED, "unknown_handle", "unknown handle"),
+            },
         };
+        // A canary is a tripwire, not a key: whoever presented it has the
+        // file it was planted in. From outside it looks like an unknown handle.
+        if handle.canary && handle.revoked_at.is_none() {
+            let secret = vault
+                .get(&handle.secret_id)
+                .map(|m| m.name.clone())
+                .unwrap_or_default();
+            let lock = raise_incident(
+                    &s,
+                    &mut vault,
+                    &handle,
+                    &secret,
+                    &call,
+                    &upstream.host,
+                    &pol_path,
+                    now,
+                    Incident {
+                        kind: "canary",
+                        detail: format!(
+                            "the canary {:?} was used ({} {} on {}): whoever sent it has the file it was planted in",
+                            handle.label, call.method, pol_path, upstream.host
+                        ),
+                    },
+                );
+            drop(vault);
+            if lock {
+                s.lock_vault("canary").await;
+            }
+            return err(StatusCode::UNAUTHORIZED, "unknown_handle", "unknown handle");
+        }
+        if handle.revoked_at.is_some() {
+            return err(
+                StatusCode::UNAUTHORIZED,
+                "handle_revoked",
+                "this handle was revoked",
+            );
+        }
+        if handle.expires_at.is_some_and(|e| now >= e) {
+            return err(
+                StatusCode::UNAUTHORIZED,
+                "handle_expired",
+                "this handle has expired",
+            );
+        }
+        let meta = match vault.get(&handle.secret_id) {
+            Ok(m) => m.clone(),
+            Err(_) => {
+                return err(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "the handle's secret no longer exists",
+                )
+            }
+        };
+        // Standing after an incident. These refusals are consequences, so
+        // they do not feed the burst detector.
+        let standing = handle.status_at(now);
+        if standing == HandleStatus::Paused {
+            let _ = vault.audit(
+                kinds::DENY,
+                json!({
+                    "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
+                    "caller": call.caller, "reason": "paused", "host": upstream.host,
+                    "method": call.method, "path": pol_path,
+                }),
+            );
+            return err(
+                    StatusCode::FORBIDDEN,
+                    "handle_paused",
+                    "this handle is paused after unusual activity; the owner can resume it (usk handle resume)",
+                );
+        }
+        // Host lock (INV-2) on the logical host, before any override.
+        if let Err(e) = check_host(&meta.upstreams, &handle.policy.upstreams, &upstream.host) {
+            let _ = vault.audit(
+                kinds::DENY,
+                json!({
+                    "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
+                    "caller": call.caller, "reason": e.code(), "host": upstream.host,
+                    "method": call.method, "path": pol_path,
+                }),
+            );
+            after_denial(
+                &s,
+                vault,
+                &handle,
+                &meta.name,
+                &call,
+                &upstream.host,
+                &pol_path,
+                now,
+            )
+            .await;
+            return broker_err(e);
+        }
+        let usage = s.usage_for(&handle.handle_id, handle.use_count).await;
+        if matches!(standing, HandleStatus::Throttled { .. })
+            && usage.last_minute >= THROTTLE_PER_MINUTE
+        {
+            let _ = vault.audit(
+                kinds::DENY,
+                json!({
+                    "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
+                    "caller": call.caller, "reason": "throttled", "host": upstream.host,
+                    "method": call.method, "path": pol_path,
+                }),
+            );
+            return err(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "throttled",
+                    format!(
+                        "this handle is throttled after unusual activity: at most {THROTTLE_PER_MINUTE} requests a minute until the owner resumes it or the hour passes"
+                    ),
+                );
+        }
+        let preq = PolicyRequest {
+            method: &call.method,
+            path: &pol_path,
+            host: &upstream.host,
+            body_len: Some(call.body.len() as u64),
+            caller: Some(&call.caller),
+        };
+        let decision = evaluate(&handle.policy, &preq, now, usage);
+        if let Decision::Deny(reason) = &decision {
+            let status = match reason {
+                DenyReason::RateLimitedMinute | DenyReason::RateLimitedDay => {
+                    StatusCode::TOO_MANY_REQUESTS
+                }
+                _ => StatusCode::FORBIDDEN,
+            };
+            let _ = vault.audit(
+                kinds::DENY,
+                json!({
+                    "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
+                    "caller": call.caller, "reason": reason.code(), "detail": reason.message(),
+                    "host": upstream.host, "method": call.method, "path": pol_path,
+                }),
+            );
+            // Running into a cap is the cap doing its job, not probing.
+            if !matches!(
+                reason,
+                DenyReason::RateLimitedMinute | DenyReason::RateLimitedDay
+            ) {
+                after_denial(
+                    &s,
+                    vault,
+                    &handle,
+                    &meta.name,
+                    &call,
+                    &upstream.host,
+                    &pol_path,
+                    now,
+                )
+                .await;
+            }
+            return err(status, reason.code(), reason.message());
+        }
+        // In approval mode every request waits for the owner, whatever the
+        // policy would have remembered.
+        let decision = if standing == HandleStatus::ApprovalRequired {
+            match decision {
+                Decision::Allow(rule) | Decision::NeedsApproval { rule, .. } => {
+                    Decision::NeedsApproval {
+                        rule,
+                        scope: ApprovalScope::ThisRequest,
+                    }
+                }
+                d => d,
+            }
+        } else {
+            decision
+        };
+        (handle, meta, decision)
+    };
 
     // Approval, if the policy asks for one. The vault lock is not held while waiting.
     if let Decision::NeedsApproval { scope, .. } = &decision {
@@ -462,6 +674,11 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
         };
         if !already {
             let scope_text = match scope {
+                ApprovalScope::ThisRequest
+                    if handle.status_at(now) == HandleStatus::ApprovalRequired =>
+                {
+                    "this request (approval mode after unusual activity)".to_string()
+                }
                 ApprovalScope::ThisRequest => "this request".to_string(),
                 ApprovalScope::FirstUse(r) => format!("first use of {r}"),
                 ApprovalScope::Path(r) => format!("{r}"),
