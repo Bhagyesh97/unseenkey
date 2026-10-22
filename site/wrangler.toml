@@ -4,3 +4,7 @@
 name = "unseenkey"
 compatibility_date = "2026-10-01"
 pages_build_output_dir = "public"
+
+[[kv_namespaces]]
+binding = "WAITLIST"
+id = "cb206a72a9de46d89c03716479c0ac3f"

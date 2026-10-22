@@ -9,6 +9,7 @@
   "devDependencies": {
     "animejs": "^4.5.0",
     "esbuild": "^0.25.0",
-    "three": "^0.186.1"
+    "three": "^0.186.1",
+    "wrangler": "^4.151.3"
   }
 }
