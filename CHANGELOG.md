@@ -4,6 +4,13 @@ The top section of this file becomes the release notes when a `v*` tag is pushed
 
 ## 0.1.1 — 2026-10-22
 
+Desktop app:
+
+- **A real look.** One visual system with unseenkey.com: icons in the sidebar, provider avatars, chips coloured by meaning, approval cards with a countdown, sectioned settings, empty states that say what to do next, a light theme when the OS asks for one.
+- **Edit a secret's settings in the app:** name, provider, allowed hosts, tags and notes (what `usk secret set` does); provider and hosts can also be given when adding a secret.
+- User presets (`<vault dir>/presets/<id>.toml`) show up in the app's provider lists.
+- The Handles page no longer goes blank against a daemon older than the app.
+
 Fixes from the first real use of a provider without a preset (calling Hostinger's API through the generic route):
 
 - **Template mode kept no `Authorization` header.** `Authorization: Bearer {{usk:name}}` on the generic route was stripped before the placeholder was filled in, so a generic secret could never call a plain bearer API. Headers that carry a `{{usk:…}}` placeholder now survive the strip.
