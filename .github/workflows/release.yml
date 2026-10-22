@@ -97,6 +97,10 @@ jobs:
     name: sign and publish
     needs: build
     runs-on: ubuntu-latest
+    outputs:
+      # The draft's id, so the desktop jobs attach to it by id instead of
+      # looking it up by tag (a lookup that raced and failed twice on 0.1.1).
+      release_id: ${{ steps.draft.outputs.id }}
     steps:
       # The SBOM is generated from the source tree (Cargo.lock, package-lock.json),
       # not from the archives: syft cannot see inside a tarball of binaries and
@@ -132,6 +136,7 @@ jobs:
           echo "sbom components: $n"
           [ "$n" -gt 50 ] || { echo "::error::SBOM has only $n components"; exit 1; }
       - uses: softprops/action-gh-release@v2
+        id: draft
         with:
           files: dist/*
           generate_release_notes: true
@@ -210,6 +215,7 @@ jobs:
         with:
           projectPath: apps/desktop
           tagName: ${{ github.ref_name }}
+          releaseId: ${{ needs.release.outputs.release_id }}
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           includeUpdaterJson: true
