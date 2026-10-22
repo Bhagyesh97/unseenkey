@@ -72,7 +72,8 @@ export function Activity() {
     }
     if (v.first_broken !== null) return `TAMPERED: first broken sequence ${v.first_broken}`;
     if (v.head.state === "forged") return "TAMPERED: the keyed head was rewritten without the vault key";
-    return `TAMPERED: the log ends at event ${v.head.last_seq} where the keyed head says ${v.head.head_seq}`;
+    if (v.head.state === "mismatch") return `TAMPERED: the log ends at event ${v.head.last_seq} where the keyed head says ${v.head.head_seq}`;
+    return "TAMPERED: the keyed head does not match the log";
   };
 
   return (
