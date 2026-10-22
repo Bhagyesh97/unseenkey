@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Unseenkey — use API keys without seeing them</title>
+  <meta name="description" content="Let AI agents, scripts and the people you hire use your API keys without ever seeing them. A local vault and policy broker with a tamper-evident audit log. Open source, Windows, macOS and Linux.">
+  <link rel="canonical" href="https://unseenkey.com/">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <meta property="og:title" content="Unseenkey — use API keys without seeing them">
+  <meta property="og:description" content="A leaked handle costs you nothing. A leaked key costs you until you notice. Local vault + policy broker for AI agents, scripts and contractors.">
+  <meta property="og:image" content="https://unseenkey.com/og.png">
+  <meta property="og:url" content="https://unseenkey.com/">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="theme-color" content="#0969da">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="wrap top">
+  <a class="brand" href="/"><img src="/favicon-192.png" alt="">Unseenkey</a>
+  <nav>
+    <a href="#how">How it works</a>
+    <a href="#features">Features</a>
+    <a href="#install">Install</a>
+    <a href="#security">Security</a>
+    <a href="#delegation">Hiring a developer?</a>
+    <a href="https://github.com/Bhagyesh97/unseenkey">GitHub</a>
+  </nav>
+</header>
+
+<main>
+  <section class="hero wrap" style="border-top:0">
+    <span class="badge">Open source · v0.1 alpha · Windows, macOS, Linux</span>
+    <h1>Let AI agents, scripts and the people you hire <em>use</em> your API keys — without ever <em>seeing</em> them.</h1>
+    <p class="lead">Unseenkey keeps your keys in an encrypted vault on your machine and hands out <strong>handles</strong> instead. A handle only works through the local broker, within a policy you set, and every call is logged. A leaked handle costs you nothing. A leaked key costs you until you notice.</p>
+    <div class="cta">
+      <a class="btn primary" href="#install">Install</a>
+      <a class="btn" href="https://github.com/Bhagyesh97/unseenkey">View on GitHub</a>
+    </div>
+<pre><span class="c"># two minutes with Claude Code</span>
+usk init                          <span class="c"># pick a password; write down the 24 recovery words</span>
+usk add anthropic                 <span class="c"># paste the key at a hidden prompt; provider detected, host-locked</span>
+usk env anthropic --policy chat   <span class="c"># prints ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY=<span class="h">usk_h_…</span></span>
+claude -p "hello"                 <span class="c"># Claude Code now calls Anthropic through the broker</span>
+usk log                           <span class="c"># every call, hash-chained</span></pre>
+    <p class="note">Works the same for OpenAI, Stripe, AWS, GitHub, Google, Slack and twelve more providers, plus any other host.</p>
+  </section>
+
+  <section id="how">
+    <div class="wrap">
+      <h2>How it works</h2>
+      <p class="sub">The key never leaves the vault except inside a request the policy allowed. The SDK, the agent and the contractor only ever hold the handle.</p>
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="/how-it-works-dark.svg">
+        <img class="diagram" src="/how-it-works-light.svg" width="1200" height="400" alt="Your SDK holds a handle; the local broker swaps it for the real key, enforces the policy, logs the call and scrubs the response; the provider sees a normal request.">
+      </picture>
+    </div>
+  </section>
+
+  <section id="who">
+    <div class="wrap">
+      <h2>Three ways a key leaks. One fix.</h2>
+      <p class="sub">Every SDK, <code>.env</code> file and AI agent asks for the raw key. Once it exists in plaintext it gets pasted, committed, logged, or handed to someone.</p>
+      <div class="three">
+        <div class="card">
+          <span class="tag">Today</span>
+          <h3>Your AI agent</h3>
+          <p>Claude Code, Cursor, Windsurf and MCP tools call APIs through the broker. The key is never in the context window, never in a transcript, never in the agent's memory. <code>usk mcp install claude-code</code>.</p>
+        </div>
+        <div class="card">
+          <span class="tag">Today</span>
+          <h3>Your own scripts and repos</h3>
+          <p><code>usk guard fix .env</code> moves real keys into the vault and rewrites the file with handles. Commit it, screenshot it, paste it: nothing happens. Caps and canaries catch what slips through.</p>
+        </div>
+        <div class="card">
+          <span class="tag soon">Next</span>
+          <h3>The developer you hire</h3>
+          <p>Grant a freelancer or agency the use of a key with a policy, an expiry and a signed log, through a broker they don't control. Revoke in one click; they can prove they never held it.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="features">
+    <div class="wrap">
+      <h2>What a handle can do</h2>
+      <p class="sub">Each handle carries its own rules, explained in plain English, enforced before anything leaves your machine.</p>
+      <div class="grid">
+        <div class="card"><h3>Policy per handle</h3><p>Presets per provider: <code>stripe:payments</code> takes payments and refuses refunds and payouts. Paths, methods, time windows, expiry, approvals.</p></div>
+        <div class="card"><h3>Hard caps</h3><p><code>--cap 500/day</code>: the 501st request is refused before it leaves the machine. A stolen handle cannot run up a bill.</p></div>
+        <div class="card"><h3>Canaries</h3><p><code>--canary</code> makes a handle that never works. Plant it in <code>.env.example</code>; any use means someone has your files, and the vault locks.</p></div>
+        <div class="card"><h3>Incident responses</h3><p>A burst of refused requests throttles, pauses, asks you, or locks the vault. Your choice per handle; one click to resume.</p></div>
+        <div class="card"><h3>Live approvals</h3><p>Sensitive calls wait for you: allow once, allow always for this rule, or deny. Desktop notifications on Windows, macOS and Linux.</p></div>
+        <div class="card"><h3>Camouflage handles</h3><p>Handles shaped like the provider's own keys for SDKs that validate formats. Every format carries the <code>usk</code> marker.</p></div>
+        <div class="card"><h3>AWS and OAuth2</h3><p>boto3, the AWS CLI and the JS SDK sign with a placeholder; the broker re-signs with the real key. Refresh tokens stay in the vault.</p></div>
+        <div class="card"><h3>Tamper-evident log</h3><p>Every call, allowed or refused, in a hash-chained audit log, written before the first byte goes out. <code>usk log verify</code>.</p></div>
+        <div class="card"><h3>Desktop app</h3><p>Secrets, handles, approvals and activity in one window. Windows Hello unlock, lock on sleep and screen lock, signed auto-updates.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="install" class="install">
+    <div class="wrap cols">
+      <div>
+        <h2>Install</h2>
+        <p class="sub">Signed builds for every platform. No account, no telemetry, nothing leaves your machine.</p>
+<pre><span class="c"># Windows</span>
+scoop bucket add unseenkey https://github.com/Bhagyesh97/scoop-unseenkey
+scoop install usk
+
+<span class="c"># macOS and Linux</span>
+brew install Bhagyesh97/unseenkey/usk
+
+<span class="c"># from source (Rust 1.85+)</span>
+cargo install --locked --git https://github.com/Bhagyesh97/unseenkey usk</pre>
+        <p>Desktop installers for Windows, macOS and Linux, and CLI archives for every platform, are on the <a href="https://github.com/Bhagyesh97/unseenkey/releases/latest">releases page</a>. Every archive has a Sigstore signature, every installer a minisign signature, and each release ships an SBOM. The installers are not yet code-signed, so Windows SmartScreen and macOS Gatekeeper warn on first launch.</p>
+      </div>
+      <div>
+        <h2 id="security">Security</h2>
+        <ul class="plain">
+          <li><strong>Vault:</strong> Argon2id and XChaCha20-Poly1305, keys locked in memory, a 24-word recovery phrase, optional Windows Hello.</li>
+          <li><strong>Fail closed:</strong> each secret is locked to its provider's hosts; unmatched requests, browser-origin requests and anything the broker cannot classify are refused.</li>
+          <li><strong>Scrubbing:</strong> the real key and its encodings are removed from responses, logs and error messages.</li>
+          <li><strong>Open:</strong> Apache-2.0, a <a href="https://github.com/Bhagyesh97/unseenkey/blob/main/docs/04-threat-model.md">published threat model</a> that also says what it does not protect against, and a <a href="https://github.com/Bhagyesh97/unseenkey/blob/main/SECURITY.md">disclosure policy</a>.</li>
+        </ul>
+        <p style="color:var(--muted);font-size:15px;margin-top:16px">Alpha software, not yet externally audited. Use it with keys you can rotate. A process with code execution on your machine can still <em>use</em> an unlocked vault within policy; for a hostile agent you also want an OS sandbox.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="delegation">
+    <div class="wrap">
+      <div class="waitlist">
+        <h2>Hiring a developer? Never hand over your keys.</h2>
+        <p class="sub">Delegation is the next thing we build: a client grants a developer or agency the use of a Stripe, AWS or OpenAI key with a policy, an expiry and a signed log, through a broker the developer does not control. If you have handed a key to a contractor, or been handed one, we would like to talk to you before we build it.</p>
+        <form id="wl" novalidate>
+          <label>Email<input type="email" name="email" required placeholder="you@company.com" autocomplete="email"></label>
+          <label>You are
+            <select name="role">
+              <option value="owner">a business owner or founder who hires developers</option>
+              <option value="developer">a freelance developer</option>
+              <option value="agency">an agency</option>
+              <option value="other">something else</option>
+            </select>
+          </label>
+          <label>What happened last time a key changed hands? (optional)<textarea name="note" maxlength="500" placeholder="e.g. my developer still had the Stripe key six months later"></textarea></label>
+          <label class="hp" aria-hidden="true">Website<input type="text" name="website" tabindex="-1" autocomplete="off"></label>
+          <div><button class="btn primary" type="submit">Join the waitlist</button></div>
+          <div class="msg" id="wl-msg" aria-live="polite"></div>
+        </form>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>© 2026 Unseenkey · Apache-2.0</span>
+    <span>
+      <a href="https://github.com/Bhagyesh97/unseenkey">GitHub</a> ·
+      <a href="https://github.com/Bhagyesh97/unseenkey/blob/main/docs/00-README.md">Docs</a> ·
+      <a href="https://github.com/Bhagyesh97/unseenkey/blob/main/SECURITY.md">Security</a> ·
+      <a href="mailto:hello@unseenkey.com">hello@unseenkey.com</a>
+    </span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var form = document.getElementById("wl");
+  var msg = document.getElementById("wl-msg");
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var data = {
+      email: form.email.value.trim(),
+      role: form.role.value,
+      note: form.note.value.trim(),
+      website: form.website.value
+    };
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(data.email)) {
+      msg.className = "msg err";
+      msg.textContent = "That email address does not look right.";
+      return;
+    }
+    msg.className = "msg";
+    msg.textContent = "Sending…";
+    fetch("/api/waitlist", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(data)
+    }).then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { status: r.status, body: j }; }); })
+      .then(function (res) {
+        if (res.body && res.body.ok) {
+          msg.className = "msg ok";
+          msg.textContent = res.body.already ? "You are already on the list. Thank you." : "Thank you. We will write to you before the delegation beta.";
+          form.reset();
+        } else if (res.status === 503) {
+          msg.className = "msg err";
+          msg.innerHTML = 'The form is not switched on yet. Email <a href="mailto:hello@unseenkey.com?subject=Delegation%20waitlist">hello@unseenkey.com</a> and we will add you.';
+        } else {
+          msg.className = "msg err";
+          msg.textContent = "Something went wrong. Please try again, or email hello@unseenkey.com.";
+        }
+      })
+      .catch(function () {
+        msg.className = "msg err";
+        msg.innerHTML = 'Could not reach the server. Email <a href="mailto:hello@unseenkey.com?subject=Delegation%20waitlist">hello@unseenkey.com</a> instead.';
+      });
+  });
+})();
+</script>
+</body>
+</html>
