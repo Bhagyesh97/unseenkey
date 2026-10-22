@@ -3,7 +3,16 @@ name: ci
 on:
   push:
     branches: [main]
+    # The website and the docs have no Rust in them; their pushes skip the matrix.
+    paths-ignore:
+      - "site/**"
+      - "docs/**"
+      - "**.md"
   pull_request:
+    paths-ignore:
+      - "site/**"
+      - "docs/**"
+      - "**.md"
 
 permissions:
   contents: read
