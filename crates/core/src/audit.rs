@@ -5,8 +5,17 @@
 //! chain can be verified without decrypting anything, even while the vault is
 //! locked. Bodies are encrypted under an audit DEK derived from the vault key,
 //! so a stolen file reveals only event kinds and timestamps.
+//!
+//! The chain alone cannot tell a log that was cut short (or rewritten from
+//! some point on) from an honest one: the hash is unkeyed, so whoever can
+//! write the file can recompute it. The vault therefore also keeps a **keyed
+//! head**: with every append it stores `(seq, this_hash)` of the newest row
+//! and `mac = BLAKE3_keyed(K_head, seq ‖ this_hash)`, where `K_head` is
+//! derived from the vault key. Without the vault key nobody can produce a
+//! head for a shorter or different log, so an unlocked `verify` catches
+//! truncation and rewrites as well as edits.
 
-use crate::crypto::hash::{digest_eq, Digest};
+use crate::crypto::hash::{blake3_keyed, digest_eq, Digest};
 use crate::ids::Id;
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +38,26 @@ pub struct AuditRow {
     pub ciphertext: Vec<u8>,
     /// Broker signature over `this_hash` (delegation mode; unused locally).
     pub signature: Option<Vec<u8>>,
+}
+
+/// The keyed head: which row is the newest, authenticated under a key only
+/// the unlocked vault has. Stored next to the log and replaced on every append.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditHead {
+    /// `seq` of the newest row.
+    pub seq: u64,
+    /// `this_hash` of the newest row.
+    pub hash: Digest,
+    /// [`head_mac`] over `seq` and `hash`.
+    pub mac: Digest,
+}
+
+/// MAC over a head. `key` is `HKDF(VK, "usk/audit-head/v1")`.
+pub fn head_mac(key: &[u8; 32], seq: u64, hash: &Digest) -> Digest {
+    let mut data = [0u8; 8 + 32];
+    data[..8].copy_from_slice(&seq.to_be_bytes());
+    data[8..].copy_from_slice(hash);
+    blake3_keyed(key, &data)
 }
 
 /// A decrypted event.
@@ -91,6 +120,10 @@ pub mod kinds {
     pub const CANARY_TRIPPED: &str = "canary_tripped";
     /// The owner put a handle back to normal after an incident.
     pub const HANDLE_RESUMED: &str = "handle_resumed";
+    /// On unlock, the keyed head did not match the log (`state`, `head_seq`,
+    /// `last_seq`): the log was cut short or rewritten while locked. Recorded
+    /// as an event because the next append replaces the head.
+    pub const AUDIT_TAMPERED: &str = "audit_tampered";
 }
 
 /// Genesis `prev_hash` for a vault.
@@ -120,7 +153,33 @@ pub fn chain_hash(
     *h.finalize().as_bytes()
 }
 
-/// Result of walking the chain.
+/// What the keyed head said about the log's end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum HeadStatus {
+    /// The vault is locked, so the head key could not be derived. The chain
+    /// was checked; truncation cannot be ruled out.
+    Unchecked,
+    /// No head is stored: the log predates keyed heads and nothing has been
+    /// appended since. The chain was checked; truncation cannot be ruled out.
+    Missing,
+    /// The head authenticates and names the newest row.
+    Verified,
+    /// The stored head does not authenticate under the vault key: the header
+    /// was rewritten without the key.
+    Forged,
+    /// The head authenticates but the log's newest row is not the one it
+    /// names: rows were removed after `head_seq`, the newest row was
+    /// rewritten, or rows were appended without the key.
+    Mismatch {
+        /// `seq` the head names.
+        head_seq: u64,
+        /// `seq` of the newest row actually present (0 for an empty log).
+        last_seq: u64,
+    },
+}
+
+/// Result of walking the chain and checking the head.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct VerifyReport {
     /// Rows examined.
@@ -129,16 +188,33 @@ pub struct VerifyReport {
     pub first_broken: Option<u64>,
     /// Whether the sequence numbers were contiguous from 1.
     pub contiguous: bool,
+    /// What the keyed head said.
+    pub head: HeadStatus,
 }
 
 impl VerifyReport {
-    /// True if nothing is wrong.
+    /// True if nothing is wrong. A head that could not be checked
+    /// ([`HeadStatus::Unchecked`], [`HeadStatus::Missing`]) is not wrong, only
+    /// weaker; see [`VerifyReport::head_checked`].
     pub fn ok(&self) -> bool {
-        self.first_broken.is_none() && self.contiguous
+        self.first_broken.is_none()
+            && self.contiguous
+            && matches!(
+                self.head,
+                HeadStatus::Unchecked | HeadStatus::Missing | HeadStatus::Verified
+            )
+    }
+
+    /// True if the keyed head was available and authenticated, so a cut-short
+    /// or rewritten log would have been noticed.
+    pub fn head_checked(&self) -> bool {
+        self.head == HeadStatus::Verified
     }
 }
 
 /// Verify rows in order. `rows` must be the complete log from `seq == 1`.
+/// Checks the chain only; the head is reported as [`HeadStatus::Unchecked`]
+/// until [`check_head`] runs.
 pub fn verify(vault_id: &Id, rows: &[AuditRow]) -> VerifyReport {
     let mut prev = genesis(vault_id);
     let mut contiguous = true;
@@ -150,6 +226,7 @@ pub fn verify(vault_id: &Id, rows: &[AuditRow]) -> VerifyReport {
                 rows: rows.len() as u64,
                 first_broken: Some(row.seq),
                 contiguous,
+                head: HeadStatus::Unchecked,
             };
         }
         let want = chain_hash(
@@ -165,6 +242,7 @@ pub fn verify(vault_id: &Id, rows: &[AuditRow]) -> VerifyReport {
                 rows: rows.len() as u64,
                 first_broken: Some(row.seq),
                 contiguous,
+                head: HeadStatus::Unchecked,
             };
         }
         prev = row.this_hash;
@@ -173,6 +251,26 @@ pub fn verify(vault_id: &Id, rows: &[AuditRow]) -> VerifyReport {
         rows: rows.len() as u64,
         first_broken: None,
         contiguous,
+        head: HeadStatus::Unchecked,
+    }
+}
+
+/// Check the stored head against the newest row, given the head key.
+pub fn check_head(key: &[u8; 32], head: Option<&AuditHead>, last: Option<&AuditRow>) -> HeadStatus {
+    let Some(head) = head else {
+        return HeadStatus::Missing;
+    };
+    if !digest_eq(&head.mac, &head_mac(key, head.seq, &head.hash)) {
+        return HeadStatus::Forged;
+    }
+    match last {
+        Some(row) if row.seq == head.seq && digest_eq(&row.this_hash, &head.hash) => {
+            HeadStatus::Verified
+        }
+        _ => HeadStatus::Mismatch {
+            head_seq: head.seq,
+            last_seq: last.map(|r| r.seq).unwrap_or(0),
+        },
     }
 }
 
@@ -227,7 +325,88 @@ mod tests {
         let truncated = &rows[..3];
         assert!(
             verify(&vid, truncated).ok(),
-            "truncation is caught by checkpoints, not the chain"
+            "truncation is caught by the keyed head, not the chain"
         );
+    }
+
+    #[test]
+    fn keyed_head_catches_what_the_chain_cannot() {
+        let vid = Id::new_v7(1);
+        let mut rows = Vec::new();
+        let mut prev = genesis(&vid);
+        for seq in 1..=5 {
+            let r = row(&prev, seq);
+            prev = r.this_hash;
+            rows.push(r);
+        }
+        let key = [9u8; 32];
+        let last = rows.last().unwrap();
+        let head = AuditHead {
+            seq: last.seq,
+            hash: last.this_hash,
+            mac: head_mac(&key, last.seq, &last.this_hash),
+        };
+        assert_eq!(
+            check_head(&key, Some(&head), Some(last)),
+            HeadStatus::Verified
+        );
+
+        // Cut the log short: the chain is fine, the head is not.
+        assert!(verify(&vid, &rows[..3]).ok());
+        assert_eq!(
+            check_head(&key, Some(&head), rows[..3].last()),
+            HeadStatus::Mismatch {
+                head_seq: 5,
+                last_seq: 3
+            }
+        );
+        assert_eq!(
+            check_head(&key, Some(&head), None),
+            HeadStatus::Mismatch {
+                head_seq: 5,
+                last_seq: 0
+            }
+        );
+        // Rewrite the tail with the right shape but no key: the recomputed
+        // hash no longer matches the head.
+        let mut rewritten = rows.clone();
+        rewritten[4].ts += 1;
+        rewritten[4].this_hash = chain_hash(
+            &rewritten[3].this_hash,
+            5,
+            rewritten[4].ts,
+            &rewritten[4].kind,
+            &rewritten[4].nonce,
+            &rewritten[4].ciphertext,
+        );
+        assert!(verify(&vid, &rewritten).ok());
+        assert!(matches!(
+            check_head(&key, Some(&head), rewritten.last()),
+            HeadStatus::Mismatch {
+                head_seq: 5,
+                last_seq: 5
+            }
+        ));
+        // A head written without the key, or edited, is forged.
+        let mut forged = head.clone();
+        forged.seq = 3;
+        forged.hash = rows[2].this_hash;
+        assert_eq!(
+            check_head(&key, Some(&forged), rows[..3].last()),
+            HeadStatus::Forged
+        );
+        assert_eq!(
+            check_head(&[1u8; 32], Some(&head), Some(last)),
+            HeadStatus::Forged
+        );
+        // No head at all is reported, not failed.
+        assert_eq!(check_head(&key, None, Some(last)), HeadStatus::Missing);
+
+        let mut report = verify(&vid, &rows);
+        assert!(report.ok() && !report.head_checked());
+        report.head = HeadStatus::Verified;
+        assert!(report.ok() && report.head_checked());
+        report.head = HeadStatus::Forged;
+        assert!(!report.ok());
     }
 }

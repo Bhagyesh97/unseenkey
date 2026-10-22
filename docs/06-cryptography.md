@@ -114,11 +114,12 @@ Workspace secrets are encrypted under a Workspace Key (WK); WK is wrapped for ea
 - Optional (Phase 3): Shamir 2-of-3 split across a trusted contact, a file and the cloud (cloud share alone is useless).
 - No account-level password reset can ever recover a vault. Say so in the UI.
 
-## Audit log signing
+## Audit log integrity
 
-- Each event `e_n` stores `prev_hash = BLAKE3(e_{n-1} canonical bytes)`; `e_0.prev_hash = BLAKE3(vault_id)`.
-- Local: chain only. Delegation: broker signs `BLAKE3(e_n)` with its Ed25519 key; owner and grantee clients verify chain continuity and signature; gaps are shown as tampering warnings.
-- Daily checkpoint: `BLAKE3(last event)` uploaded to the relay (Phase 3) so a rolled-back local log can be detected.
+- Each event `e_n` stores `prev_hash = BLAKE3(e_{n-1} canonical bytes)`; `e_0.prev_hash = BLAKE3(vault_id)`. The chain is unkeyed, so it can be checked while locked, and so whoever can write the file can recompute it: on its own it catches edits and gaps, not a log cut short or rewritten from some point on.
+- **Keyed head (local).** Every append also stores `(seq, this_hash)` of the newest event with `mac = BLAKE3_keyed(K_head, seq ‖ this_hash)`, `K_head = HKDF(VK, "usk/audit-head/v1")`, in the same transaction. An unlocked `usk log verify` checks the chain **and** that the newest row is the one the head names; without the vault key no head can be produced for a shorter or different log. A locked verify reports the head as unchecked. Logs written before this existed have no head until their next event.
+- Delegation: broker signs `BLAKE3(e_n)` with its Ed25519 key; owner and grantee clients verify chain continuity and signature; gaps are shown as tampering warnings.
+- Daily checkpoint: `BLAKE3(last event)` uploaded to the relay (Phase 3), for the case where the attacker has both the file and the vault key.
 
 ## Randomness and test vectors
 

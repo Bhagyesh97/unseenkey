@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, fmtTime, type AuditEvent } from "../api";
 
-const KINDS = ["", "use", "deny", "anomaly", "canary_tripped", "egress_blocked", "approval_required", "approval_decided", "reveal", "inject", "handle_created", "handle_revoked", "handle_resumed", "secret_created", "unlock", "lock"];
+const KINDS = ["", "use", "deny", "anomaly", "canary_tripped", "egress_blocked", "approval_required", "approval_decided", "reveal", "inject", "handle_created", "handle_revoked", "handle_resumed", "secret_created", "unlock", "lock", "audit_tampered"];
 
 function describe(e: AuditEvent): string {
   const b = e.body as Record<string, string | number | string[] | undefined>;
@@ -33,10 +33,19 @@ function describe(e: AuditEvent): string {
   }
 }
 
+type VerifyReport = {
+  ok: boolean;
+  rows: number;
+  first_broken: number | null;
+  contiguous: boolean;
+  head: { state: "unchecked" | "missing" | "verified" | "forged" } | { state: "mismatch"; head_seq: number; last_seq: number };
+  head_checked: boolean;
+};
+
 export function Activity() {
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [kind, setKind] = useState("");
-  const [verify, setVerify] = useState<{ ok: boolean; rows: number; first_broken: number | null } | null>(null);
+  const [verify, setVerify] = useState<VerifyReport | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const load = async (k = kind) => {
@@ -53,7 +62,17 @@ export function Activity() {
   }, []);
 
   const doVerify = async () => {
-    setVerify(await api.call<{ ok: boolean; rows: number; first_broken: number | null }>("GET", "/v1/audit/verify"));
+    setVerify(await api.call<VerifyReport>("GET", "/v1/audit/verify"));
+  };
+
+  const verifyText = (v: VerifyReport) => {
+    if (v.ok) {
+      if (v.head_checked) return `Audit log intact: ${v.rows} events, hash chain and keyed head verified.`;
+      return `Audit log intact: ${v.rows} events, hash chain verified. Unlock the vault to also rule out a log cut short.`;
+    }
+    if (v.first_broken !== null) return `TAMPERED: first broken sequence ${v.first_broken}`;
+    if (v.head.state === "forged") return "TAMPERED: the keyed head was rewritten without the vault key";
+    return `TAMPERED: the log ends at event ${v.head.last_seq} where the keyed head says ${v.head.head_seq}`;
   };
 
   return (
@@ -70,7 +89,7 @@ export function Activity() {
       </header>
       {verify && (
         <div className={`banner ${verify.ok ? "ok" : "error"}`}>
-          {verify.ok ? `Audit log intact: ${verify.rows} events, hash chain verified.` : `TAMPERED: first broken sequence ${verify.first_broken}`}
+          {verifyText(verify)}
         </div>
       )}
       {err && <div className="err">{err}</div>}

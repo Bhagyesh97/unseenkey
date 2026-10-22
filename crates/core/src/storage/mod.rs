@@ -5,7 +5,7 @@
 //! [`crate::vault`]. Backends are therefore not security boundaries, and a
 //! vault file may be copied, synced or backed up by any means.
 
-use crate::audit::AuditRow;
+use crate::audit::{AuditHead, AuditRow};
 use crate::crypto::aead::Sealed;
 use crate::crypto::kdf::Argon2Profile;
 use crate::ids::Id;
@@ -175,9 +175,12 @@ pub trait Storage {
         include_deleted: bool,
     ) -> Result<Vec<StoredRecord>, StorageError>;
 
-    /// Append an audit row. `row.seq` must be exactly one more than the last stored row
-    /// (or 1 for an empty log), otherwise [`StorageError::AuditSequence`].
-    fn append_audit(&mut self, row: &AuditRow) -> Result<(), StorageError>;
+    /// Append an audit row and replace the keyed head, atomically. `row.seq`
+    /// must be exactly one more than the last stored row (or 1 for an empty
+    /// log), otherwise [`StorageError::AuditSequence`].
+    fn append_audit(&mut self, row: &AuditRow, head: &AuditHead) -> Result<(), StorageError>;
+    /// The keyed head, or `None` for a log that predates heads.
+    fn audit_head(&self) -> Result<Option<AuditHead>, StorageError>;
     /// The most recent audit row.
     fn audit_last(&self) -> Result<Option<AuditRow>, StorageError>;
     /// Audit rows with `seq >= from_seq`, ascending, at most `limit`.

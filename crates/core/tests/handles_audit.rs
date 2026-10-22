@@ -201,6 +201,116 @@ fn audit_chain_survives_reopen_and_detects_tampering() {
 }
 
 #[test]
+fn keyed_head_catches_truncation_and_tolerates_old_logs() {
+    use unseenkey_core::audit::HeadStatus;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vault.db");
+    let (mut v, _) = Vault::create(
+        SqliteStorage::open(&path).unwrap(),
+        FixedClock(1),
+        &SecretBytes::from(PW),
+        FAST,
+    )
+    .unwrap();
+    for i in 0..7 {
+        v.audit(kinds::USE, json!({ "i": i })).unwrap();
+    }
+    let report = v.audit_verify().unwrap();
+    assert!(report.ok() && report.head_checked());
+    assert_eq!(report.head, HeadStatus::Verified);
+    drop(v);
+
+    // Locked: the chain is checked, the head cannot be.
+    let mut v = Vault::open(SqliteStorage::open(&path).unwrap(), FixedClock(2)).unwrap();
+    let report = v.audit_verify().unwrap();
+    assert!(report.ok() && !report.head_checked());
+    assert_eq!(report.head, HeadStatus::Unchecked);
+    v.unlock_with_password(&SecretBytes::from(PW)).unwrap();
+    assert_eq!(v.audit_head_problem(), None);
+    assert_eq!(v.audit_verify().unwrap().head, HeadStatus::Verified);
+
+    // The log is cut short underneath an unlocked vault: the chain is still
+    // perfectly consistent, the head is not.
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute("DELETE FROM audit WHERE seq > 4", []).unwrap();
+    }
+    let report = v.audit_verify().unwrap();
+    assert_eq!(report.first_broken, None);
+    assert!(report.contiguous);
+    assert_eq!(
+        report.head,
+        HeadStatus::Mismatch {
+            head_seq: 7,
+            last_seq: 4
+        }
+    );
+    assert!(!report.ok());
+    // The owner's next event replaces the head, so from here the log is
+    // consistent again (and shorter). That is why unlock records the finding.
+    v.audit(kinds::LOCK, json!({})).unwrap();
+    assert_eq!(v.audit_verify().unwrap().head, HeadStatus::Verified);
+    drop(v);
+
+    // Cut while locked: unlock notices before its first append and writes an
+    // `audit_tampered` event that survives the head being replaced.
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute("DELETE FROM audit WHERE seq > 2", []).unwrap();
+    }
+    let mut v = Vault::open(SqliteStorage::open(&path).unwrap(), FixedClock(3)).unwrap();
+    v.unlock_with_password(&SecretBytes::from(PW)).unwrap();
+    assert_eq!(
+        v.audit_head_problem(),
+        Some(HeadStatus::Mismatch {
+            head_seq: 5,
+            last_seq: 2
+        })
+    );
+    let events = v.audit_events(1, Some(kinds::AUDIT_TAMPERED), 10).unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].seq, 3);
+    assert_eq!(events[0].body["state"], "mismatch");
+    assert_eq!(events[0].body["head_seq"], 5);
+    assert_eq!(events[0].body["last_seq"], 2);
+    assert_eq!(v.audit_verify().unwrap().head, HeadStatus::Verified);
+    drop(v);
+
+    // A head rewritten without the key is forged.
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute("UPDATE audit_head SET mac = zeroblob(32)", [])
+            .unwrap();
+    }
+    let mut v = Vault::open(SqliteStorage::open(&path).unwrap(), FixedClock(4)).unwrap();
+    v.unlock_with_password(&SecretBytes::from(PW)).unwrap();
+    assert_eq!(v.audit_head_problem(), Some(HeadStatus::Forged));
+    assert_eq!(
+        v.audit_events(1, Some(kinds::AUDIT_TAMPERED), 10)
+            .unwrap()
+            .len(),
+        2
+    );
+    drop(v);
+
+    // A log from before keyed heads has none: reported, not failed, and the
+    // next event gives it one.
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute("DELETE FROM audit_head", []).unwrap();
+    }
+    let mut v = Vault::open(SqliteStorage::open(&path).unwrap(), FixedClock(5)).unwrap();
+    v.unlock_with_password(&SecretBytes::from(PW)).unwrap();
+    assert_eq!(v.audit_head_problem(), None);
+    let report = v.audit_verify().unwrap();
+    assert!(report.ok() && !report.head_checked());
+    assert_eq!(report.head, HeadStatus::Missing);
+    v.audit(kinds::LOCK, json!({})).unwrap();
+    assert_eq!(v.audit_verify().unwrap().head, HeadStatus::Verified);
+}
+
+#[test]
 fn remembered_rules_persist_and_reset_on_policy_change() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("vault.db");

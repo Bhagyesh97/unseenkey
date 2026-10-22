@@ -134,6 +134,8 @@ pub struct Vault<S: Storage, C: Clock> {
     handle_hashes: BTreeMap<crate::crypto::hash::Digest, Id>,
     /// Use counts as last persisted, per handle.
     handle_counters_flushed: BTreeMap<Id, u64>,
+    /// What the keyed audit head said at the last unlock, if it was wrong.
+    head_problem: Option<crate::audit::HeadStatus>,
 }
 
 impl<S: Storage, C: Clock> core::fmt::Debug for Vault<S, C> {
@@ -177,6 +179,7 @@ impl<S: Storage, C: Clock> Vault<S, C> {
                 handles: BTreeMap::new(),
                 handle_hashes: BTreeMap::new(),
                 handle_counters_flushed: BTreeMap::new(),
+                head_problem: None,
             },
             kit,
         ))
@@ -197,6 +200,7 @@ impl<S: Storage, C: Clock> Vault<S, C> {
             handles: BTreeMap::new(),
             handle_hashes: BTreeMap::new(),
             handle_counters_flushed: BTreeMap::new(),
+            head_problem: None,
         })
     }
 
@@ -330,7 +334,39 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         self.index = index;
         self.handles = handles;
         self.handle_hashes = hashes;
+        // Look at the audit head now, before anything is appended: the first
+        // append (the daemon's own `unlock` event, usually) replaces the head,
+        // and with it the evidence that the log was cut while we were locked.
+        self.head_problem = None;
+        let status = self.audit_verify()?.head;
+        if matches!(
+            status,
+            crate::audit::HeadStatus::Forged | crate::audit::HeadStatus::Mismatch { .. }
+        ) {
+            self.head_problem = Some(status);
+            let (head_seq, last_seq) = match status {
+                crate::audit::HeadStatus::Mismatch { head_seq, last_seq } => {
+                    (Some(head_seq), Some(last_seq))
+                }
+                _ => (None, None),
+            };
+            let state = match status {
+                crate::audit::HeadStatus::Forged => "forged",
+                _ => "mismatch",
+            };
+            self.audit(
+                crate::audit::kinds::AUDIT_TAMPERED,
+                serde_json::json!({ "state": state, "head_seq": head_seq, "last_seq": last_seq }),
+            )?;
+        }
         Ok(())
+    }
+
+    /// If the keyed audit head was wrong at the last unlock, what it said.
+    /// The same finding is in the log as an `audit_tampered` event; this is
+    /// for showing it without reading the log.
+    pub fn audit_head_problem(&self) -> Option<crate::audit::HeadStatus> {
+        self.head_problem
     }
 
     /// Forget the vault key and the decrypted index.

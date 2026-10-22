@@ -106,7 +106,7 @@ Plus `generic` for any other host, and OAuth2 refresh-token clients for Google a
 
 - **Vault:** Argon2id → XChaCha20-Poly1305, one SQLite file, keys locked in memory and zeroised on lock, 24-word recovery phrase, optional Windows Hello.
 - **Fail closed:** each secret is locked to its provider's hosts; unmatched requests, browser-origin requests and anything the broker cannot classify are refused.
-- **Audit:** hash-chained log, verified with `usk log verify`; the entry is committed before the upstream request is sent.
+- **Audit:** hash-chained log with a keyed head, so `usk log verify` catches edits, gaps and a log cut short; the entry is committed before the response reaches the caller.
 - **Scrubbing:** the real key, its encodings and OAuth access tokens are removed from responses, logs and error messages.
 
 **What it does not do.** It stops *accidental* leaks (chats, git, logs, screenshots, SDK telemetry) and bounds what a *dishonest* holder of a handle can do. A process running as you with arbitrary code execution can still *use* an unlocked vault within policy, and a transparent proxy for tools like `gh` and `git` is not built yet. For a hostile agent you also want an OS sandbox. Read the [threat model](docs/04-threat-model.md) before trusting it with anything; report vulnerabilities privately per [SECURITY.md](SECURITY.md).

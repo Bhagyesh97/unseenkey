@@ -1,7 +1,7 @@
 //! Vault operations for handles and the audit log.
 
 use super::{records, Vault, VaultError};
-use crate::audit::{self, AuditEvent, AuditRow, VerifyReport};
+use crate::audit::{self, AuditEvent, AuditHead, AuditRow, VerifyReport};
 use crate::broker::effective_hosts;
 use crate::crypto::aead;
 use crate::crypto::hash::Digest;
@@ -407,6 +407,15 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         kdf::subkey(vk, b"usk/audit-dek/v1")
     }
 
+    /// Key for the audit log's keyed head. A separate subkey, so the head
+    /// MAC and the body AEAD never share key material.
+    fn audit_head_key(&self, vk: &SecretBytes) -> zeroize::Zeroizing<[u8; 32]> {
+        let sub = kdf::subkey(vk, b"usk/audit-head/v1");
+        let mut key = zeroize::Zeroizing::new([0u8; 32]);
+        key.copy_from_slice(sub.expose());
+        key
+    }
+
     fn audit_aad(&self, seq: u64, kind: &str) -> Vec<u8> {
         let mut a = Vec::with_capacity(64);
         a.extend_from_slice(self.header.vault_id.as_bytes());
@@ -433,16 +442,24 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         )?;
         let this_hash =
             audit::chain_hash(&prev_hash, seq, ts, kind, &sealed.nonce, &sealed.ciphertext);
-        self.storage.append_audit(&AuditRow {
+        let head = AuditHead {
             seq,
-            ts,
-            kind: kind.to_string(),
-            prev_hash,
-            this_hash,
-            nonce: sealed.nonce,
-            ciphertext: sealed.ciphertext,
-            signature: None,
-        })?;
+            hash: this_hash,
+            mac: audit::head_mac(&self.audit_head_key(&vk), seq, &this_hash),
+        };
+        self.storage.append_audit(
+            &AuditRow {
+                seq,
+                ts,
+                kind: kind.to_string(),
+                prev_hash,
+                this_hash,
+                nonce: sealed.nonce,
+                ciphertext: sealed.ciphertext,
+                signature: None,
+            },
+            &head,
+        )?;
         Ok(seq)
     }
 
@@ -489,7 +506,10 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         Ok(out)
     }
 
-    /// Walk the whole chain. Works while locked (no decryption needed).
+    /// Walk the whole chain, and check the keyed head when the vault is
+    /// unlocked. Works while locked too (the chain needs no key), but then the
+    /// report says the head went [`audit::HeadStatus::Unchecked`] and a cut-short log
+    /// would pass.
     pub fn audit_verify(&self) -> Result<VerifyReport, VaultError> {
         let mut rows = Vec::new();
         let mut cursor = 1;
@@ -501,7 +521,12 @@ impl<S: Storage, C: Clock> Vault<S, C> {
             cursor = batch.last().map(|r| r.seq + 1).unwrap_or(cursor);
             rows.extend(batch);
         }
-        Ok(audit::verify(&self.header.vault_id, &rows))
+        let mut report = audit::verify(&self.header.vault_id, &rows);
+        if let Some(vk) = &self.vk {
+            let head = self.storage.audit_head()?;
+            report.head = audit::check_head(&self.audit_head_key(vk), head.as_ref(), rows.last());
+        }
+        Ok(report)
     }
 
     /// Number of audit rows.

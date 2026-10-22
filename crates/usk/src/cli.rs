@@ -1503,10 +1503,34 @@ fn jiff_free_format(ms: i64) -> String {
 fn log_verify(paths: &VaultPaths, json: bool) -> Result<(), CliError> {
     let c = Client::connect(paths, true)?;
     let r = c.get("/v1/audit/verify")?;
+    let head = r["head"]["state"].as_str().unwrap_or("");
     if json {
         println!("{r}");
     } else if r["ok"].as_bool() == Some(true) {
-        println!("Audit log intact: {} events, chain verified.", r["rows"]);
+        match head {
+            "verified" => println!(
+                "Audit log intact: {} events, chain and keyed head verified.",
+                r["rows"]
+            ),
+            "missing" => println!(
+                "Audit log intact: {} events, chain verified. No keyed head yet (one is written with the next event), so a log cut short would not show here.",
+                r["rows"]
+            ),
+            _ => println!(
+                "Audit log intact: {} events, chain verified. Unlock the vault to also check the keyed head (a log cut short would not show here).",
+                r["rows"]
+            ),
+        }
+    } else if r["first_broken"].is_null() {
+        match head {
+            "forged" => println!(
+                "AUDIT LOG TAMPERED: the chain is consistent but its keyed head was rewritten without the vault key"
+            ),
+            _ => println!(
+                "AUDIT LOG TAMPERED: the chain is consistent but ends at event {} where the keyed head says {} (rows removed or rewritten after that point)",
+                r["head"]["last_seq"], r["head"]["head_seq"]
+            ),
+        }
     } else {
         println!(
             "AUDIT LOG TAMPERED: first broken sequence {} (contiguous: {})",

@@ -1,7 +1,7 @@
 //! In-memory backend for tests and ephemeral vaults.
 
 use super::{HeaderRow, RecordKind, Storage, StorageError, StoredRecord};
-use crate::audit::AuditRow;
+use crate::audit::{AuditHead, AuditRow};
 use crate::ids::Id;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
@@ -12,6 +12,7 @@ pub struct MemoryStorage {
     header: Option<HeaderRow>,
     records: BTreeMap<Id, BTreeMap<u64, StoredRecord>>,
     audit: Vec<AuditRow>,
+    head: Option<AuditHead>,
 }
 
 impl MemoryStorage {
@@ -78,7 +79,7 @@ impl Storage for MemoryStorage {
             .collect())
     }
 
-    fn append_audit(&mut self, row: &AuditRow) -> Result<(), StorageError> {
+    fn append_audit(&mut self, row: &AuditRow, head: &AuditHead) -> Result<(), StorageError> {
         let expected = self.audit.last().map(|r| r.seq + 1).unwrap_or(1);
         if row.seq != expected {
             return Err(StorageError::AuditSequence {
@@ -87,7 +88,12 @@ impl Storage for MemoryStorage {
             });
         }
         self.audit.push(row.clone());
+        self.head = Some(head.clone());
         Ok(())
+    }
+
+    fn audit_head(&self) -> Result<Option<AuditHead>, StorageError> {
+        Ok(self.head.clone())
     }
 
     fn audit_last(&self) -> Result<Option<AuditRow>, StorageError> {
@@ -168,18 +174,30 @@ mod tests {
             ciphertext: alloc::vec![],
             signature: None,
         };
+        let head = |seq: u64| AuditHead {
+            seq,
+            hash: [1; 32],
+            mac: [seq as u8; 32],
+        };
+        assert_eq!(s.audit_head().unwrap(), None);
         assert!(matches!(
-            s.append_audit(&row(2)),
+            s.append_audit(&row(2), &head(2)),
             Err(StorageError::AuditSequence {
                 expected: 1,
                 got: 2
             })
         ));
-        s.append_audit(&row(1)).unwrap();
-        s.append_audit(&row(2)).unwrap();
-        assert!(s.append_audit(&row(2)).is_err());
+        assert_eq!(
+            s.audit_head().unwrap(),
+            None,
+            "a refused append leaves no head"
+        );
+        s.append_audit(&row(1), &head(1)).unwrap();
+        s.append_audit(&row(2), &head(2)).unwrap();
+        assert!(s.append_audit(&row(2), &head(2)).is_err());
         assert_eq!(s.audit_count().unwrap(), 2);
         assert_eq!(s.audit_last().unwrap().unwrap().seq, 2);
+        assert_eq!(s.audit_head().unwrap(), Some(head(2)));
         assert_eq!(s.audit_rows(2, 10).unwrap().len(), 1);
         assert_eq!(s.audit_rows(1, 1).unwrap().len(), 1);
     }

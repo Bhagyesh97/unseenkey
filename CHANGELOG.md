@@ -2,6 +2,10 @@
 
 The top section of this file becomes the release notes when a `v*` tag is pushed.
 
+## Unreleased
+
+- **The audit log now notices when it has been cut short.** The hash chain is unkeyed, so anyone who could write the vault file could delete the newest events (or rewrite the log from some point on) and `usk log verify` would still pass. Every append now also records a *keyed head*, the newest event's position and hash under a key derived from the vault key, in the same transaction. An unlocked `usk log verify` (and the app's Verify log) checks the chain **and** the head and says which it checked; a locked verify says the head could not be checked. Existing vaults get a head with their next event. The README's audit wording now matches what the code does: the event is committed before the response reaches the caller.
+
 ## 0.1.1 — 2026-10-22
 
 Desktop app:

@@ -206,6 +206,12 @@ pub async fn unlock(
         }
         _ => unreachable!("shape checked above"),
     };
+    if let Some(problem) = v.audit_head_problem() {
+        tracing::warn!(
+            ?problem,
+            "the audit log was cut short or rewritten while the vault was locked; see the audit_tampered event"
+        );
+    }
     let _ = v.audit(kinds::UNLOCK, serde_json::json!({ "method": method }));
     s.rebuild_scrubber(&v);
     drop(v);
@@ -1456,6 +1462,7 @@ pub async fn audit_verify(State(s): State<Arc<AppState>>) -> ApiResult<serde_jso
     let report = v.audit_verify()?;
     Ok(Json(serde_json::json!({
         "ok": report.ok(), "rows": report.rows, "first_broken": report.first_broken, "contiguous": report.contiguous,
+        "head": report.head, "head_checked": report.head_checked(),
     })))
 }
 

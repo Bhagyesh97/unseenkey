@@ -3,9 +3,11 @@
 //! Schema (see `docs/08-data-model.md`):
 //! - `header`: a single row with the wrapped vault key(s) and KDF parameters.
 //! - `records`: `(record_id, version)` primary key; ciphertext only.
+//! - `audit`: the hash-chained log; `audit_head`: one row naming its newest
+//!   entry under a key derived from the vault key.
 
 use super::{HeaderRow, KeyWrap, RecordKind, Storage, StorageError, StoredRecord};
-use crate::audit::AuditRow;
+use crate::audit::{AuditHead, AuditRow};
 use crate::crypto::aead::Sealed;
 use crate::crypto::kdf::Argon2Profile;
 use crate::ids::Id;
@@ -61,6 +63,12 @@ CREATE TABLE IF NOT EXISTS audit (
   signature  BLOB
 );
 CREATE INDEX IF NOT EXISTS audit_kind ON audit (kind);
+CREATE TABLE IF NOT EXISTS audit_head (
+  id   INTEGER PRIMARY KEY CHECK (id = 1),
+  seq  INTEGER NOT NULL,
+  hash BLOB    NOT NULL,
+  mac  BLOB    NOT NULL
+);
 ";
 
 /// A vault stored in a SQLite file.
@@ -386,7 +394,7 @@ impl Storage for SqliteStorage {
         rows.collect::<Result<Vec<_>, _>>().map_err(backend)
     }
 
-    fn append_audit(&mut self, row: &AuditRow) -> Result<(), StorageError> {
+    fn append_audit(&mut self, row: &AuditRow, head: &AuditHead) -> Result<(), StorageError> {
         let tx = self.conn.transaction().map_err(backend)?;
         let last: Option<i64> = tx
             .query_row("SELECT MAX(seq) FROM audit", [], |r| r.get(0))
@@ -413,7 +421,38 @@ impl Storage for SqliteStorage {
             ],
         )
         .map_err(backend)?;
+        tx.execute(
+            "INSERT OR REPLACE INTO audit_head (id, seq, hash, mac) VALUES (1, ?1, ?2, ?3)",
+            params![head.seq as i64, head.hash.as_slice(), head.mac.as_slice()],
+        )
+        .map_err(backend)?;
         tx.commit().map_err(backend)
+    }
+
+    fn audit_head(&self) -> Result<Option<AuditHead>, StorageError> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT seq, hash, mac FROM audit_head WHERE id = 1",
+                [],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, Vec<u8>>(1)?,
+                        r.get::<_, Vec<u8>>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(backend)?;
+        let Some((seq, hash, mac)) = row else {
+            return Ok(None);
+        };
+        Ok(Some(AuditHead {
+            seq: seq as u64,
+            hash: blob32(hash, "audit_head.hash")?,
+            mac: blob32(mac, "audit_head.mac")?,
+        }))
     }
 
     fn audit_last(&self) -> Result<Option<AuditRow>, StorageError> {

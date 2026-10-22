@@ -80,11 +80,23 @@ The handle string itself is never stored. `status` is one of `normal`, `throttle
 |---|---|---|
 | seq | int PK | |
 | ts | ts | cleartext (needed for range queries) |
-| kind | text | cleartext: `use`, `deny`, `egress_blocked`, `approval_requested`, `approval_decided`, `reveal`, `inject`, `unlock`, `lock`, `secret_created`, `secret_updated`, `secret_deleted`, `handle_created`, `handle_revoked`, `handle_resumed`, `policy_changed`, `anomaly`, `canary_tripped`, `grant_*`, `sync_*` |
+| kind | text | cleartext: `use`, `deny`, `egress_blocked`, `approval_requested`, `approval_decided`, `reveal`, `inject`, `unlock`, `lock`, `secret_created`, `secret_updated`, `secret_deleted`, `handle_created`, `handle_revoked`, `handle_resumed`, `policy_changed`, `anomaly`, `canary_tripped`, `audit_tampered`, `grant_*`, `sync_*` |
 | prev_hash | blob(32) | cleartext chain |
 | this_hash | blob(32) | BLAKE3 of canonical event |
 | nonce, ciphertext | blob | encrypted event body |
 | signature | blob? | broker signature (delegation) |
+
+### `audit_head`
+
+One row (`id = 1`), replaced in the same transaction as every `audit` append.
+
+| Column | Type | Notes |
+|---|---|---|
+| seq | int | `seq` of the newest audit row |
+| hash | blob(32) | its `this_hash` |
+| mac | blob(32) | `BLAKE3_keyed(HKDF(VK, "usk/audit-head/v1"), seq ‖ hash)` |
+
+Absent on vaults written before 0.1.2 until their next event. See [06](06-cryptography.md#audit-log-integrity).
 
 Encrypted body example (`use`):
 ```json
