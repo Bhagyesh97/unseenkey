@@ -359,6 +359,8 @@ impl<S: Storage, C: Clock> Vault<S, C> {
                 serde_json::json!({ "state": state, "head_seq": head_seq, "last_seq": last_seq }),
             )?;
         }
+        // Uses the last daemon did not get to persist are still in the log.
+        self.reconcile_handle_counters()?;
         Ok(())
     }
 

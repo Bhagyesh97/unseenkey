@@ -214,7 +214,15 @@ pub async fn unlock(
     }
     let _ = v.audit(kinds::UNLOCK, serde_json::json!({ "method": method }));
     s.rebuild_scrubber(&v);
+    // Per-minute and per-day windows live in memory; refill them from the log
+    // so a restart does not hand a capped handle a fresh allowance.
+    let now_ms = unseenkey_core::time::Clock::now_unix_ms(&unseenkey_core::time::SystemClock);
+    let recent = v.recent_uses(now_ms - 86_400_000);
     drop(v);
+    match recent {
+        Ok(uses) => s.seed_usage(&uses, now_ms).await,
+        Err(e) => tracing::warn!(error = %e, "could not rebuild usage windows from the audit log"),
+    }
     s.emit(Event::Unlocked);
     tracing::info!("vault unlocked");
     Ok(Json(serde_json::json!({ "ok": true })))

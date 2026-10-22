@@ -185,6 +185,12 @@ pub struct HandleRecord {
     /// Last use, if any.
     #[serde(default)]
     pub last_used_at: Option<i64>,
+    /// Audit sequence number up to which `use_count` is known to include
+    /// every `use` event, set whenever the record is written. On unlock the
+    /// vault counts the `use` events after it, so uses that were not
+    /// persisted before a crash are not lost.
+    #[serde(default)]
+    pub counted_seq: u64,
     /// Rules the owner approved with "allow always" (for example
     /// `POST /v1/refunds`). Cleared whenever the policy is replaced.
     #[serde(default)]
@@ -378,6 +384,7 @@ mod tests {
             revoked_at: None,
             use_count: 0,
             last_used_at: None,
+            counted_seq: 0,
             remembered: Vec::new(),
             canary: false,
             on_anomaly: AnomalyResponse::default(),

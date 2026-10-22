@@ -180,6 +180,23 @@ pub struct UsageWindow {
 }
 
 impl UsageWindow {
+    /// A window rebuilt from audit timestamps (Unix ms, oldest first), as it
+    /// would look had the daemon counted those requests itself at `now`.
+    fn seeded(uses: &[i64], now_ms: i64, now: Instant) -> Self {
+        let mut w = Self::default();
+        for &ts in uses {
+            let age = Duration::from_millis((now_ms - ts).max(0) as u64);
+            let at = now.checked_sub(age).unwrap_or(now);
+            if age < Duration::from_secs(60) {
+                w.minute.push_back(at);
+            }
+            if age < Duration::from_secs(86_400) {
+                w.day.push_back(at);
+            }
+        }
+        w
+    }
+
     fn prune(&mut self, now: Instant) {
         while self
             .minute
@@ -206,7 +223,7 @@ pub struct AppState {
     pub token_hash: Digest,
     /// `Host` header values we accept (`127.0.0.1:port`, `localhost:port`, `[::1]:port`).
     pub allowed_hosts: std::collections::HashSet<String>,
-    /// Last authenticated request, for idle locking.
+    /// Last authenticated or brokered request, for idle locking.
     pub last_activity: Mutex<Instant>,
     /// Recent unlock attempts, for rate limiting.
     pub unlock_attempts: Mutex<Vec<Instant>>,
@@ -306,6 +323,23 @@ impl AppState {
             last_minute: w.minute.len() as u32,
             last_day: w.day.len() as u32,
             total,
+        }
+    }
+
+    /// Replace every handle's sliding windows with what the audit log says
+    /// happened in the last day (`uses` from `Vault::recent_uses`, oldest
+    /// first). Called on unlock, so per-minute and per-day caps hold across a
+    /// daemon restart instead of starting from zero.
+    pub async fn seed_usage(&self, uses: &[(Id, i64)], now_ms: i64) {
+        let now = Instant::now();
+        let mut by_handle: HashMap<Id, Vec<i64>> = HashMap::new();
+        for (id, ts) in uses {
+            by_handle.entry(*id).or_default().push(*ts);
+        }
+        let mut map = self.usage.lock().await;
+        map.clear();
+        for (id, times) in by_handle {
+            map.insert(id, UsageWindow::seeded(&times, now_ms, now));
         }
     }
 
@@ -450,5 +484,36 @@ impl AppState {
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seeded_window_matches_what_counting_would_have_given() {
+        let now_ms = 1_000_000_000_000;
+        let now = Instant::now();
+        // Three requests in the last minute, two more earlier today, one
+        // yesterday (out of the day window), one with a clock skewed into
+        // the future (counted as "now").
+        let uses = [
+            now_ms - 90_000_000,
+            now_ms - 3_600_000,
+            now_ms - 120_000,
+            now_ms - 59_000,
+            now_ms - 30_000,
+            now_ms - 1,
+            now_ms + 5_000,
+        ];
+        let mut w = UsageWindow::seeded(&uses, now_ms, now);
+        assert_eq!(w.minute.len(), 4);
+        assert_eq!(w.day.len(), 6);
+        // The entries age like real ones.
+        w.prune(now + Duration::from_secs(2));
+        assert_eq!(w.minute.len(), 3);
+        assert_eq!(w.day.len(), 6);
+        assert!(UsageWindow::seeded(&[], now_ms, now).day.is_empty());
     }
 }

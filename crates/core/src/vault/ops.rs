@@ -68,12 +68,17 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         Ok((by_id, by_hash))
     }
 
-    fn write_handle(&mut self, vk: &SecretBytes, h: HandleRecord) -> Result<(), VaultError> {
+    /// Persist a handle record. Every write carries the current `use_count`,
+    /// so it also notes how far into the audit log that count is good for.
+    fn write_handle(&mut self, vk: &SecretBytes, mut h: HandleRecord) -> Result<(), VaultError> {
         let version = self
             .storage
             .latest_record(&h.handle_id)?
             .map(|r| r.version + 1)
             .unwrap_or(1);
+        h.counted_seq = self.storage.audit_last()?.map(|r| r.seq).unwrap_or(0);
+        self.handle_counters_flushed
+            .insert(h.handle_id, h.use_count);
         let now = self.clock.now_unix_ms();
         let rec = records::encrypt_json(
             vk,
@@ -173,6 +178,7 @@ impl<S: Storage, C: Clock> Vault<S, C> {
             revoked_at: None,
             use_count: 0,
             last_used_at: None,
+            counted_seq: 0,
             remembered: Vec::new(),
             canary: opts.canary,
             on_anomaly: opts.on_anomaly,
@@ -362,7 +368,9 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         Ok(removed)
     }
 
-    /// Record a use in memory; persisted every [`COUNTER_FLUSH_EVERY`] uses and on lock.
+    /// Record a use in memory; persisted every [`COUNTER_FLUSH_EVERY`] uses and
+    /// on lock. Uses that never get persisted (a crash) are recovered from the
+    /// audit log by [`Vault::reconcile_handle_counters`] on the next unlock.
     pub fn touch_handle(&mut self, id: &Id, now: i64) -> Result<(), VaultError> {
         let vk = self.vk()?.clone();
         let h = self.handles.get_mut(id).ok_or(VaultError::HandleNotFound)?;
@@ -371,7 +379,6 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         let dirty = h.use_count - self.handle_counters_flushed.get(id).copied().unwrap_or(0);
         if dirty >= COUNTER_FLUSH_EVERY {
             let snapshot = h.clone();
-            self.handle_counters_flushed.insert(*id, snapshot.use_count);
             self.write_handle(&vk, snapshot)?;
         }
         Ok(())
@@ -396,11 +403,107 @@ impl<S: Storage, C: Clock> Vault<S, C> {
             .cloned()
             .collect();
         for h in dirty {
-            self.handle_counters_flushed
-                .insert(h.handle_id, h.use_count);
             self.write_handle(&vk, h)?;
         }
         Ok(())
+    }
+
+    /// Add to each handle's `use_count` the `use` events the log holds past
+    /// the point its record was last written. Called on unlock, so a daemon
+    /// that died before flushing (up to [`COUNTER_FLUSH_EVERY`] − 1 uses per
+    /// handle) does not hand those uses back to a capped handle. The counts
+    /// become dirty in memory and are persisted by the next flush.
+    ///
+    /// A request's `use` event is written after its `touch_handle`, so a
+    /// record flushed while requests were in flight can count those once in
+    /// the record and once here: an over-count of at most the concurrency at
+    /// that moment, on the safe side of a cap.
+    pub(super) fn reconcile_handle_counters(&mut self) -> Result<(), VaultError> {
+        let Some(start) = self.handles.values().map(|h| h.counted_seq).min() else {
+            return Ok(());
+        };
+        let by_hex: BTreeMap<String, Id> = self
+            .handles
+            .values()
+            .map(|h| (h.handle_id.to_hex(), h.handle_id))
+            .collect();
+        let mut cursor = start + 1;
+        loop {
+            let batch = self.audit_events(cursor, Some(audit::kinds::USE), 1024)?;
+            let Some(last) = batch.last() else {
+                break;
+            };
+            cursor = last.seq + 1;
+            for ev in &batch {
+                let Some(id) = ev
+                    .body
+                    .get("handle")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| by_hex.get(s))
+                else {
+                    continue;
+                };
+                if let Some(h) = self.handles.get_mut(id) {
+                    if ev.seq > h.counted_seq {
+                        h.use_count += 1;
+                        h.last_used_at = Some(h.last_used_at.map_or(ev.ts, |t| t.max(ev.ts)));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `(handle id, timestamp)` of every `use` event at or after `since_ts`,
+    /// oldest first, for rebuilding sliding-window counters after a restart.
+    /// Finds the starting row by binary search on the cleartext timestamps,
+    /// so only the events in the window are decrypted. Requires an unlocked
+    /// vault.
+    pub fn recent_uses(&self, since_ts: i64) -> Result<Vec<(Id, i64)>, VaultError> {
+        self.vk()?;
+        let Some(last) = self.storage.audit_last()? else {
+            return Ok(Vec::new());
+        };
+        if last.ts < since_ts {
+            return Ok(Vec::new());
+        }
+        let (mut lo, mut hi) = (1u64, last.seq);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            match self.storage.audit_rows(mid, 1)?.first() {
+                Some(r) if r.ts >= since_ts => hi = r.seq,
+                Some(r) => lo = r.seq + 1,
+                None => lo = mid + 1,
+            }
+        }
+        let by_hex: BTreeMap<String, Id> = self
+            .handles
+            .values()
+            .map(|h| (h.handle_id.to_hex(), h.handle_id))
+            .collect();
+        let mut out = Vec::new();
+        let mut cursor = lo;
+        loop {
+            let batch = self.audit_events(cursor, Some(audit::kinds::USE), 1024)?;
+            let Some(last) = batch.last() else {
+                break;
+            };
+            cursor = last.seq + 1;
+            for ev in &batch {
+                if ev.ts < since_ts {
+                    continue;
+                }
+                if let Some(id) = ev
+                    .body
+                    .get("handle")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| by_hex.get(s))
+                {
+                    out.push((*id, ev.ts));
+                }
+            }
+        }
+        Ok(out)
     }
 
     fn audit_dek(&self, vk: &SecretBytes) -> SecretBytes {

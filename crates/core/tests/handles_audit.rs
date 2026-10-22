@@ -311,6 +311,92 @@ fn keyed_head_catches_truncation_and_tolerates_old_logs() {
 }
 
 #[test]
+fn use_counts_survive_a_crash_through_the_audit_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vault.db");
+    let hid;
+    let other = unseenkey_core::ids::Id::new_v7(99).to_hex();
+    {
+        let (mut v, _) = Vault::create(
+            SqliteStorage::open(&path).unwrap(),
+            FixedClock(1_000),
+            &SecretBytes::from(PW),
+            FAST,
+        )
+        .unwrap();
+        let sid = v.add(stripe()).unwrap();
+        let (rec, _) = v
+            .create_handle(&sid, "cursor", Policy::allow_all(), None)
+            .unwrap();
+        hid = rec.handle_id;
+        // Seven brokered requests, as the daemon records them: counter in
+        // memory, `use` event in the log. Two events for some other handle
+        // are noise that must not be counted.
+        for i in 0..7 {
+            v.touch_handle(&hid, 1_000 + i).unwrap();
+            v.audit(
+                kinds::USE,
+                json!({ "handle": hid.to_hex(), "path": "/v1/x" }),
+            )
+            .unwrap();
+            if i < 2 {
+                v.audit(kinds::USE, json!({ "handle": other, "path": "/v1/y" }))
+                    .unwrap();
+            }
+        }
+        assert_eq!(v.handle(&hid).unwrap().use_count, 7);
+        // The daemon dies here: no lock(), nothing flushed.
+    }
+    let mut v = Vault::open(SqliteStorage::open(&path).unwrap(), FixedClock(5_000)).unwrap();
+    v.unlock_with_password(&SecretBytes::from(PW)).unwrap();
+    let h = v.handle(&hid).unwrap();
+    assert_eq!(h.use_count, 7, "uses come back from the log");
+    assert_eq!(
+        h.last_used_at,
+        Some(1_000),
+        "the events' timestamps, not the touches'"
+    );
+
+    // Two more, then a clean lock persists 9 with the log position; a later
+    // unlock has nothing to add.
+    for _ in 0..2 {
+        v.touch_handle(&hid, 5_000).unwrap();
+        v.audit(
+            kinds::USE,
+            json!({ "handle": hid.to_hex(), "path": "/v1/x" }),
+        )
+        .unwrap();
+    }
+    // Sliding-window input: everything, then only the second session.
+    let all = v.recent_uses(0).unwrap();
+    assert_eq!(all.len(), 9);
+    assert!(all.iter().all(|(id, _)| *id == hid));
+    assert_eq!(all.iter().filter(|(_, ts)| *ts == 5_000).count(), 2);
+    let recent = v.recent_uses(2_000).unwrap();
+    assert_eq!(recent, vec![(hid, 5_000), (hid, 5_000)]);
+    assert!(v.recent_uses(6_000).unwrap().is_empty());
+    v.lock();
+    drop(v);
+
+    let mut v = Vault::open(SqliteStorage::open(&path).unwrap(), FixedClock(9_000)).unwrap();
+    v.unlock_with_password(&SecretBytes::from(PW)).unwrap();
+    assert_eq!(
+        v.handle(&hid).unwrap().use_count,
+        9,
+        "no double counting after a flush"
+    );
+    // Revoking (any write) also pins the count to the log position.
+    v.touch_handle(&hid, 9_000).unwrap();
+    v.audit(kinds::USE, json!({ "handle": hid.to_hex() }))
+        .unwrap();
+    v.revoke_handle(&hid).unwrap();
+    drop(v);
+    let mut v = Vault::open(SqliteStorage::open(&path).unwrap(), FixedClock(9_500)).unwrap();
+    v.unlock_with_password(&SecretBytes::from(PW)).unwrap();
+    assert_eq!(v.handle(&hid).unwrap().use_count, 10);
+}
+
+#[test]
 fn remembered_rules_persist_and_reset_on_policy_change() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("vault.db");

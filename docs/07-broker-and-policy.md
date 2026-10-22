@@ -168,7 +168,7 @@ Note: For the checkout project, Sept–Dec 2026
 - Default deny. Unknown top-level keys → policy invalid → deny (INV-5).
 - Path globs: `*` matches one segment, `**` matches any number; query strings are ignored for matching but logged.
 - `deny` overrides `allow`.
-- Limits are enforced with a sliding window in memory (local) or Redis (hosted). `requests_total` is persisted.
+- Limits are enforced with a sliding window in memory (local) or Redis (hosted). Locally the windows are rebuilt from the last day of `use` audit events on unlock, so a restart does not reset them. `requests_total` is persisted every 100 uses and on lock; on unlock the vault adds back the `use` events written after the record's last flush, so a crash loses nothing.
 - `approval.mode: first_use` caches the owner's decision per `(handle, method, path-pattern)` until revoked.
 - The engine is pure: `evaluate(policy, request_summary, caller, now) -> Decision`. No I/O, fully unit-testable, fuzzable.
 

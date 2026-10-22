@@ -825,6 +825,10 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
             };
             s.record_use(&handle.handle_id).await;
             let _ = vault.touch_handle(&handle.handle_id, now);
+            // A request the policy let through is activity: an agent working
+            // through the broker should not find the vault locked under it
+            // because nobody ran a management command for fifteen minutes.
+            s.touch().await;
             revealed
         };
 

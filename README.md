@@ -52,7 +52,7 @@ claude -p "hello"                 # Claude Code now calls Anthropic through the 
 usk log                           # every call, hash-chained
 ```
 
-`--shell powershell|cmd|dotenv` prints the variables for your shell or `.env`. The daemon starts itself on first use, listens on loopback only, and locks after 15 idle minutes or when the screen locks or the machine sleeps.
+`--shell powershell|cmd|dotenv` prints the variables for your shell or `.env`. The daemon starts itself on first use, listens on loopback only, and locks after 15 minutes without a request or when the screen locks or the machine sleeps.
 
 ## What a handle can do
 
