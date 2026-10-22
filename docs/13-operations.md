@@ -20,6 +20,13 @@ Covers running the local daemon well, deploying the cloud (Phase 3+), and respon
 - **Known advisories, accepted for now** (re-checked on every `cargo audit` of `apps/desktop/src-tauri/Cargo.lock`): `zip` 4.x (RUSTSEC-2026-0367/0368/0369, symlink and permission handling in `extract`) comes through `tauri-plugin-updater`, whose stable releases up to 2.14 require `zip ^4` on Windows and whose `zip` feature also provides the tar/gzip support macOS and Linux updates need. The updater unpacks a bundle only after its minisign signature verified, so exploiting these needs our signing key; move to the plugin's next major when it ships with `zip` 9. `glib` 0.18 (RUSTSEC-2024-0429, Linux only, iterator unsoundness in an API we do not call) is pinned by the gtk version Tauri 2 requires.
 - **Secret-scanning partnership:** register the camouflage handle formats (every one contains `usk`) with GitHub's secret-scanning partner programme so a leaked handle is reported and revoked (runbook below). The programme needs an HTTPS endpoint that receives signed match reports, which is the `cloud-scan` service of M3.3; until it exists, a leaked handle is still harmless (it only works through the owner's broker), it just is not reported.
 
+## Website (unseenkey.com)
+
+- **Hosting:** Cloudflare Pages, project `unseenkey` (direct upload), custom domains `unseenkey.com` and `www`, KV namespace `WAITLIST` bound for the waitlist function, Email Routing for `security@` and `hello@`. The zone lives in the owner's Cloudflare account; ids are in `private/cloudflare-state.json`.
+- **Set up and operated through Unseenkey itself:** the Cloudflare API token is a secret in the owner's vault (`cloudflare`, locked to `api.cloudflare.com`, injection allowed). Configuration calls go through the broker with a handle scoped by `private/cloudflare-site-policy.toml` (`private/cloudflare-setup.py`, idempotent); deploys run `usk run --with CLOUDFLARE_API_TOKEN=cloudflare -- node node_modules/wrangler/bin/wrangler.js pages deploy` from `site/`, because Wrangler's asset uploads use a one-off upload token that the broker cannot stand in for. Every call is in `usk log` under the `site ops` handle.
+- **Continuous deploys:** `.github/workflows/site.yml` deploys on pushes to `site/**` once the repository secrets `CLOUDFLARE_API_TOKEN` (Pages: Edit only) and `CLOUDFLARE_ACCOUNT_ID` exist; until then it skips itself.
+- **Changing the site:** edit `site/src` or `site/public`, `cd site && npm run build`, commit; deploy by push (with the secrets) or by the `usk run` line above.
+
 ## Cloud deployment (Phase 3)
 
 ### Topology
