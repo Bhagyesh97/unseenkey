@@ -2,7 +2,7 @@
 
 The top section of this file becomes the release notes when a `v*` tag is pushed.
 
-## Unreleased
+## 0.1.1 — 2026-10-22
 
 Fixes from the first real use of a provider without a preset (calling Hostinger's API through the generic route):
 
