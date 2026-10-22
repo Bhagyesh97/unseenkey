@@ -272,6 +272,11 @@ pub fn run() -> Result<(), CliError> {
     let cli = Cli::parse();
     let vault = daemon::vault_path(cli.vault)?;
     let paths = VaultPaths::from_vault_file(&vault);
+    // Providers the owner added as `<vault dir>/presets/<id>.toml`.
+    let (_, problems) = unseenkey_core::presets::load_user_dir(&paths.presets);
+    for p in problems {
+        eprintln!("warning: user preset skipped: {p}");
+    }
     match cli.command {
         Command::Init { profile: p } => init(&paths, profile(p)),
         Command::Unlock => {
@@ -338,6 +343,7 @@ pub fn run() -> Result<(), CliError> {
                 notes,
                 tags,
                 upstreams,
+                provider,
             } => secret_set(
                 &paths,
                 &name,
@@ -346,6 +352,7 @@ pub fn run() -> Result<(), CliError> {
                 notes,
                 tags,
                 upstreams,
+                provider,
             ),
         },
         Command::Handle { action } => match action {
@@ -592,6 +599,13 @@ fn add(
     }
     let value_str = std::str::from_utf8(value.expose())
         .map_err(|_| CliError::general("value must be UTF-8 text; use import for binary"))?;
+    // A pasted token often carries a trailing space or tab; a multi-line value
+    // (a PEM key) is kept exactly as given.
+    let value_str = if value_str.contains('\n') {
+        value_str
+    } else {
+        value_str.trim_end()
+    };
     // An AWS access key id on its own is half a credential: ask for the rest.
     // (Both halves can also be given at once: two lines, a ~/.aws/credentials
     // section or `aws sts` JSON; the daemon takes those apart.)
@@ -1636,9 +1650,13 @@ enum SecretAction {
         /// Replace the allowed hosts; repeatable.
         #[arg(long = "upstream")]
         upstreams: Vec<String>,
+        /// Change the provider preset (brings its hosts unless --upstream is given).
+        #[arg(long)]
+        provider: Option<String>,
     },
 }
 
+#[allow(clippy::too_many_arguments)]
 fn secret_set(
     paths: &VaultPaths,
     name: &str,
@@ -1647,9 +1665,13 @@ fn secret_set(
     notes: Option<String>,
     tags: Vec<String>,
     upstreams: Vec<String>,
+    provider: Option<String>,
 ) -> Result<(), CliError> {
     let c = unlocked(paths)?;
     let mut body = serde_json::Map::new();
+    if let Some(p) = provider {
+        body.insert("provider".into(), json!(p));
+    }
     if let Some(a) = allow_injection {
         body.insert("allow_injection".into(), json!(a));
     }
@@ -1718,13 +1740,18 @@ fn presets(json: bool) -> Result<(), CliError> {
     }
     for p in all {
         println!(
-            "{:<12} {:<16} {}",
+            "{:<12} {:<16} {}{}",
             p.id,
             p.display,
             if p.upstreams.is_empty() {
                 "(any locked host)".to_string()
             } else {
                 p.upstreams.join(", ")
+            },
+            if unseenkey_core::presets::is_user_preset(&p.id) {
+                "  (yours)"
+            } else {
+                ""
             }
         );
         for pp in &p.policies {

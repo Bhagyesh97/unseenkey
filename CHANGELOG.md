@@ -2,6 +2,19 @@
 
 The top section of this file becomes the release notes when a `v*` tag is pushed.
 
+## Unreleased
+
+Fixes from the first real use of a provider without a preset (calling Hostinger's API through the generic route):
+
+- **Template mode kept no `Authorization` header.** `Authorization: Bearer {{usk:name}}` on the generic route was stripped before the placeholder was filled in, so a generic secret could never call a plain bearer API. Headers that carry a `{{usk:…}}` placeholder now survive the strip.
+- **A value that does not fit in a header is an error, not a silent drop.** A stored value ending in a newline made the substituted header vanish, which looked like a bad token; the broker now answers `malformed_request` naming the header. `usk add` trims trailing spaces off single-line values.
+- **`--upstream` accepts what people type.** `https://api.example.com/v1/` and `API.EXAMPLE.COM` are normalised to `api.example.com` on `usk add` and `usk secret set`; wildcards are kept.
+- **`usk secret set --provider`** changes a secret's provider (and brings the preset's hosts unless `--upstream` is given) instead of `rm` and re-paste.
+- **User presets without a rebuild:** drop `<id>.toml` into `<vault dir>/presets/` and the daemon and CLI load it beside the built-in ones (a built-in id is overridden). `usk presets` marks them "(yours)".
+- **MCP `request_access` can ask for a host:** pass `upstream` and an approval also adds the host to the secret's allowed hosts, so "approved, retry" is no longer followed by `host_not_allowed`.
+- **Clearer refusals:** `host_not_allowed` says the `usk secret set … --upstream` line that fixes it; the generic route's `unknown_handle` says to send `X-Usk-Handle` and put `{{usk:<secret>}}` where the secret goes.
+- **New preset:** Hostinger (`read-only`, `deploy`, `full`).
+
 ## 0.1.0 — 2026-10-22
 
 First public release. Alpha: the local parts work and are tested on Windows, macOS and Linux, but no external security audit has happened yet. Use it with keys you can rotate, and read the [threat model](docs/04-threat-model.md) before trusting it with anything.

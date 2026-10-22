@@ -540,3 +540,76 @@ async fn approvals_flow() {
     assert!(events.as_array().unwrap().len() >= 4);
     env.mgmt("POST", "/v1/shutdown", Some(json!({})));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_access_can_add_a_host_the_secret_is_not_locked_to() {
+    let env = setup().await;
+    let (code, _) = env.mgmt("POST", "/v1/secrets", Some(json!({ "name": "hosted", "value": "tok_abcdefghijklmnop", "provider": "generic", "upstreams": ["api.one.example"] })));
+    assert_eq!(code, 201);
+    // Refused for the host, with the owner's fix in the message.
+    let r = env.tool("call_api", json!({ "secret": "hosted", "method": "GET", "path": "/v1/me", "upstream": "https://api.two.example" }));
+    assert_eq!(r["isError"], true, "{r}");
+    let text = r["content"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        text.contains("host_not_allowed") || text.contains("not an allowed host"),
+        "{r}"
+    );
+    assert!(
+        text.contains("usk secret set hosted --upstream api.two.example"),
+        "{r}"
+    );
+    // Ask for the host; the owner approves; the secret now allows it.
+    let e2 = env.clone();
+    let waiting = tokio::task::spawn_blocking(move || {
+        e2.tool("request_access", json!({ "secret": "hosted", "reason": "the API moved", "upstream": "https://api.two.example/v1/" }))
+    });
+    loop {
+        let (_, p) = env.mgmt("GET", "/v1/approvals", None);
+        if let Some(a) = p.as_array().unwrap().iter().find(|a| a["kind"] == "access") {
+            assert!(
+                a["scope"]
+                    .as_str()
+                    .unwrap()
+                    .contains("allow the host api.two.example"),
+                "{a}"
+            );
+            assert_eq!(a["host"], "api.two.example");
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    env.mgmt(
+        "POST",
+        "/v1/approvals/latest",
+        Some(json!({ "decision": "allow", "remember": false })),
+    );
+    let r = waiting.await.unwrap();
+    let j = tool_json(&r);
+    assert_eq!(j["status"], "allowed", "{r}");
+    assert!(
+        j["message"]
+            .as_str()
+            .unwrap()
+            .contains("api.two.example is now an allowed host"),
+        "{r}"
+    );
+    let (_, m) = env.mgmt("GET", "/v1/secrets/hosted", None);
+    assert_eq!(
+        m["upstreams"],
+        json!(["api.one.example", "api.two.example"])
+    );
+    // The host lock no longer refuses it (the host itself is unreachable here, which is a different error).
+    let r = env.tool("call_api", json!({ "secret": "hosted", "method": "GET", "path": "/v1/me", "upstream": "https://api.two.example" }));
+    let text = r["content"][0]["text"].as_str().unwrap_or("");
+    assert!(!text.contains("host_not_allowed"), "{r}");
+    let (_, events) = env.mgmt("GET", "/v1/audit?kind=secret_updated", None);
+    assert!(
+        events
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["body"]["upstream_added"] == "api.two.example"),
+        "{events}"
+    );
+    env.mgmt("POST", "/v1/shutdown", Some(json!({})));
+}

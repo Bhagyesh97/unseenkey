@@ -100,6 +100,9 @@ fn extract_handle(preset: &Preset, headers: &HeaderMap, query: Option<&str>) -> 
         .or_else(bearer)
         .or_else(|| header("x-api-key"))
         .or_else(|| from_query("key"))
+        // A placeholder where a key would go is template mode's instruction,
+        // not a handle; the handle itself travels in X-Usk-Handle.
+        .filter(|h| !h.contains("{{usk:"))
 }
 
 /// What an AWS request does, for the audit log: the `X-Amz-Target` header of
@@ -371,11 +374,12 @@ pub async fn proxy(State(s): State<Arc<AppState>>, req: Request) -> Response {
         );
     }
     let Some(handle_str) = extract_handle(preset, &parts.headers, query.as_deref()) else {
-        return err(
-            StatusCode::UNAUTHORIZED,
-            "unknown_handle",
-            "no handle found where this provider expects its key",
-        );
+        let msg = if matches!(preset.auth, Auth::Template) {
+            "no handle found: for this provider send the handle in the X-Usk-Handle header and put {{usk:<secret>}} where the secret belongs (for example `Authorization: Bearer {{usk:<secret>}}`)"
+        } else {
+            "no handle found where this provider expects its key"
+        };
+        return err(StatusCode::UNAUTHORIZED, "unknown_handle", msg);
     };
     let mut upstream_spec = parts
         .headers
@@ -578,6 +582,17 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
                 now,
             )
             .await;
+            // Say how the owner fixes it; the caller already knows the secret's name.
+            if let BrokerError::HostNotAllowed(host) = &e {
+                return err(
+                    StatusCode::FORBIDDEN,
+                    e.code(),
+                    format!(
+                        "{host} is not an allowed host for {}; the owner can allow it with `usk secret set {} --upstream {host}`",
+                        meta.name, meta.name
+                    ),
+                );
+            }
             return broker_err(e);
         }
         let usage = s.usage_for(&handle.handle_id, handle.use_count).await;
@@ -944,9 +959,15 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
 
     let method =
         reqwest::Method::from_bytes(call.method.as_bytes()).unwrap_or(reqwest::Method::GET);
+    let template = matches!(auth, Auth::Template);
     let mut headers = reqwest::header::HeaderMap::new();
     for (name, value) in call.headers.iter() {
-        if is_stripped(name.as_str(), STRIP_REQUEST_HEADERS) {
+        // The strip exists to drop whatever credential an SDK attached. In
+        // template mode a stripped header that carries a placeholder is the
+        // caller saying where the secret goes (`Authorization: Bearer
+        // {{usk:name}}`), so it stays and is filled in below.
+        let carries_placeholder = template && value.as_bytes().windows(6).any(|w| w == b"{{usk:");
+        if is_stripped(name.as_str(), STRIP_REQUEST_HEADERS) && !carries_placeholder {
             continue;
         }
         if let (Ok(n), Ok(v)) = (
@@ -957,15 +978,25 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
         }
     }
     // Template mode: substitute placeholders inside header values too.
-    if matches!(auth, Auth::Template) {
+    if template {
         let mut replaced = reqwest::header::HeaderMap::new();
         for (name, value) in headers.iter() {
             match adapters::substitute(value.as_bytes(), resolver) {
-                Ok((v, _)) => {
-                    if let Ok(hv) = reqwest::header::HeaderValue::from_bytes(&v) {
+                Ok((v, _)) => match reqwest::header::HeaderValue::from_bytes(&v) {
+                    Ok(hv) => {
                         replaced.append(name.clone(), hv);
                     }
-                }
+                    Err(_) => {
+                        // Dropping it silently looks exactly like a bad token.
+                        return err(
+                            StatusCode::BAD_REQUEST,
+                            "malformed_request",
+                            format!(
+                                "the {name} header is not a valid header value once the secret is filled in; the stored value probably ends with a newline or contains control characters"
+                            ),
+                        );
+                    }
+                },
                 Err(e) => return broker_err(e),
             }
         }

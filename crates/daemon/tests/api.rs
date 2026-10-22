@@ -407,3 +407,50 @@ async fn device_unlock_methods() {
     );
     r.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn upstreams_are_normalised_and_a_provider_change_brings_its_hosts() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = start(dir.path(), false).await;
+    let c = C::new(&r);
+    assert_eq!(c.post("/v1/unlock", json!({ "password": PW })).0, 200);
+    // What people type: a URL with a path, upper case, duplicates.
+    let (code, m) = c.post("/v1/secrets", json!({
+        "name": "hosted", "value": "tok_abcdefghijklmnop", "provider": "generic",
+        "upstreams": ["https://Developers.Hostinger.com/api/vps/v1/", "developers.hostinger.com", "*.Example.com"]
+    }));
+    assert_eq!(code, 201, "{m}");
+    assert_eq!(
+        m["upstreams"],
+        json!(["developers.hostinger.com", "*.example.com"])
+    );
+    // Something that is not a host at all is refused with the field named.
+    let (code, m) = c.post(
+        "/v1/secrets",
+        json!({ "name": "bad", "value": "tok_abcdefghijklmnop", "upstreams": ["not a host"] }),
+    );
+    assert_eq!(code, 400, "{m}");
+    assert_eq!(m["error"], "invalid_upstream");
+    // secret set --upstream goes through the same normalisation.
+    let (code, m) = c.patch(
+        "/v1/secrets/hosted",
+        json!({ "upstreams": ["HTTPS://API.EXAMPLE.COM/"] }),
+    );
+    assert_eq!(code, 200, "{m}");
+    assert_eq!(m["upstreams"], json!(["api.example.com"]));
+    // Changing the provider brings the preset's hosts unless hosts are given too.
+    let (code, m) = c.patch("/v1/secrets/hosted", json!({ "provider": "hostinger" }));
+    assert_eq!(code, 200, "{m}");
+    assert_eq!(m["provider"], "hostinger");
+    assert_eq!(m["upstreams"], json!(["developers.hostinger.com"]));
+    let (code, m) = c.patch(
+        "/v1/secrets/hosted",
+        json!({ "provider": "cloudflare", "upstreams": ["api.cloudflare.com", "example.com"] }),
+    );
+    assert_eq!(code, 200, "{m}");
+    assert_eq!(m["upstreams"], json!(["api.cloudflare.com", "example.com"]));
+    let (code, m) = c.patch("/v1/secrets/hosted", json!({ "provider": "nope" }));
+    assert_eq!(code, 400, "{m}");
+    assert_eq!(m["error"], "unknown_provider");
+    r.shutdown().await;
+}

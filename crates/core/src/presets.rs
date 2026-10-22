@@ -1,12 +1,14 @@
 //! Provider presets: upstream host, how the secret is sent, and ready-made
 //! policies with plain-English names. Source of truth is `presets/*.toml`,
-//! embedded at build time; users may override in `~/.unseenkey/presets/`
-//! (loading of overrides arrives with the broker).
+//! embedded at build time. A user may add providers without rebuilding by
+//! dropping `<id>.toml` files into the vault directory's `presets/` folder
+//! ([`load_user_dir`]); those sit beside the built-in ones and win on an id
+//! clash.
 
 use crate::policy::{Policy, PolicyError, Rule};
 use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
 /// How the broker places the secret into an upstream request.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -155,6 +157,7 @@ pub const EMBEDDED: &[(&str, &str)] = embedded![
     "slack",
     "notion",
     "cloudflare",
+    "hostinger",
     "aws",
     "generic",
 ];
@@ -218,20 +221,96 @@ fn table() -> &'static BTreeMap<&'static str, Preset> {
     })
 }
 
+/// Presets loaded from the user's presets directory.
+#[derive(Default)]
+struct UserPresets {
+    by_id: BTreeMap<String, &'static Preset>,
+    formats: Vec<crate::handles::Format>,
+}
+
+fn user() -> &'static RwLock<UserPresets> {
+    static USER: OnceLock<RwLock<UserPresets>> = OnceLock::new();
+    USER.get_or_init(|| RwLock::new(UserPresets::default()))
+}
+
+/// Load every `<id>.toml` in `dir` as a preset, replacing whatever user
+/// presets were loaded before. A missing directory means no user presets.
+/// Returns the ids loaded and one message per file that was skipped. Each
+/// loaded preset lives for the rest of the process.
+pub fn load_user_dir(dir: &std::path::Path) -> (Vec<String>, Vec<String>) {
+    let mut loaded = UserPresets::default();
+    let mut ids = Vec::new();
+    let mut problems = Vec::new();
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => {
+            *user().write().unwrap_or_else(|e| e.into_inner()) = loaded;
+            return (ids, problems);
+        }
+    };
+    let mut files: Vec<std::path::PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "toml"))
+        .collect();
+    files.sort();
+    for path in files {
+        let id = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                problems.push(format!("{}: {e}", path.display()));
+                continue;
+            }
+        };
+        match parse(&id, &text) {
+            Ok(p) => {
+                for f in &p.handle_formats {
+                    if let Ok(fmt) = crate::handles::Format::parse(&f.format) {
+                        loaded.formats.push(fmt);
+                    }
+                }
+                let leaked: &'static Preset = Box::leak(Box::new(p));
+                loaded.by_id.insert(id.clone(), leaked);
+                ids.push(id);
+            }
+            Err(e) => problems.push(format!("{}: {e}", path.display())),
+        }
+    }
+    *user().write().unwrap_or_else(|e| e.into_inner()) = loaded;
+    (ids, problems)
+}
+
+/// Is `id` one of the presets loaded from the user's directory?
+pub fn is_user_preset(id: &str) -> bool {
+    user()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .by_id
+        .contains_key(id)
+}
+
 /// Is `s` a camouflage handle, that is, does it have exactly the shape of one
 /// of the presets' handle formats?
 pub fn is_camouflage_handle(s: &str) -> bool {
     static FORMATS: OnceLock<Vec<crate::handles::Format>> = OnceLock::new();
-    FORMATS
-        .get_or_init(|| {
-            table()
-                .values()
-                .flat_map(|p| &p.handle_formats)
-                .filter_map(|f| crate::handles::Format::parse(&f.format).ok())
-                .collect()
-        })
-        .iter()
-        .any(|f| f.matches(s))
+    let built_in = FORMATS.get_or_init(|| {
+        table()
+            .values()
+            .flat_map(|p| &p.handle_formats)
+            .filter_map(|f| crate::handles::Format::parse(&f.format).ok())
+            .collect()
+    });
+    built_in.iter().any(|f| f.matches(s))
+        || user()
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .formats
+            .iter()
+            .any(|f| f.matches(s))
 }
 
 /// Is `s` a handle of either kind (canonical `usk_h_…` or camouflage)? Shape
@@ -240,13 +319,30 @@ pub fn is_handle(s: &str) -> bool {
     crate::handles::is_handle_shaped(s) || is_camouflage_handle(s)
 }
 
-/// All built-in presets, by id.
+/// Every preset, user-loaded ones first, then the built-in ones they did not
+/// override, each group by id.
 pub fn all() -> impl Iterator<Item = &'static Preset> {
-    table().values()
+    let u = user().read().unwrap_or_else(|e| e.into_inner());
+    let mut v: Vec<&'static Preset> = u.by_id.values().copied().collect();
+    v.extend(
+        table()
+            .iter()
+            .filter(|(id, _)| !u.by_id.contains_key(**id))
+            .map(|(_, p)| p),
+    );
+    v.into_iter()
 }
 
-/// One preset.
+/// One preset, the user's version first.
 pub fn get(id: &str) -> Option<&'static Preset> {
+    if let Some(p) = user()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .by_id
+        .get(id)
+    {
+        return Some(p);
+    }
     table().get(id)
 }
 
@@ -270,7 +366,7 @@ mod tests {
     #[test]
     fn every_embedded_preset_parses_and_explains() {
         let ids: Vec<&str> = EMBEDDED.iter().map(|(id, _)| *id).collect();
-        assert_eq!(ids.len(), 18);
+        assert_eq!(ids.len(), 19);
         for id in ids {
             let p = get(id).unwrap_or_else(|| panic!("missing {id}"));
             assert!(!p.policies.is_empty(), "{id} has no policies");
@@ -515,5 +611,66 @@ upstreams = ["other.example.com"]
         assert!(policy_ref("stripe").is_err());
         assert!(policy_ref("nope:full").is_err());
         assert!(policy_ref("stripe:nope").is_err());
+    }
+
+    #[test]
+    fn user_presets_load_from_a_directory_and_win_on_id_clash() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("acme.toml"),
+            r#"id = "acme"
+display = "Acme"
+upstreams = ["api.acme.test"]
+auth = { kind = "bearer" }
+base_path = ""
+[env]
+api_key = "ACME_TOKEN"
+[[policies]]
+id = "read-only"
+display = "Read only"
+recommended = true
+allow = ["GET /**"]
+"#,
+        )
+        .unwrap();
+        // Wrong id inside, so it is skipped with a message.
+        std::fs::write(dir.path().join("broken.toml"), "id = \"other\"\n").unwrap();
+        // Not a preset file at all.
+        std::fs::write(dir.path().join("notes.txt"), "ignored").unwrap();
+        let (ids, problems) = load_user_dir(dir.path());
+        assert_eq!(ids, vec!["acme".to_string()]);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("broken.toml"));
+        let acme = get("acme").expect("user preset is visible");
+        assert_eq!(acme.display, "Acme");
+        assert!(is_user_preset("acme"));
+        assert!(!is_user_preset("stripe"));
+        assert!(all().any(|p| p.id == "acme"));
+        assert!(all().any(|p| p.id == "stripe"), "built-ins remain");
+        assert!(policy_ref("acme:read-only").is_ok());
+        // A user file with a built-in id overrides it.
+        std::fs::write(
+            dir.path().join("stripe.toml"),
+            r#"id = "stripe"
+display = "Stripe (mine)"
+upstreams = ["api.stripe.com"]
+auth = { kind = "bearer" }
+base_path = ""
+[[policies]]
+id = "full"
+display = "Everything"
+allow = ["* /**"]
+"#,
+        )
+        .unwrap();
+        let (ids, _) = load_user_dir(dir.path());
+        assert_eq!(ids, vec!["acme".to_string(), "stripe".to_string()]);
+        assert_eq!(get("stripe").unwrap().display, "Stripe (mine)");
+        assert_eq!(all().filter(|p| p.id == "stripe").count(), 1);
+        // Reloading an empty directory clears the user set again.
+        let empty = tempfile::tempdir().unwrap();
+        load_user_dir(empty.path());
+        assert!(get("acme").is_none());
+        assert_eq!(get("stripe").unwrap().display, "Stripe");
     }
 }

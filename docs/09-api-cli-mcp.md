@@ -87,12 +87,13 @@ usk handle create stripe --policy payments --cap 500/day --cap 60/min   # hard s
 usk handle create stripe --canary [--camouflage]   # a handle that never works; any use locks the vault (--on-anomaly to change)
 usk handle create … --on-anomaly alert|throttle|approve|pause|lock     # what a burst of refused requests does to the handle
 usk handle resume <label|id>     # back to normal after an incident
+usk presets                       # built-in presets plus `<vault dir>/presets/<id>.toml` files, marked "(yours)"
 usk policy ls | usk policy show <id> | usk policy edit <id> (opens $EDITOR, validates, explains)
 usk policy explain <id>
 
 usk env <name> [--policy chat] [--shell sh|powershell|cmd|dotenv]   print the variables for the provider preset (creates handle)
 usk run --with VAR=name [...] -- <cmd…>   inject secrets into a child's environment (needs --allow-injection); output scrubbed; exit code propagates
-usk secret set <name> [--allow-injection bool] [--no-scrub bool] [--notes …] [--tag …] [--upstream host]
+usk secret set <name> [--allow-injection bool] [--no-scrub bool] [--notes …] [--tag …] [--upstream host] [--provider id]   # hosts are normalised (https://host/path → host); a new provider brings its hosts
 usk guard scan [.env]            which lines look like secrets, and which can become handles
 usk guard fix  [.env] [--dry-run] move them into the vault, rewrite the file with handles + base-URL variables
 usk mcp --client <name>          stdio MCP bridge to the daemon's /mcp (what the clients' configs run)

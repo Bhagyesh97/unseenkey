@@ -21,6 +21,7 @@ use tokio::sync::{broadcast, watch, Mutex};
 use tokio::task::JoinHandle;
 use unseenkey_core::audit::kinds;
 use unseenkey_core::broker::scrub::Scrubber;
+use unseenkey_core::presets;
 use unseenkey_core::storage::sqlite::SqliteStorage;
 use unseenkey_core::time::SystemClock;
 use unseenkey_core::vault::Vault;
@@ -140,6 +141,15 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
         .map_err(|_| ServeError::BadAddress(opts.listen.clone()))?;
     if !requested.ip().is_loopback() {
         return Err(ServeError::NotLoopback(opts.listen.clone()));
+    }
+    // Providers the owner added without rebuilding: `<vault dir>/presets/<id>.toml`.
+    let (user_presets, problems) =
+        presets::load_user_dir(&VaultPaths::from_vault_file(&opts.vault_path).presets);
+    if !user_presets.is_empty() {
+        tracing::info!(presets = ?user_presets, "user presets loaded");
+    }
+    for p in problems {
+        tracing::warn!("user preset skipped: {p}");
     }
     let storage = SqliteStorage::open(&opts.vault_path)?;
     let vault = Vault::open(storage, SystemClock)?;

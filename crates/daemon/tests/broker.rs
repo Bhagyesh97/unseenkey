@@ -680,3 +680,99 @@ async fn camouflage_handles_work_like_any_other() {
 fn _bytes_in_scope(_: Bytes) {}
 #[allow(dead_code)]
 fn _arc_in_scope(_: Arc<()>) {}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn template_mode_fills_a_bearer_authorization_header_and_refuses_unfillable_values() {
+    let env = setup().await;
+    let (code, _) = env.post("/v1/secrets", json!({ "name": "hosted", "value": "tok_abcdefghijklmnop", "provider": "generic", "upstreams": ["127.0.0.1"] }));
+    assert_eq!(code, 201);
+    let (handle, _) = create_handle(&env, "hosted", "tmpl-auth", None);
+    // `Authorization` is normally stripped (an SDK may have put a credential
+    // there); with a placeholder it is the caller's instruction and survives.
+    let (code, body, _) = Env::call(
+        env.agent
+            .request("GET", &format!("{}/p/generic/api/me", env.base))
+            .set("X-Usk-Handle", &handle)
+            .set(
+                "X-Usk-Upstream",
+                &format!("http://127.0.0.1:{}", env.mock.port()),
+            )
+            .set("Authorization", "Bearer {{usk:hosted}}")
+            .call(),
+    );
+    assert_eq!(code, 200, "{body}");
+    assert_eq!(
+        body["headers"]["authorization"], "Bearer [REDACTED:usk:hosted]",
+        "the upstream saw the real value (scrubbed on the way back)"
+    );
+    // Without a placeholder the strip still applies: an attached credential never goes upstream.
+    let (code, body, _) = Env::call(
+        env.agent
+            .request("GET", &format!("{}/p/generic/api/me", env.base))
+            .set("X-Usk-Handle", &handle)
+            .set(
+                "X-Usk-Upstream",
+                &format!("http://127.0.0.1:{}", env.mock.port()),
+            )
+            .set("Authorization", "Bearer something-the-sdk-attached")
+            .call(),
+    );
+    assert_eq!(code, 200, "{body}");
+    assert!(body["headers"].get("authorization").is_none(), "{body}");
+    // A stored value that cannot live in a header is refused, not dropped.
+    let (code, _) = env.post("/v1/secrets", json!({ "name": "ragged", "value": "tok_abcdefghijklmnop\n", "provider": "generic", "upstreams": ["127.0.0.1"] }));
+    assert_eq!(code, 201);
+    let (handle2, _) = create_handle(&env, "ragged", "tmpl-ragged", None);
+    let (code, body, _) = Env::call(
+        env.agent
+            .request("GET", &format!("{}/p/generic/api/me", env.base))
+            .set("X-Usk-Handle", &handle2)
+            .set(
+                "X-Usk-Upstream",
+                &format!("http://127.0.0.1:{}", env.mock.port()),
+            )
+            .set("Authorization", "Bearer {{usk:ragged}}")
+            .call(),
+    );
+    assert_eq!(code, 400, "{body}");
+    assert_eq!(body["error"], "malformed_request");
+    assert!(
+        body["message"].as_str().unwrap().contains("authorization"),
+        "{body}"
+    );
+    // No handle at all on the generic route: the message says how to send one.
+    let (code, body, _) = Env::call(
+        env.agent
+            .request("GET", &format!("{}/p/generic/api/me", env.base))
+            .set(
+                "X-Usk-Upstream",
+                &format!("http://127.0.0.1:{}", env.mock.port()),
+            )
+            .set("Authorization", "Bearer {{usk:hosted}}")
+            .call(),
+    );
+    assert_eq!(code, 401, "{body}");
+    assert!(
+        body["message"].as_str().unwrap().contains("X-Usk-Handle"),
+        "{body}"
+    );
+    // A host the secret is not locked to: the refusal names the fix.
+    let (code, body, _) = Env::call(
+        env.agent
+            .request("GET", &format!("{}/p/generic/api/me", env.base))
+            .set("X-Usk-Handle", &handle)
+            .set("X-Usk-Upstream", "https://elsewhere.example")
+            .set("Authorization", "Bearer {{usk:hosted}}")
+            .call(),
+    );
+    assert_eq!(code, 403, "{body}");
+    assert_eq!(body["error"], "host_not_allowed");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap()
+            .contains("usk secret set hosted --upstream elsewhere.example"),
+        "{body}"
+    );
+    env.daemon.shutdown().await;
+}

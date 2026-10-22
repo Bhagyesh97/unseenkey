@@ -176,6 +176,14 @@ Note: For the checkout project, Sept–Dec 2026
 
 The UI always starts from a preset. A custom policy is validated and rendered back as plain English ("Can read everything, can create payments, cannot refund, max 120/min, expires 31 Dec") so an owner without technical background can confirm what they are granting.
 
+## Template mode (secrets without a preset)
+
+A secret with no provider, or any secret on the `generic` route, is placed by the caller: the handle travels in `X-Usk-Handle`, and `{{usk:<secret>}}` marks where the value goes, in the path, the query, a header or the body. The broker fills the placeholder in after the request passed the policy. Headers the broker normally strips because an SDK may have put a credential in them (`Authorization` first of all) are kept when they carry a placeholder, so `Authorization: Bearer {{usk:name}}` works. A stored value that cannot be a header value once filled in (a trailing newline, a control character) is refused with `malformed_request` naming the header rather than dropped.
+
+## User presets
+
+A provider the project does not ship can be added without a rebuild: `<vault dir>/presets/<id>.toml` in the same format as [`crates/core/presets/`](../crates/core/presets/) is loaded by the daemon at start and by the CLI on every run, beside the built-in presets; a file with a built-in id overrides it. Invalid files are skipped with a warning in the daemon log and on the CLI's stderr. `usk presets` marks them "(yours)".
+
 ## Egress guard and scrubber details
 
 - Build an Aho-Corasick automaton over all secret values on unlock and rebuild on change. Values shorter than 12 bytes are excluded (too many false positives) and flagged in the UI as "too short to guard".
@@ -227,7 +235,7 @@ Tools:
 |---|---|---|
 | `list_secrets` | `{filter?}` | `[ {name, type, provider, policy_summary, mcp_enabled} ]` — never values |
 | `call_api` | `{secret, method, path, headers?, body?, upstream?}` | `{status, headers(whitelist), body(scrubbed, ≤ 256 KiB, truncated flag)}` |
-| `request_access` | `{secret, reason, scope?}` | `{approval_id, status}` — asks the owner to grant or widen policy |
+| `request_access` | `{secret, reason, scope?, upstream?}` | `{approval_id, status}` — asks the owner to approve a gated path and/or allow a host the secret is not locked to; approval adds the host to the secret |
 | `explain_policy` | `{secret}` | Plain-English policy for this caller |
 | `store_secret` | `{name, value, provider?}` | `{ok}` — lets an agent move a key it found in a file into the vault; value is never echoed. Off by default |
 

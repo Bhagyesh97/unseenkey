@@ -81,14 +81,15 @@ pub fn tools(allow_store: bool) -> Vec<Value> {
         }),
         json!({
             "name": "request_access",
-            "description": "Ask the owner to approve a request that policy gates behind approval (for example POST /v1/refunds). Waits briefly for a decision. If the policy denies the path outright, the owner must change the policy; this tool will say so.",
+            "description": "Ask the owner to approve a request that policy gates behind approval (for example POST /v1/refunds), or to allow a host the secret is not yet locked to (pass upstream). Waits briefly for a decision. If the policy denies the path outright, the owner must change the policy; this tool will say so.",
             "inputSchema": {
                 "type": "object",
                 "required": ["secret", "reason"],
                 "properties": {
                     "secret": { "type": "string" },
                     "reason": { "type": "string" },
-                    "scope": { "type": "string", "description": "\"METHOD /path\" you want approved, e.g. \"POST /v1/refunds\"" }
+                    "scope": { "type": "string", "description": "\"METHOD /path\" you want approved, e.g. \"POST /v1/refunds\"" },
+                    "upstream": { "type": "string", "description": "a host the call was refused for (host_not_allowed): https://host; approval adds it to the secret's allowed hosts" }
                 }
             }
         }),
@@ -425,6 +426,33 @@ async fn request_access(s: &Arc<AppState>, caller: &str, args: &Value) -> Value 
             }
         }
     }
+    // A host the secret is not locked to: the approval covers adding it.
+    let mut new_host: Option<String> = None;
+    if let Some(spec) = args["upstream"]
+        .as_str()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        let host = match unseenkey_core::broker::Upstream::parse(spec) {
+            Ok(u) => u.host,
+            Err(e) => return tool_text(format!("upstream: {e}"), true),
+        };
+        let allowed = {
+            let v = s.vault.lock().await;
+            v.get(&handle.secret_id)
+                .map(|m| unseenkey_core::policy::eval::host_allowed(&m.upstreams, &host))
+                .unwrap_or(false)
+        };
+        if !allowed {
+            new_host = Some(host);
+        }
+    }
+    let scope_text = match (scope, &new_host) {
+        (Some(sc), Some(h)) => format!("{sc}, and allow the host {h}"),
+        (Some(sc), None) => sc.to_string(),
+        (None, Some(h)) => format!("allow the host {h}"),
+        (None, None) => "general access".to_string(),
+    };
     let pending = PendingApproval {
         id: Id::new_v7(now),
         kind: "access".into(),
@@ -433,9 +461,9 @@ async fn request_access(s: &Arc<AppState>, caller: &str, args: &Value) -> Value 
         secret: secret.clone(),
         caller: caller.to_string(),
         method: String::new(),
-        host: String::new(),
+        host: new_host.clone().unwrap_or_default(),
         path: String::new(),
-        scope: scope.unwrap_or("general access").to_string(),
+        scope: scope_text,
         remember_key: remember_key.clone(),
         created_at: now,
         expires_at: now + (timeout_s as i64) * 1000,
@@ -463,12 +491,23 @@ async fn request_access(s: &Arc<AppState>, caller: &str, args: &Value) -> Value 
     s.approval_remove(&approval_id).await;
     let (status, allowed) = match outcome {
         Ok(Ok((true, remember))) => {
+            let mut v = s.vault.lock().await;
             if remember {
                 if let Some(k) = &remember_key {
-                    let mut v = s.vault.lock().await;
                     if let Err(e) = v.remember_rule(&handle.handle_id, k) {
                         tracing::warn!(error = %e, "could not persist the remembered approval");
                     }
+                }
+            }
+            if let Some(h) = &new_host {
+                match v.update_meta(&handle.secret_id, |m| m.upstreams.push(h.clone())) {
+                    Ok(()) => {
+                        let _ = v.audit(kinds::SECRET_UPDATED, json!({
+                            "id": handle.secret_id.to_hex(), "value_changed": false,
+                            "upstream_added": h, "approval": approval_id.to_hex(), "caller": caller,
+                        }));
+                    }
+                    Err(e) => tracing::warn!(error = %e, "could not add the approved host"),
                 }
             }
             ("allowed", true)
@@ -487,7 +526,10 @@ async fn request_access(s: &Arc<AppState>, caller: &str, args: &Value) -> Value 
         &json!({
             "approval_id": approval_id.to_hex(), "status": status,
             "message": match status {
-                "allowed" => "approved; retry the call now".to_string(),
+                "allowed" => match &new_host {
+                    Some(h) => format!("approved, and {h} is now an allowed host for {secret}; retry the call now"),
+                    None => "approved; retry the call now".to_string(),
+                },
                 "denied" => "the owner denied this".to_string(),
                 _ => format!("no decision yet; the owner can run `usk approve {}`", approval_id.to_hex()),
             }

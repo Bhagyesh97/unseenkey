@@ -721,3 +721,86 @@ fn caps_canaries_and_resume_from_the_cli() {
     let j: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
     assert_eq!(j["policy"]["limits"]["requests_per_day"], 100);
 }
+
+#[test]
+fn provider_changes_and_user_presets_from_the_cli() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    let _stop = StopDaemon(&vault);
+    // A provider the project does not ship, added as a file before anything starts.
+    std::fs::create_dir_all(dir.path().join("presets")).unwrap();
+    std::fs::write(
+        dir.path().join("presets").join("acme.toml"),
+        "id = \"acme\"\ndisplay = \"Acme Cloud\"\nupstreams = [\"api.acme.test\"]\nauth = { kind = \"bearer\" }\nbase_path = \"\"\n[env]\nbase_url = \"ACME_BASE_URL\"\napi_key = \"ACME_TOKEN\"\n[[policies]]\nid = \"read-only\"\ndisplay = \"Read only\"\nrecommended = true\nallow = [\"GET /**\"]\n",
+    )
+    .unwrap();
+    assert!(usk(&vault, &["init", "--profile", "light"], PW)
+        .status
+        .success());
+    let o = usk(&vault, &["presets"], "");
+    assert!(o.status.success(), "{}", err(&o));
+    let list = out(&o);
+    assert!(list.contains("acme") && list.contains("(yours)"), "{list}");
+    assert!(list.contains("hostinger"), "{list}");
+    // A token with no recognisable shape, with a URL for the host, and trailing spaces.
+    let o = usk(
+        &vault,
+        &[
+            "add",
+            "deploy-key",
+            "--stdin",
+            "--upstream",
+            "https://developers.hostinger.com/api/",
+        ],
+        &format!("{PW}abcdefghijklmnopqrstuvwxyz0123456789ABCD   "),
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let o = usk(&vault, &["--json", "show", "deploy-key"], "");
+    let j: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
+    assert_eq!(
+        j["upstreams"],
+        serde_json::json!(["developers.hostinger.com"])
+    );
+    assert!(j["provider"].is_null());
+    // Give it a provider after the fact; the preset's hosts come along.
+    let o = usk(
+        &vault,
+        &["secret", "set", "deploy-key", "--provider", "hostinger"],
+        "",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let o = usk(&vault, &["--json", "show", "deploy-key"], "");
+    let j: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
+    assert_eq!(j["provider"], "hostinger");
+    assert_eq!(
+        j["upstreams"],
+        serde_json::json!(["developers.hostinger.com"])
+    );
+    // And the user preset works end to end: a handle with its policy and env.
+    let o = usk(
+        &vault,
+        &["secret", "set", "deploy-key", "--provider", "acme"],
+        "",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let o = usk(
+        &vault,
+        &[
+            "env",
+            "deploy-key",
+            "--policy",
+            "read-only",
+            "--shell",
+            "dotenv",
+        ],
+        "",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let env_text = out(&o);
+    assert!(
+        env_text.contains("ACME_BASE_URL=http://127.0.0.1:"),
+        "{env_text}"
+    );
+    assert!(env_text.contains("/p/acme"), "{env_text}");
+    assert!(env_text.contains("ACME_TOKEN=usk_h_"), "{env_text}");
+}

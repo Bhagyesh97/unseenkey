@@ -441,6 +441,7 @@ pub async fn create_secret(
     } else {
         req.upstreams.clone()
     };
+    upstreams = normalize_upstreams(&upstreams)?;
     let mut fields: BTreeMap<String, SecretBytes> = req
         .fields
         .iter()
@@ -596,6 +597,39 @@ pub async fn get_secret(
     Ok(Json(v.get(&id)?.clone()))
 }
 
+/// Hosts as the owner typed them (`https://api.example.com/v1/`, `API.EXAMPLE.COM`,
+/// `*.example.com`) become what the host lock compares: a lower-case host, or
+/// a wildcard pattern left as is.
+fn normalize_upstreams(list: &[String]) -> Result<Vec<String>, ApiError> {
+    let mut out: Vec<String> = Vec::new();
+    for raw in list {
+        let s = raw.trim();
+        if s.is_empty() {
+            continue;
+        }
+        let host = if s.contains('*') {
+            s.trim_start_matches("https://")
+                .trim_start_matches("http://")
+                .trim_end_matches('/')
+                .to_ascii_lowercase()
+        } else {
+            unseenkey_core::broker::Upstream::parse(s)
+                .map_err(|e| {
+                    ApiError::new(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_upstream",
+                        format!("{raw:?}: {e}; give a host such as api.example.com"),
+                    )
+                })?
+                .host
+        };
+        if !out.contains(&host) {
+            out.push(host);
+        }
+    }
+    Ok(out)
+}
+
 /// `PATCH /v1/secrets/{ref}` body. Every field optional.
 #[derive(Deserialize, Default)]
 pub struct PatchSecret {
@@ -650,6 +684,24 @@ pub async fn patch_secret(
         || p.provider.is_some()
         || p.allow_injection.is_some()
         || p.no_scrub.is_some();
+    let mut upstreams = match &p.upstreams {
+        Some(u) => Some(normalize_upstreams(u)?),
+        None => None,
+    };
+    // A new provider must exist, and brings its hosts along unless the owner
+    // named hosts in the same call.
+    if let Some(Some(pid)) = &p.provider {
+        let preset = presets::get(pid).ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "unknown_provider",
+                format!("no preset {pid:?}; `usk presets` lists them"),
+            )
+        })?;
+        if upstreams.is_none() && !preset.upstreams.is_empty() {
+            upstreams = Some(preset.upstreams.clone());
+        }
+    }
     if has_meta {
         v.update_meta(&id, |m| {
             if let Some(n) = p.name.clone() {
@@ -658,7 +710,7 @@ pub async fn patch_secret(
             if let Some(t) = p.tags.clone() {
                 m.tags = t;
             }
-            if let Some(u) = p.upstreams.clone() {
+            if let Some(u) = upstreams.clone() {
                 m.upstreams = u;
             }
             if let Some(n) = p.notes.clone() {

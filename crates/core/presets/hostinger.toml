@@ -1,0 +1,32 @@
+id = "hostinger"
+display = "Hostinger"
+upstreams = ["developers.hostinger.com"]
+auth = { kind = "bearer" }
+docs = "https://developers.hostinger.com/"
+base_path = ""
+
+[env]
+api_key = "HOSTINGER_API_TOKEN"
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+recommended = true
+allow = ["GET /**"]
+
+[[policies]]
+id = "deploy"
+display = "Read, start builds, restart apps and set environment variables; no deletes, DNS, domains or billing"
+recommended = true
+allow = [
+  "GET /**",
+  "POST /api/hosting/*/accounts/*/websites/*/nodejs/builds",
+  "POST /api/hosting/*/accounts/*/websites/*/nodejs/server/restart",
+  "PUT /api/hosting/*/accounts/*/websites/*/nodejs/builds/settings/env",
+]
+deny = ["DELETE /**", "* /api/dns/**", "* /api/domains/**", "* /api/billing/**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

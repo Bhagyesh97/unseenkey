@@ -120,8 +120,8 @@ Next is **delegation**: grant a developer or agency the use of a key with a poli
 ## Building and contributing
 
 ```sh
-cargo test --workspace            # core, daemon, CLI (163 tests)
-cargo run -p usk -- --help
+cargo test --workspace            # core, daemon, CLI
+cargo install --path crates/usk   # puts `usk` and `uskd` on your PATH from this checkout
 cd apps/desktop && npm install && npm run tauri dev
 ```
 

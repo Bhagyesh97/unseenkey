@@ -39,7 +39,7 @@
   <text x="1020" y="175" text-anchor="middle" fill="#9198a1">sees a normal request</text>
   <text x="1020" y="197" text-anchor="middle" fill="#9198a1">with the real key</text>
   <text x="1020" y="245" text-anchor="middle" fill="#9198a1" font-size="13">Anthropic · OpenAI · Stripe · AWS · GitHub</text>
-  <text x="1020" y="266" text-anchor="middle" fill="#9198a1" font-size="13">Google · Slack · 18 presets + any host</text>
+  <text x="1020" y="266" text-anchor="middle" fill="#9198a1" font-size="13">Google · Slack · 19 presets + any host</text>
 
   <!-- arrows: request -->
   <line x1="332" y1="150" x2="416" y2="150" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow-accent)"/>

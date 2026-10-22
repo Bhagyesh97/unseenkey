@@ -22,6 +22,15 @@ should start with a discussion.
 - Never log, print or include in an error message anything that could be a
   secret. Error text is tested for this.
 
+## Working on Windows
+
+A running daemon or an MCP bridge holds `target/debug/usk.exe` open, and
+`cargo build` then fails with "Access is denied". Run `usk daemon stop` (and
+close any MCP client that spawned `usk mcp`) before rebuilding, or build into
+another directory with `--target-dir target-alt`. The desktop app re-executes
+its own binary as the daemon, so stopping the daemon from the app's tray also
+frees it.
+
 ## Decisions
 
 Design decisions are recorded in `docs/02-brainstorm-and-decisions.md` as
