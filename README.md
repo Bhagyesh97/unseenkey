@@ -32,7 +32,13 @@ usk run --with DATABASE_URL=prod-db -- ./app   # for things that cannot be proxi
 
 ## Install
 
-Pre-built binaries and desktop installers are on the [Releases](https://github.com/Bhagyesh97/unseenkey/releases) page: `usk-<version>-<target>.{zip,tar.gz}` for the CLI (Windows x64, macOS arm64/x64, Linux x64/arm64), plus NSIS/MSI, DMG and deb/rpm/AppImage for the desktop app. Every archive has a Sigstore signature, every installer a minisign signature, and each release ships an SBOM.
+```
+scoop bucket add unseenkey https://github.com/Bhagyesh97/scoop-unseenkey && scoop install usk   # Windows
+brew install Bhagyesh97/unseenkey/usk                                                          # macOS, Linux
+winget install Unseenkey.Unseenkey                                                             # desktop app (Windows; listing under review)
+```
+
+Pre-built binaries and desktop installers are on the [Releases](https://github.com/Bhagyesh97/unseenkey/releases) page: `usk-<version>-<target>.{zip,tar.gz}` for the CLI (Windows x64, macOS arm64/x64, Linux x64/arm64), plus NSIS/MSI, DMG and deb/rpm/AppImage for the desktop app. Every archive has a Sigstore signature, every installer a minisign signature, and each release ships an SBOM. The installers are not yet code-signed, so Windows SmartScreen and macOS Gatekeeper warn on first launch.
 
 From source, with stable Rust 1.85 or newer:
 
