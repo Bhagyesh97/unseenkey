@@ -419,6 +419,17 @@ impl<S: Storage, C: Clock> Vault<S, C> {
     /// the record and once here: an over-count of at most the concurrency at
     /// that moment, on the safe side of a cap.
     pub(super) fn reconcile_handle_counters(&mut self) -> Result<(), VaultError> {
+        // A record written before `counted_seq` existed reads as 0 while
+        // already holding every flushed use; adding the log on top would
+        // double it. Pin such records to the log's end instead: the next
+        // write persists the position, and at most the unflushed uses of the
+        // last session before the upgrade are forgone, as they were before.
+        let last_seq = self.storage.audit_last()?.map(|r| r.seq).unwrap_or(0);
+        for h in self.handles.values_mut() {
+            if h.counted_seq == 0 && h.use_count > 0 {
+                h.counted_seq = last_seq;
+            }
+        }
         let Some(start) = self.handles.values().map(|h| h.counted_seq).min() else {
             return Ok(());
         };
@@ -635,5 +646,70 @@ impl<S: Storage, C: Clock> Vault<S, C> {
     /// Number of audit rows.
     pub fn audit_count(&self) -> Result<u64, VaultError> {
         Ok(self.storage.audit_count()?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn records_from_before_counted_seq_are_pinned_not_doubled() {
+        use crate::crypto::kdf::Argon2Profile;
+        use crate::storage::memory::MemoryStorage;
+        use crate::time::FixedClock;
+        let (mut v, _) = Vault::create(
+            MemoryStorage::new(),
+            FixedClock(1_000),
+            &SecretBytes::from("records-pinned-not-doubled"),
+            Argon2Profile::MINIMUM,
+        )
+        .unwrap();
+        let sid = v
+            .add(crate::vault::NewSecret {
+                name: "s".into(),
+                kind: crate::vault::SecretKind::ApiKey,
+                value: SecretBytes::from("tok_abcdefghijklmnop"),
+                fields: BTreeMap::new(),
+                provider: None,
+                upstreams: vec!["api.example.com".into()],
+                tags: vec![],
+                notes: None,
+            })
+            .unwrap();
+        let (rec, _) = v
+            .create_handle(&sid, "h", Policy::allow_all(), None)
+            .unwrap();
+        let hid = rec.handle_id;
+        // Five uses, flushed the old way: a record whose use_count is right
+        // but which carries no log position (counted_seq = 0), as 0.1.1 wrote.
+        for _ in 0..5 {
+            v.touch_handle(&hid, 2_000).unwrap();
+            v.audit(
+                audit::kinds::USE,
+                serde_json::json!({ "handle": hid.to_hex() }),
+            )
+            .unwrap();
+        }
+        let vk = v.vk().unwrap().clone();
+        let mut legacy = v.handles.get(&hid).unwrap().clone();
+        legacy.counted_seq = 0;
+        let version = v.storage.latest_record(&hid).unwrap().unwrap().version + 1;
+        let rec = records::encrypt_json(
+            &vk,
+            &v.header.vault_id,
+            hid,
+            RecordKind::Handle,
+            version,
+            &legacy,
+            3_000,
+        )
+        .unwrap();
+        v.storage.insert_record(&rec).unwrap();
+        v.handles.insert(hid, legacy);
+        v.reconcile_handle_counters().unwrap();
+        let h = v.handles.get(&hid).unwrap();
+        assert_eq!(h.use_count, 5, "not doubled");
+        assert!(h.counted_seq > 0, "pinned to the log's end");
     }
 }
