@@ -379,6 +379,8 @@ fn event_pump(app: AppHandle, paths: VaultPaths) {
 /// Build and run the app.
 pub fn run() {
     let paths = paths().expect("vault location");
+    // Providers the owner added as `<vault dir>/presets/<id>.toml`.
+    let _ = unseenkey_core::presets::load_user_dir(&paths.presets);
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())

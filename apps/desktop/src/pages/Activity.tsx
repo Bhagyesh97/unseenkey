@@ -74,14 +74,20 @@ export function Activity() {
         </div>
       )}
       {err && <div className="err">{err}</div>}
-      <table className="table">
+      {events.length === 0 && !err && (
+        <div className="empty">
+          <b>No events{kind ? ` of kind "${kind}"` : " yet"}</b>
+          <p>Every call through the broker, every refusal and every change lands here, hash-chained.</p>
+        </div>
+      )}
+      <table className="table" style={events.length === 0 ? { display: "none" } : undefined}>
         <thead><tr><th>#</th><th>When</th><th>Kind</th><th>Details</th></tr></thead>
         <tbody>
           {events.map((e) => (
             <tr key={e.seq} className={e.kind === "deny" || e.kind === "egress_blocked" || e.kind === "anomaly" || e.kind === "canary_tripped" ? "bad" : ""}>
-              <td>{e.seq}</td>
-              <td>{fmtTime(e.ts)}</td>
-              <td><span className="chip">{e.kind}</span></td>
+              <td className="mono">{e.seq}</td>
+              <td className="mono">{fmtTime(e.ts)}</td>
+              <td><span className={`chip kind-${e.kind}`}>{e.kind.replace(/_/g, " ")}</span></td>
               <td>{describe(e)}</td>
             </tr>
           ))}

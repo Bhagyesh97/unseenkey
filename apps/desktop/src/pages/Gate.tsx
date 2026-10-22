@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type Status } from "../api";
+import icon from "../assets/icon.png";
 
 /// Onboarding (create vault + recovery words) or unlock.
 export function Gate({ status, onDone }: { status: Status; onDone: () => Promise<void> }) {
@@ -74,7 +75,8 @@ export function Gate({ status, onDone }: { status: Status; onDone: () => Promise
 
   if (words) {
     return (
-      <div className="gate">
+      <div className="gate wide">
+        <div className="gate-brand"><img src={icon} alt="" /><div><b>Unseenkey</b><span>use keys, never see them</span></div></div>
         <h1>Your recovery phrase</h1>
         <p>
           Write these 24 words down and keep them offline. They are shown <b>once</b> and never stored. If you forget
@@ -99,6 +101,7 @@ export function Gate({ status, onDone }: { status: Status; onDone: () => Promise
   if (!status.vault_exists) {
     return (
       <div className="gate">
+        <div className="gate-brand"><img src={icon} alt="" /><div><b>Unseenkey</b><span>use keys, never see them</span></div></div>
         <h1>Create your vault</h1>
         <p>
           Secrets are encrypted on this computer with a key derived from your password. Nothing leaves your machine.
@@ -118,6 +121,7 @@ export function Gate({ status, onDone }: { status: Status; onDone: () => Promise
 
   return (
     <div className="gate">
+      <div className="gate-brand"><img src={icon} alt="" /><div><b>Unseenkey</b><span>use keys, never see them</span></div></div>
       <h1>Unlock</h1>
       <p>Your vault is locked. Tools and agents cannot use your keys until you unlock it.</p>
       <input

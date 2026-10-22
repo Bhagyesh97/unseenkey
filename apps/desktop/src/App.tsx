@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactElement } from "react";
 import { api, onDaemonEvent, type Approval, type DaemonEvent, type Status } from "./api";
 import { Gate } from "./pages/Gate";
 import { Secrets } from "./pages/Secrets";
@@ -9,15 +9,27 @@ import { Agents } from "./pages/Agents";
 import { Settings } from "./pages/Settings";
 import { checkForUpdate, installUpdate, type UpdateInfo } from "./updates";
 
+import icon from "./assets/icon.png";
+
 type Tab = "secrets" | "handles" | "approvals" | "activity" | "agents" | "settings";
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: "secrets", label: "Secrets" },
-  { id: "handles", label: "Handles" },
-  { id: "approvals", label: "Approvals" },
-  { id: "activity", label: "Activity" },
-  { id: "agents", label: "Agents" },
-  { id: "settings", label: "Settings" },
+const I = {
+  key: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m11 12 9-9M15 6l3 3M18 3l3 3"/></svg>,
+  handle: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="7" width="18" height="10" rx="3"/><circle cx="8" cy="12" r="1.6"/><path d="M12 12h6"/></svg>,
+  approve: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="m9 12 2 2 4-4"/></svg>,
+  activity: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>,
+  agents: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="8" width="16" height="12" rx="3"/><circle cx="9" cy="14" r="1.5"/><circle cx="15" cy="14" r="1.5"/><path d="M12 8V4M8 4h8"/></svg>,
+  settings: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>,
+  lock: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>,
+};
+
+const TABS: { id: Tab; label: string; icon: ReactElement }[] = [
+  { id: "secrets", label: "Secrets", icon: I.key },
+  { id: "handles", label: "Handles", icon: I.handle },
+  { id: "approvals", label: "Approvals", icon: I.approve },
+  { id: "activity", label: "Activity", icon: I.activity },
+  { id: "agents", label: "Agents", icon: I.agents },
+  { id: "settings", label: "Settings", icon: I.settings },
 ];
 
 export function App() {
@@ -106,7 +118,7 @@ export function App() {
     <div className="app">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">U</div>
+          <img src={icon} alt="" />
           <div>
             <div className="brand-name">Unseenkey</div>
             <div className="brand-sub">use keys, never see them</div>
@@ -120,17 +132,18 @@ export function App() {
               onClick={() => setTab(t.id)}
               disabled={!unlocked}
             >
-              {t.label}
+              {t.icon}
+              <span className="grow">{t.label}</span>
               {t.id === "approvals" && approvals.length > 0 && <span className="badge">{approvals.length}</span>}
             </button>
           ))}
         </nav>
         <div className="sidebar-foot">
           <div className={`dot ${unlocked ? "ok" : status?.daemon ? "warn" : "off"}`} />
-          {status?.daemon ? (unlocked ? "unlocked" : "locked") : "daemon off"}
+          <span className="grow" style={{ flex: 1 }}>{status?.daemon ? (unlocked ? "Vault unlocked" : "Vault locked") : "Daemon off"}</span>
           {unlocked && (
-            <button className="link" onClick={() => void lockNow()}>
-              lock now
+            <button className="small" title="Lock the vault now" onClick={() => void lockNow()}>
+              Lock
             </button>
           )}
         </div>

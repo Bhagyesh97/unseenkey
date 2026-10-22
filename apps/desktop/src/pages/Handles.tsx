@@ -62,6 +62,14 @@ export function Handles() {
         </header>
         <p className="muted small">A handle is what you give a tool instead of the key. It only works through this computer, for one host, within its policy.</p>
         {err && <div className="err">{err}</div>}
+        {handles.length === 0 && (
+          <div className="empty">
+            <div className="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="7" width="18" height="10" rx="3"/><circle cx="8" cy="12" r="1.6"/><path d="M12 12h6"/></svg></div>
+            <b>No handles yet</b>
+            <p>A handle is what a tool gets instead of the key. Create one with a policy and copy the environment variables into the tool.</p>
+            <button className="primary" onClick={() => setCreating(true)}>Create a handle</button>
+          </div>
+        )}
         <ul className="rows">
           {handles.map((h) => (
             <li key={h.id} className="row static">

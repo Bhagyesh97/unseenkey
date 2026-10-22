@@ -26,26 +26,31 @@ export function Approvals({ approvals, onChange }: { approvals: Approval[]; onCh
       </header>
       {err && <div className="err">{err}</div>}
       {approvals.length === 0 ? (
-        <div className="muted">
-          Nothing is waiting. Requests appear here when a policy says a path needs your approval, or when an agent asks for access.
+        <div className="empty">
+          <div className="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="m9 12 2 2 4-4"/></svg></div>
+          <b>Nothing is waiting</b>
+          <p>Requests appear here when a policy says a path needs your approval, or when an agent asks for access or a new host. You also get a system notification.</p>
         </div>
       ) : (
         <ul className="rows">
           {approvals.map((a) => {
             const left = Math.max(0, Math.round((a.expires_at - now) / 1000));
+            const total = Math.max(1, Math.round((a.expires_at - a.created_at) / 1000));
             return (
               <li key={a.id} className="row static approval">
                 <div className="row-main">
-                  <span className="name">{a.caller}</span> wants to use <span className="chip">{a.secret}</span> via "{a.label}"
+                  <span className="chip info">{a.kind === "access" ? "access request" : "needs approval"}</span>
+                  <span className="who"><b>{a.caller}</b> · {a.secret} via "{a.label}"</span>
                 </div>
                 <div className="what">
                   {a.kind === "access" ? (
-                    <>Access request: <b>{a.scope}</b></>
+                    <>Asks for <b>{a.scope}</b></>
                   ) : (
                     <><b>{a.method} {a.host}{a.path}</b> <span className="muted">({a.scope})</span></>
                   )}
                 </div>
-                <div className="row-sub muted">{left}s left before it is refused automatically</div>
+                <div className="timer"><i style={{ width: `${Math.min(100, (100 * left) / total)}%` }} /></div>
+                <div className="row-sub muted">Refused automatically in {left}s</div>
                 <div className="actions">
                   <button className="primary" onClick={() => void decide(a, true, false)}>Allow once</button>
                   {a.remember_key && <button onClick={() => void decide(a, true, true)}>Allow always for this rule</button>}

@@ -68,6 +68,7 @@ export function Settings({ status, onLock }: { status: Status; onLock: () => Pro
   return (
     <div className="single">
       <header className="pane-head"><h2>Settings</h2></header>
+      <section className="section">
       <dl className="kv">
         <dt>Vault file</dt><dd><code>{status.vault_path}</code></dd>
         <dt>Daemon</dt><dd>{status.daemon ? `running (v${status.daemon.version}, up ${Math.round(status.daemon.uptime_s / 60)} min, ${status.daemon.locked ? "locked" : "unlocked"})` : "not running"}</dd>
@@ -79,6 +80,8 @@ export function Settings({ status, onLock }: { status: Status; onLock: () => Pro
           <button onClick={() => void onLock()}>Lock vault now</button>
         </div>
       )}
+      </section>
+      <section className="section">
       <h3>Windows Hello</h3>
       {!device || !device.available ? (
         <p className="muted small">Not available on this computer. Set up Windows Hello (PIN, face or fingerprint) in Windows settings first.</p>
@@ -100,6 +103,8 @@ export function Settings({ status, onLock }: { status: Status; onLock: () => Pro
       {device && !device.available && status.daemon?.locked && <p className="muted small">Unlock the vault to change this.</p>}
       {deviceMsg && <pre className="snippet">{deviceMsg}</pre>}
 
+      </section>
+      <section className="section">
       <h3>Updates</h3>
       <p className="muted small">Updates are signed; a bundle whose signature does not match the built-in key is refused.</p>
       <div className="actions">
@@ -113,6 +118,8 @@ export function Settings({ status, onLock }: { status: Status; onLock: () => Pro
       {update && typeof update === "object" && update.notes && <pre className="snippet">{update.notes}</pre>}
       {updateErr && <div className="err">{updateErr}</div>}
 
+      </section>
+      <section className="section">
       <h3>.env guard</h3>
       <p className="muted small">Find real keys in a project's .env file, move them into the vault and replace them with handles.</p>
       <div className="row-main">
@@ -132,6 +139,7 @@ export function Settings({ status, onLock }: { status: Status; onLock: () => Pro
         </table>
       )}
       {msg && <pre className="snippet">{msg}</pre>}
+      </section>
     </div>
   );
 }
