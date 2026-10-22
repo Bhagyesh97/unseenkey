@@ -1,0 +1,6 @@
+# Cloudflare Pages project for unseenkey.com (direct upload: `wrangler pages deploy`).
+# The KV binding for the waitlist is added to the project through the API; it is
+# listed here so local previews (`wrangler pages dev public`) have it too.
+name = "unseenkey"
+compatibility_date = "2026-10-01"
+pages_build_output_dir = "public"
