@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
 import { api, ago, RESPONSES, type AnomalyResponse, type HandleCreated, type HandleView, type Preset, type SecretMeta } from "../api";
 
+// A daemon older than the incidents feature sends no status; read it as normal.
+const stateOf = (h: HandleView) => h.status?.state ?? "normal";
+
 function standing(h: HandleView): { text: string; cls: string } | null {
   if (h.canary) return { text: "canary", cls: "warn" };
-  switch (h.status.state) {
+  const st = h.status;
+  switch (stateOf(h)) {
     case "throttled":
-      return { text: `throttled until ${new Date(h.status.until).toLocaleTimeString()}`, cls: "warn" };
+      return { text: `throttled until ${st && "until" in st ? new Date(st.until).toLocaleTimeString() : "later"}`, cls: "warn" };
     case "approval_required":
       return { text: "asks before every request", cls: "warn" };
     case "paused":
@@ -72,8 +76,8 @@ export function Handles() {
               {h.last_anomaly && !h.revoked_at && (
                 <div className="err">
                   {h.last_anomaly.kind === "canary" ? "Canary tripped" : "Unusual activity"} {ago(h.last_anomaly.at)}: {h.last_anomaly.detail}.
-                  {h.status.state !== "normal" && <> <button className="small" onClick={() => void resume(h)}>Back to normal</button></>}
-                  {h.status.state === "normal" && <> <button className="link" onClick={() => void resume(h)}>dismiss</button></>}
+                  {stateOf(h) !== "normal" && <> <button className="small" onClick={() => void resume(h)}>Back to normal</button></>}
+                  {stateOf(h) === "normal" && <> <button className="link" onClick={() => void resume(h)}>dismiss</button></>}
                 </div>
               )}
               {h.canary ? (
@@ -84,7 +88,7 @@ export function Handles() {
               {!h.revoked_at && (
                 <div className="row-main">
                   <span className="muted small">{h.canary ? "When it is used:" : "On unusual activity:"}</span>
-                  <select value={h.on_anomaly} onChange={(e) => void setResponse(h, e.target.value as AnomalyResponse)}>
+                  <select value={h.on_anomaly ?? "throttle"} onChange={(e) => void setResponse(h, e.target.value as AnomalyResponse)}>
                     {RESPONSES.map((r) => <option key={r.id} value={r.id} title={r.hint}>{r.label}</option>)}
                   </select>
                 </div>

@@ -49,10 +49,11 @@ export interface HandleView {
   last_used_at: number | null;
   active: boolean;
   remembered: string[];
-  canary: boolean;
-  on_anomaly: AnomalyResponse;
-  status: { state: "normal" } | { state: "throttled"; until: number } | { state: "approval_required" } | { state: "paused" };
-  last_anomaly: { kind: string; detail: string; at: number; response: AnomalyResponse } | null;
+  // The three fields below are absent on daemons older than 0.1.0.
+  canary?: boolean;
+  on_anomaly?: AnomalyResponse;
+  status?: { state: "normal" } | { state: "throttled"; until: number } | { state: "approval_required" } | { state: "paused" };
+  last_anomaly?: { kind: string; detail: string; at: number; response: AnomalyResponse } | null;
 }
 
 export type AnomalyResponse = "alert" | "throttle" | "approve" | "pause" | "lock";
