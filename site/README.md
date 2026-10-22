@@ -1,6 +1,13 @@
 # unseenkey.com
 
-Static landing page, served by Cloudflare Pages from this directory. No build step.
+Static landing page, served by Cloudflare Pages from this directory. Cloudflare runs no build: the two scripts are bundled locally and committed.
+
+```
+cd site && npm install && npm run build      # src/app.js + anime.js → public/app.js; src/hero3d.js + three → public/hero3d.js
+npm run serve                                # preview at http://127.0.0.1:8766/
+```
+
+`public/hero-still.png` (the hero for phones and reduced-motion users) is a capture of the 3D key at rest; `public/presets.json` is generated from `usk --json presets` and `usk --json policy explain` of the shipped CLI. The page uses no third-party hosts at all: scripts are bundled, fonts are the system's, and there is no analytics.
 
 Pages project settings:
 

@@ -34,3 +34,6 @@ Thumbs.db
 
 # Internal notes that must never be published (competitive research with named individuals).
 /private/
+
+# site build dependencies (outputs in site/public are committed)
+/site/node_modules/

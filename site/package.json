@@ -1,0 +1,14 @@
+{
+  "name": "unseenkey-site",
+  "private": true,
+  "description": "unseenkey.com: static page; `npm run build` bundles the scripts into public/ (committed).",
+  "scripts": {
+    "build": "esbuild src/app.js --bundle --minify --format=esm --target=es2020 --external:/hero3d.js --outfile=public/app.js && esbuild src/hero3d.js --bundle --minify --format=esm --target=es2020 --outfile=public/hero3d.js",
+    "serve": "python -m http.server 8766 --bind 127.0.0.1 --directory public"
+  },
+  "devDependencies": {
+    "animejs": "^4.5.0",
+    "esbuild": "^0.25.0",
+    "three": "^0.186.1"
+  }
+}
