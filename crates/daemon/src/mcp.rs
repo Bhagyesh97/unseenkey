@@ -22,7 +22,7 @@ use unseenkey_core::ids::Id;
 use unseenkey_core::policy::{explain, Policy, Rule};
 use unseenkey_core::presets;
 use unseenkey_core::providers;
-use unseenkey_core::vault::{NewSecret, SecretKind};
+use unseenkey_core::vault::{NewSecret, SecretKind, SecretMeta};
 
 /// Protocol version we speak.
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -151,15 +151,17 @@ fn find_handle(
         .cloned()
 }
 
-/// Find or create the caller's handle for a secret.
+/// Find or create the caller's handle for a secret. Returns the secret's
+/// metadata with it, so callers never look the secret up a second time and
+/// a handle whose secret is gone cannot read as "a secret without a preset".
 fn ensure_handle(
     v: &mut crate::state::DaemonVault,
     caller: &str,
     secret_name: &str,
-) -> Result<(HandleRecord, String), ApiError> {
+) -> Result<(HandleRecord, SecretMeta), ApiError> {
     let meta = v.get_by_name(secret_name)?.clone();
     if let Some(h) = find_handle(v, caller, &meta.secret_id) {
-        return Ok((h, meta.name));
+        return Ok((h, meta));
     }
     let mut policy = default_policy(meta.provider.as_deref());
     policy.callers = vec![caller.to_string()];
@@ -178,7 +180,17 @@ fn ensure_handle(
         kinds::HANDLE_CREATED,
         json!({ "id": record.handle_id.to_hex(), "label": record.label, "secret": meta.name, "caller": caller, "auto": true }),
     );
-    Ok((record, meta.name))
+    Ok((record, meta))
+}
+
+/// A tool error for a secret name the vault does not have.
+fn unknown_secret(name: &str) -> Value {
+    tool_text(
+        format!(
+            "no secret named {name:?} in the vault; call list_secrets for the names, or ask the owner to run `usk add {name}`"
+        ),
+        true,
+    )
 }
 
 async fn list_secrets(s: &Arc<AppState>, caller: &str, args: &Value) -> Value {
@@ -253,10 +265,8 @@ async fn call_api(s: &Arc<AppState>, caller: &str, args: &Value) -> Value {
             );
         }
         match ensure_handle(&mut v, caller, name) {
-            Ok((h, _)) => {
-                let provider = v.get(&h.secret_id).ok().and_then(|m| m.provider.clone());
-                (h, provider)
-            }
+            Ok((h, meta)) => (h, meta.provider),
+            Err(e) if e.code == "not_found" => return unknown_secret(name),
             Err(e) => return tool_text(e.message, true),
         }
     };
@@ -385,10 +395,11 @@ async fn request_access(s: &Arc<AppState>, caller: &str, args: &Value) -> Value 
             );
         }
         match ensure_handle(&mut v, caller, name) {
-            Ok((h, n)) => {
+            Ok((h, meta)) => {
                 let t = h.policy.approval.timeout_seconds;
-                (h, n, t)
+                (h, meta.name, t)
             }
+            Err(e) if e.code == "not_found" => return unknown_secret(name),
             Err(e) => return tool_text(e.message, true),
         }
     };

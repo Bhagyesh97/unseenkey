@@ -359,10 +359,13 @@ async fn list_explain_and_call_api_never_expose_values() {
         json!({ "secret": "nope", "method": "GET", "path": "/" }),
     );
     assert_eq!(r["isError"], true);
-    assert!(r["content"][0]["text"]
-        .as_str()
-        .unwrap()
-        .contains("not found"));
+    assert!(
+        r["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("no secret named \"nope\""),
+        "{r}"
+    );
     // store_secret is disabled.
     let r = env.tool(
         "store_secret",

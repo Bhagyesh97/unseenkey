@@ -454,3 +454,33 @@ async fn upstreams_are_normalised_and_a_provider_change_brings_its_hosts() {
     assert_eq!(m["error"], "unknown_provider");
     r.shutdown().await;
 }
+
+/// A second daemon that would register itself for a vault another daemon
+/// already serves is refused and told who holds it; a daemon that keeps no
+/// runtime files (tests, embedding) is unaffected; a clean stop frees the vault.
+#[tokio::test(flavor = "multi_thread")]
+async fn one_daemon_per_vault() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = start(dir.path(), true).await;
+    let opts = |write_runtime_files: bool| ServeOptions {
+        vault_path: dir.path().join("vault.db"),
+        listen: "127.0.0.1:0".into(),
+        idle_lock_minutes: 0,
+        write_runtime_files,
+        upstream_overrides: vec![],
+        mcp_allow_store: false,
+        lock_on_sleep: false,
+        lock_on_session_lock: false,
+    };
+    match serve(opts(true)).await {
+        Err(unseenkey_daemon::ServeError::AlreadyRunning { addr, pid }) => {
+            assert_eq!(addr, r.addr.to_string());
+            assert_eq!(pid, std::process::id().to_string());
+        }
+        Err(e) => panic!("wrong refusal: {e}"),
+        Ok(_) => panic!("a second daemon started on the same vault"),
+    }
+    serve(opts(false)).await.unwrap().shutdown().await;
+    r.shutdown().await;
+    serve(opts(true)).await.unwrap().shutdown().await;
+}

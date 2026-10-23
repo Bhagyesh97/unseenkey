@@ -47,6 +47,28 @@ pub enum ServeError {
     /// Runtime file problems.
     #[error("cannot write {0}: {1}")]
     File(PathBuf, std::io::Error),
+    /// Another daemon already serves this vault. Two would each hold their
+    /// own copy of the index and drift apart.
+    #[error("another daemon already serves this vault at {addr} (pid {pid}); stop it with `usk daemon stop`")]
+    AlreadyRunning {
+        /// Where it listens.
+        addr: String,
+        /// Its pid file, or `?`.
+        pid: String,
+    },
+}
+
+/// The address in the vault's runtime files if a daemon answers there.
+/// Stale files from a crash answer nothing and are simply overwritten.
+async fn live_daemon(http: &reqwest::Client, p: &VaultPaths) -> Option<String> {
+    let addr = std::fs::read_to_string(&p.addr).ok()?.trim().to_string();
+    let r = http
+        .get(format!("http://{addr}/healthz"))
+        .timeout(Duration::from_secs(2))
+        .send()
+        .await
+        .ok()?;
+    (r.status() == reqwest::StatusCode::OK).then_some(addr)
 }
 
 /// How to start.
@@ -161,6 +183,18 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
         .timeout(Duration::from_secs(600))
         .build()
         .map_err(|e| ServeError::Bind("http client".into(), std::io::Error::other(e)))?;
+
+    // One daemon per vault. Only daemons that register themselves compete;
+    // embedded ones that keep no runtime files (tests) stay out of it.
+    if opts.write_runtime_files {
+        let p = VaultPaths::from_vault_file(&opts.vault_path);
+        if let Some(addr) = live_daemon(&http, &p).await {
+            let pid = std::fs::read_to_string(&p.pid)
+                .map(|s| s.trim().to_string())
+                .unwrap_or_else(|_| "?".into());
+            return Err(ServeError::AlreadyRunning { addr, pid });
+        }
+    }
 
     let listener = TcpListener::bind(requested)
         .await

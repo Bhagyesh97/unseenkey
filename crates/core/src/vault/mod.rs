@@ -582,12 +582,16 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         Ok(())
     }
 
-    /// Delete a secret: tombstone both records and drop it from the index.
-    pub fn delete(&mut self, id: &Id) -> Result<(), VaultError> {
+    /// Delete a secret: revoke every active handle that points at it, then
+    /// tombstone both records and drop it from the index. Returns the ids of
+    /// the handles revoked so the caller can audit each one.
+    pub fn delete(&mut self, id: &Id) -> Result<Vec<Id>, VaultError> {
         self.vk()?;
         if !self.index.contains_key(id) {
             return Err(VaultError::NotFound);
         }
+        // Handles first: if that fails the secret stays, which is the safe side.
+        let revoked = self.revoke_handles_of(id)?;
         let now = self.clock.now_unix_ms();
         for rid in [*id, records::meta_record_id(id)] {
             let version = self
@@ -611,7 +615,7 @@ impl<S: Storage, C: Clock> Vault<S, C> {
             })?;
         }
         self.index.remove(id);
-        Ok(())
+        Ok(revoked)
     }
 
     /// Number of secrets.

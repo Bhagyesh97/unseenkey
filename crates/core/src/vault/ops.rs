@@ -301,6 +301,26 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         Ok(())
     }
 
+    /// Revoke every active handle of `secret_id`; returns the ids revoked.
+    /// [`Vault::delete`] calls this so no handle outlives its secret.
+    pub(crate) fn revoke_handles_of(&mut self, secret_id: &Id) -> Result<Vec<Id>, VaultError> {
+        let vk = self.vk()?.clone();
+        let now = self.clock.now_unix_ms();
+        let stale: Vec<HandleRecord> = self
+            .handles
+            .values()
+            .filter(|h| h.secret_id == *secret_id && h.revoked_at.is_none())
+            .cloned()
+            .collect();
+        let mut ids = Vec::with_capacity(stale.len());
+        for mut h in stale {
+            h.revoked_at = Some(now);
+            ids.push(h.handle_id);
+            self.write_handle(&vk, h)?;
+        }
+        Ok(ids)
+    }
+
     /// Replace a handle's policy.
     pub fn set_handle_policy(&mut self, id: &Id, policy: Policy) -> Result<(), VaultError> {
         let vk = self.vk()?.clone();

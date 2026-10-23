@@ -762,18 +762,26 @@ pub async fn delete_secret(
 ) -> ApiResult<serde_json::Value> {
     let mut v = s.vault.lock().await;
     let id = resolve(&v, &r)?;
-    v.delete(&id)?;
+    let revoked = v.delete(&id)?;
+    for hid in &revoked {
+        let _ = v.audit(
+            kinds::HANDLE_REVOKED,
+            serde_json::json!({ "id": hid.to_hex(), "reason": "secret_deleted", "secret": id.to_hex() }),
+        );
+    }
     let _ = v.audit(
         kinds::SECRET_DELETED,
-        serde_json::json!({ "id": id.to_hex() }),
+        serde_json::json!({ "id": id.to_hex(), "handles_revoked": revoked.len() }),
     );
     s.rebuild_scrubber(&v);
     s.emit(Event::SecretChanged {
         id: id.to_hex(),
         change: "deleted",
     });
-    tracing::info!(secret = %id, "secret deleted");
-    Ok(Json(serde_json::json!({ "ok": true })))
+    tracing::info!(secret = %id, handles_revoked = revoked.len(), "secret deleted");
+    Ok(Json(
+        serde_json::json!({ "ok": true, "handles_revoked": revoked.len() }),
+    ))
 }
 
 /// `POST /v1/secrets/{ref}/reveal` body.

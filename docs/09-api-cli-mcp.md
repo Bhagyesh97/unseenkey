@@ -73,7 +73,7 @@ usk add --from-env .env          import & optionally replace with handles
 usk ls [--provider stripe] [--tag x]
 usk show <name>                  metadata only
 usk reveal <name> [--reason "…"] value, once, audited, requires confirmation
-usk rm <name>
+usk rm <name>                    also revokes every active handle of the secret
 usk rotate <name>                (Phase 4) run provider adapter
 
 usk handle create <name> [--policy chat] [--label "cursor"] [--caller mcp:cursor] [--expires 30d]

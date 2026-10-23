@@ -459,3 +459,63 @@ fn remembered_rules_persist_and_reset_on_policy_change() {
         Err(VaultError::Locked)
     ));
 }
+
+#[test]
+fn deleting_a_secret_revokes_its_handles() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vault.db");
+    let (mut v, _) = Vault::create(
+        SqliteStorage::open(&path).unwrap(),
+        FixedClock(1_000),
+        &SecretBytes::from(PW),
+        FAST,
+    )
+    .unwrap();
+    let sid = v.add(stripe()).unwrap();
+    let (active, plain) = v
+        .create_handle(
+            &sid,
+            "cursor",
+            presets::policy_ref("stripe:payments").unwrap(),
+            None,
+        )
+        .unwrap();
+    let (already, _) = v
+        .create_handle(&sid, "old", Policy::allow_all(), None)
+        .unwrap();
+    v.revoke_handle(&already.handle_id).unwrap();
+    let mut other = stripe();
+    other.name = "stripe-test".into();
+    other.value = SecretBytes::from("sk_test_51Hzyxwvutsrqponmlk");
+    let oid = v.add(other).unwrap();
+    let (keep, _) = v
+        .create_handle(&oid, "keep", Policy::allow_all(), None)
+        .unwrap();
+
+    // Only the deleted secret's active handles go, and the caller learns which.
+    assert_eq!(v.delete(&sid).unwrap(), vec![active.handle_id]);
+    assert!(matches!(v.get(&sid), Err(VaultError::NotFound)));
+    let h = v.handle(&active.handle_id).unwrap();
+    assert_eq!(h.revoked_at, Some(1_000));
+    assert!(!h.is_active(1_001));
+    assert_eq!(
+        v.handle(&already.handle_id).unwrap().revoked_at,
+        Some(1_000)
+    );
+    assert!(v.handle(&keep.handle_id).unwrap().is_active(1_001));
+    // The string still resolves, so the audit log can name it, but it is dead.
+    assert!(!v
+        .handle_by_string(&plain)
+        .unwrap()
+        .unwrap()
+        .is_active(1_001));
+    assert!(matches!(v.delete(&sid), Err(VaultError::NotFound)));
+
+    // Survives a reopen.
+    v.lock();
+    drop(v);
+    let mut v = Vault::open(SqliteStorage::open(&path).unwrap(), FixedClock(3_000)).unwrap();
+    v.unlock_with_password(&SecretBytes::from(PW)).unwrap();
+    assert_eq!(v.handle(&active.handle_id).unwrap().revoked_at, Some(1_000));
+    assert!(v.handle(&keep.handle_id).unwrap().is_active(3_001));
+}

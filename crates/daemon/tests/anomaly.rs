@@ -449,3 +449,30 @@ async fn pause_approve_alert_and_lock_responses() {
 
     r.shutdown().await;
 }
+
+/// `DELETE /v1/secrets/{name}` revokes the secret's handles; a stale handle
+/// string is refused afterwards and each revocation is audited with its reason.
+#[tokio::test(flavor = "multi_thread")]
+async fn deleting_a_secret_revokes_its_handles() {
+    let (_dir, r, c) = setup().await;
+    let (plain, id) = c.handle(json!({ "label": "agent" }));
+    let (code, body) = c.brokered(&plain, "GET", "/v1/customers");
+    assert_eq!(code, 200, "{body}");
+
+    let (code, body) = c.mgmt("DELETE", "/v1/secrets/stripe", None);
+    assert_eq!(code, 200, "{body}");
+    assert_eq!(body["handles_revoked"], 1, "{body}");
+
+    let view = c.view(&id);
+    assert_eq!(view["active"], false, "{view}");
+    assert!(view["revoked_at"].is_number(), "{view}");
+    assert_eq!(view["secret"], "(deleted)", "{view}");
+    let (code, body) = c.brokered(&plain, "GET", "/v1/customers");
+    assert_ne!(code, 200, "{body}");
+    assert_eq!(body["error"], "handle_revoked", "{body}");
+
+    let ev = c.events("handle_revoked", &id);
+    assert_eq!(ev.len(), 1, "{ev:?}");
+    assert_eq!(ev[0]["body"]["reason"], "secret_deleted", "{ev:?}");
+    r.shutdown().await;
+}

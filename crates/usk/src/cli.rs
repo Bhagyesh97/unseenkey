@@ -774,8 +774,12 @@ fn rm(paths: &VaultPaths, name: &str, yes: bool) -> Result<(), CliError> {
         println!("Cancelled.");
         return Ok(());
     }
-    c.delete(&format!("/v1/secrets/{name}"))?;
-    println!("Deleted {name}.");
+    let out = c.delete(&format!("/v1/secrets/{name}"))?;
+    match out["handles_revoked"].as_u64().unwrap_or(0) {
+        0 => println!("Deleted {name}."),
+        1 => println!("Deleted {name}; its handle was revoked."),
+        n => println!("Deleted {name}; its {n} handles were revoked."),
+    }
     Ok(())
 }
 

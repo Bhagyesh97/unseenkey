@@ -2,6 +2,14 @@
 
 The top section of this file becomes the release notes when a `v*` tag is pushed.
 
+## Unreleased
+
+Found by an agent using the broker from a second Claude Code session:
+
+- **Deleting a secret revokes its handles.** `usk rm` (and the app's delete) left the secret's handles active; `usk handle ls` showed them against "(deleted)". Delete now revokes every active handle of the secret first, each with its own `handle_revoked` audit event (`reason: secret_deleted`), and the CLI says how many went.
+- **One daemon per vault.** Nothing stopped a second `daemon run` on the same vault when the listen address allowed it; each daemon holds its own copy of the index, so changes made through one were invisible to the other. A daemon now refuses to start while the vault's runtime files point at a live daemon, naming its address and pid.
+- **MCP `call_api` no longer reads a missing secret as "no provider preset".** The handle lookup now carries the secret's metadata with it, and an unknown name answers with "no secret named …; call list_secrets, or ask the owner to run `usk add <name>`".
+
 ## 0.1.1 — 2026-10-23
 
 Integrity and limits:
