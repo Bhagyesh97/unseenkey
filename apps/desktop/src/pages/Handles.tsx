@@ -19,7 +19,9 @@ function standing(h: HandleView): { text: string; cls: string } | null {
   }
 }
 
-export function Handles() {
+/** `tick` changes on every daemon event: reload in place, so a revealed
+ * value, a selection or a half-filled form survives (a remount wiped them). */
+export function Handles({ tick }: { tick: number }) {
   const [handles, setHandles] = useState<HandleView[]>([]);
   const [creating, setCreating] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -33,7 +35,8 @@ export function Handles() {
   };
   useEffect(() => {
     void load();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tick]);
 
   const forget = async (h: HandleView, rule: string | null) => {
     await api.call("POST", `/v1/handles/${h.id}/forget`, { rule });

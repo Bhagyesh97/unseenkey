@@ -166,12 +166,12 @@ export function App() {
           <Gate status={status} onDone={refresh} />
         ) : (
           <>
-            {tab === "secrets" && <Secrets key={tick} />}
-            {tab === "handles" && <Handles key={tick} />}
+            {tab === "secrets" && <Secrets tick={tick} />}
+            {tab === "handles" && <Handles tick={tick} />}
             {tab === "approvals" && (
               <Approvals approvals={approvals} onChange={() => void api.approvals().then(setApprovals)} />
             )}
-            {tab === "activity" && <Activity key={tick} />}
+            {tab === "activity" && <Activity tick={tick} />}
             {tab === "agents" && <Agents />}
             {tab === "settings" && <Settings status={status} onLock={lockNow} />}
           </>

@@ -4,6 +4,8 @@ The top section of this file becomes the release notes when a `v*` tag is pushed
 
 ## Unreleased
 
+- **Revealing a value in the app shows it.** The daemon announces every reveal, and the app remounted the Secrets page on any daemon event, so the value (and the open secret) vanished the moment it arrived. Pages now reload in place on events; a revealed value, a selection or a half-filled form survives. The same remount could wipe the Handles create form and the Activity filter.
+
 Found by an agent using the broker from a second Claude Code session:
 
 - **Deleting a secret revokes its handles.** `usk rm` (and the app's delete) left the secret's handles active; `usk handle ls` showed them against "(deleted)". Delete now revokes every active handle of the secret first, each with its own `handle_revoked` audit event (`reason: secret_deleted`), and the CLI says how many went.

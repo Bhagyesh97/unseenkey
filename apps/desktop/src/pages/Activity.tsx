@@ -42,7 +42,9 @@ type VerifyReport = {
   head_checked: boolean;
 };
 
-export function Activity() {
+/** `tick` changes on every daemon event: reload in place, so a revealed
+ * value, a selection or a half-filled form survives (a remount wiped them). */
+export function Activity({ tick }: { tick: number }) {
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [kind, setKind] = useState("");
   const [verify, setVerify] = useState<VerifyReport | null>(null);
@@ -59,7 +61,7 @@ export function Activity() {
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [tick]);
 
   const doVerify = async () => {
     setVerify(await api.call<VerifyReport>("GET", "/v1/audit/verify"));

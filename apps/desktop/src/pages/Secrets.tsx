@@ -6,7 +6,9 @@ function splitHosts(text: string): string[] {
   return text.split(/[\s,]+/).map((h) => h.trim()).filter(Boolean);
 }
 
-export function Secrets() {
+/** `tick` changes on every daemon event: reload in place, so a revealed
+ * value, a selection or a half-filled form survives (a remount wiped them). */
+export function Secrets({ tick }: { tick: number }) {
   const [list, setList] = useState<SecretMeta[]>([]);
   const [selected, setSelected] = useState<SecretMeta | null>(null);
   const [adding, setAdding] = useState(false);
@@ -24,7 +26,7 @@ export function Secrets() {
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [tick]);
 
   return (
     <div className="split">
