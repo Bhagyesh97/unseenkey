@@ -2,7 +2,7 @@
 
 The top section of this file becomes the release notes when a `v*` tag is pushed.
 
-## Unreleased
+## 0.1.2 — 2026-10-24
 
 Projects:
 
