@@ -25,6 +25,7 @@ pub mod mcp;
 pub mod oauth;
 pub mod paths;
 pub mod platform;
+pub mod projects;
 pub mod proxy;
 pub mod server;
 pub mod state;

@@ -108,6 +108,17 @@ fn unique_name(c: &Client, base: &str) -> String {
 
 /// Move fixable secrets into the vault and rewrite the file with handles.
 pub fn fix(paths: &VaultPaths, path: &Path, dry_run: bool) -> Result<(), CliError> {
+    fix_for(paths, path, dry_run, None)
+}
+
+/// [`fix`], putting the moved secrets in a project (by id) and making the
+/// handles for it, so they count toward its daily limit.
+pub fn fix_for(
+    paths: &VaultPaths,
+    path: &Path,
+    dry_run: bool,
+    project: Option<&str>,
+) -> Result<(), CliError> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| CliError::general(format!("cannot read {}: {e}", path.display())))?;
     let entries = parse_dotenv(&text);
@@ -150,10 +161,15 @@ pub fn fix(paths: &VaultPaths, path: &Path, dry_run: bool) -> Result<(), CliErro
                 "tags": ["env-guard"], "notes": format!("moved from {} ({})", path.display(), e.key),
             }),
         )?;
-        let created = c.post(
-            "/v1/handles",
-            json!({ "secret": name, "label": format!("{name} .env") }),
-        )?;
+        let mut body = json!({ "secret": name, "label": format!("{name} .env") });
+        if let Some(pid) = project {
+            c.post(
+                &format!("/v1/projects/{pid}/secrets"),
+                json!({ "secret": name }),
+            )?;
+            body["project"] = json!(pid);
+        }
+        let created = c.post("/v1/handles", body)?;
         let handle = created["handle"].as_str().unwrap_or("").to_string();
         lines[e.line - 1] = format!("{}={handle}", e.key);
         // The SDK must be pointed at the broker: add or update the base-URL variable.

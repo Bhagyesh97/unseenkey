@@ -28,6 +28,8 @@ pub struct HandleOptions {
     pub canary: bool,
     /// What unusual activity does to it.
     pub on_anomaly: AnomalyResponse,
+    /// The project it is made for. The secret must belong to it.
+    pub project: Option<Id>,
 }
 
 impl Default for HandleOptions {
@@ -36,6 +38,7 @@ impl Default for HandleOptions {
         Self {
             canary: false,
             on_anomaly: AnomalyResponse::Throttle,
+            project: None,
         }
     }
 }
@@ -46,6 +49,7 @@ impl HandleOptions {
         Self {
             canary: true,
             on_anomaly: AnomalyResponse::Lock,
+            project: None,
         }
     }
 }
@@ -143,6 +147,11 @@ impl<S: Storage, C: Clock> Vault<S, C> {
     ) -> Result<(HandleRecord, String), VaultError> {
         let vk = self.vk()?.clone();
         let meta = self.index.get(secret_id).ok_or(VaultError::NotFound)?;
+        if let Some(pid) = &opts.project {
+            if !self.project(pid)?.has_secret(secret_id) {
+                return Err(VaultError::SecretNotInProject);
+            }
+        }
         policy
             .validate()
             .map_err(|e| VaultError::InvalidPolicy(e.to_string()))?;
@@ -184,6 +193,7 @@ impl<S: Storage, C: Clock> Vault<S, C> {
             on_anomaly: opts.on_anomaly,
             status: HandleStatus::Normal,
             last_anomaly: None,
+            project: opts.project,
         };
         self.write_handle(&vk, record.clone())?;
         Ok((record, plain))

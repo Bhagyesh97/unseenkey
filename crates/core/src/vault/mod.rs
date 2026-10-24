@@ -23,11 +23,13 @@ use alloc::vec::Vec;
 
 pub mod header;
 mod ops;
+mod projects;
 pub mod records;
 pub mod recovery;
 
 pub use crate::storage::KeyWrap;
 pub use ops::{HandleOptions, COUNTER_FLUSH_EVERY, THROTTLE_MS};
+pub use projects::ProjectChanges;
 pub use records::{SecretKind, SecretMeta};
 pub use recovery::RecoveryKit;
 
@@ -82,6 +84,15 @@ pub enum VaultError {
     /// The recovery phrase could not be parsed.
     #[error("invalid recovery phrase")]
     Recovery,
+    /// No project with that name or id.
+    #[error("project not found")]
+    ProjectNotFound,
+    /// A handle for a project must use one of the project's secrets.
+    #[error("that secret is not part of the project; add it to the project first")]
+    SecretNotInProject,
+    /// A project with that name exists.
+    #[error("a project named {0:?} already exists")]
+    ProjectExists(String),
     /// Storage failure.
     #[error(transparent)]
     Storage(#[from] StorageError),
@@ -134,6 +145,8 @@ pub struct Vault<S: Storage, C: Clock> {
     handle_hashes: BTreeMap<crate::crypto::hash::Digest, Id>,
     /// Use counts as last persisted, per handle.
     handle_counters_flushed: BTreeMap<Id, u64>,
+    /// Decrypted projects, rebuilt on unlock.
+    projects: BTreeMap<Id, crate::projects::ProjectRecord>,
     /// What the keyed audit head said at the last unlock, if it was wrong.
     head_problem: Option<crate::audit::HeadStatus>,
 }
@@ -179,6 +192,7 @@ impl<S: Storage, C: Clock> Vault<S, C> {
                 handles: BTreeMap::new(),
                 handle_hashes: BTreeMap::new(),
                 handle_counters_flushed: BTreeMap::new(),
+                projects: BTreeMap::new(),
                 head_problem: None,
             },
             kit,
@@ -200,6 +214,7 @@ impl<S: Storage, C: Clock> Vault<S, C> {
             handles: BTreeMap::new(),
             handle_hashes: BTreeMap::new(),
             handle_counters_flushed: BTreeMap::new(),
+            projects: BTreeMap::new(),
             head_problem: None,
         })
     }
@@ -329,11 +344,13 @@ impl<S: Storage, C: Clock> Vault<S, C> {
     fn finish_unlock(&mut self, vk: SecretBytes) -> Result<(), VaultError> {
         let index = self.build_index(&vk)?;
         let (handles, hashes) = self.build_handle_index(&vk)?;
+        let projects = self.build_project_index(&vk)?;
         self.handle_counters_flushed = handles.iter().map(|(id, h)| (*id, h.use_count)).collect();
         self.vk = Some(vk);
         self.index = index;
         self.handles = handles;
         self.handle_hashes = hashes;
+        self.projects = projects;
         // Look at the audit head now, before anything is appended: the first
         // append (the daemon's own `unlock` event, usually) replaces the head,
         // and with it the evidence that the log was cut while we were locked.
@@ -379,6 +396,7 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         self.handles.clear();
         self.handle_hashes.clear();
         self.handle_counters_flushed.clear();
+        self.projects.clear();
     }
 
     /// Re-wrap the vault key under a new password. Requires an unlocked vault.
@@ -592,6 +610,7 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         }
         // Handles first: if that fails the secret stays, which is the safe side.
         let revoked = self.revoke_handles_of(id)?;
+        self.forget_secret_in_projects(id)?;
         let now = self.clock.now_unix_ms();
         for rid in [*id, records::meta_record_id(id)] {
             let version = self

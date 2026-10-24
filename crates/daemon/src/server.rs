@@ -274,6 +274,21 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
                 .patch(api::patch_handle)
                 .delete(api::revoke_handle),
         )
+        .route(
+            "/projects",
+            get(crate::projects::list).post(crate::projects::create),
+        )
+        .route(
+            "/projects/{r}",
+            get(crate::projects::get)
+                .patch(crate::projects::patch)
+                .delete(crate::projects::delete),
+        )
+        .route("/projects/{r}/secrets", post(crate::projects::attach))
+        .route(
+            "/projects/{r}/secrets/{secret}",
+            axum::routing::delete(crate::projects::detach),
+        )
         .route("/handles/{r}/forget", post(api::forget_handle_rules))
         .route("/handles/{r}/resume", post(api::resume_handle))
         .route("/audit", get(api::audit_list))

@@ -66,8 +66,9 @@ usk log                           # every call, hash-chained
 | **Camouflage** | Handles shaped like the provider's own keys (`sk-proj-usk-…`) for SDKs that validate formats. Every format carries the `usk` marker. |
 | **AWS and OAuth2** | boto3, the AWS CLI and the JS SDK sign with a placeholder; the broker re-signs with the real key. OAuth2 refresh tokens stay in the vault; the broker keeps the access token fresh. |
 | **MCP server** | `usk mcp install claude-code` (or `claude-desktop`, `cursor`, `windsurf`): the agent gets tools, never values. |
+| **Projects** | Group keys by the app that uses them. `usk project protect` (or "Protect a project" in the app) moves a folder's `.env` keys into the vault in one step; AI tools working in that folder see only its keys, and a daily request limit per project stops a runaway bill. |
 | **`.env` guard** | `usk guard fix .env` moves real keys into the vault and rewrites the file with handles. |
-| **Desktop app** | Unlock, secrets, handles, approvals, activity with chain verification, one-click MCP setup, Windows Hello, signed auto-updates. |
+| **Desktop app** | Projects with a status panel, keys, agent access, approvals, activity with chain verification, one-click MCP setup, Windows Hello, signed auto-updates. |
 
 More of the same:
 

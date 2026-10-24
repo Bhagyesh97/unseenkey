@@ -4,6 +4,15 @@ The top section of this file becomes the release notes when a `v*` tag is pushed
 
 ## Unreleased
 
+Projects:
+
+- **Keep each app's keys together.** A project is a code folder (or several) and the keys it uses; one key can belong to several projects. The app opens on a new Projects page; the CLI has `usk project add | ls | show | attach | detach | set | rm`.
+- **Protect a project in one step.** "Protect a project" in the app (or `usk project protect` in a folder) picks the folder, finds the real keys in its `.env` files, moves them into the vault, leaves handles behind and files everything under the project. `usk guard fix --project` and `usk handle create --project` do the parts by hand.
+- **AI tools see only the project they work in.** The MCP bridge tells the daemon which folder its client runs in (`USK_PROJECT_DIR`, then `CLAUDE_PROJECT_DIR`, then its working folder). Inside a project's folder, `list_secrets`, `call_api`, `explain_policy` and `request_access` see only that project's keys and say so plainly when asked for another; outside every project nothing changes. This narrows what an honest agent sees; it is not a wall against a hostile program on your machine.
+- **A daily limit per project.** `cap_per_day` counts requests across every handle made for the project and answers `429 project_cap_reached` at the limit, so one runaway script cannot run up a bill on all of an app's keys.
+- **A status panel.** The Projects page shows whether the vault is unlocked, which AI tools have connected and when, and whether an update is waiting, each with its fix one click away.
+- **Plainer words in the app.** Secrets are "Keys", handles are "Agent access", hosts are "Allowed websites". Each key shows the projects that use it. The two-pane pages stack on narrow windows instead of cutting off.
+
 - **Revealing a value in the app shows it.** The daemon announces every reveal, and the app remounted the Secrets page on any daemon event, so the value (and the open secret) vanished the moment it arrived. Pages now reload in place on events; a revealed value, a selection or a half-filled form survives. The same remount could wipe the Handles create form and the Activity filter.
 
 Found by an agent using the broker from a second Claude Code session:

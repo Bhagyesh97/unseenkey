@@ -54,6 +54,31 @@ export interface HandleView {
   on_anomaly?: AnomalyResponse;
   status?: { state: "normal" } | { state: "throttled"; until: number } | { state: "approval_required" } | { state: "paused" };
   last_anomaly?: { kind: string; detail: string; at: number; response: AnomalyResponse } | null;
+  // Absent on daemons older than 0.1.2.
+  project?: string | null;
+  project_id?: string | null;
+}
+
+/** A project: code folders and the secrets they use (daemon 0.1.2+). */
+export interface Project {
+  id: string;
+  name: string;
+  paths: string[];
+  secrets: { id: string; name: string; provider: string | null }[];
+  cap_per_day: number | null;
+  requests_today: number;
+  handles: number;
+  last_used_at: number | null;
+  notes: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface EnvFinding {
+  line: number;
+  key: string;
+  detected: string | null;
+  fixable: boolean;
 }
 
 export type AnomalyResponse = "alert" | "throttle" | "approve" | "pause" | "lock";
@@ -142,8 +167,17 @@ export const api = {
   presets: () => wrap(invoke<Preset[]>("presets")),
   installMcp: (client: string) => wrap(invoke<string>("install_mcp", { client })),
   callers: () => api.call<{ name: string; caller: string; last_seen_at: number | null }[]>("GET", "/v1/callers"),
-  guardScan: (path: string) => wrap(invoke<{ line: number; key: string; detected: string | null; fixable: boolean }[]>("guard_scan", { path })),
-  guardFix: (path: string) => wrap(invoke<string>("guard_fix", { path })),
+  guardScan: (path: string) => wrap(invoke<EnvFinding[]>("guard_scan", { path })),
+  guardFix: (path: string, project?: string) => wrap(invoke<string>("guard_fix", { path, project: project ?? null })),
+  envFiles: (dir: string) => wrap(invoke<string[]>("env_files", { dir })),
+  projects: () => api.call<Project[]>("GET", "/v1/projects"),
+  projectForDir: (dir: string) => api.call<Project[]>("GET", `/v1/projects?dir=${encodeURIComponent(dir)}`).then((l) => l[0] ?? null),
+  createProject: (body: { name?: string; paths?: string[]; secrets?: string[]; cap_per_day?: number }) => api.call<Project>("POST", "/v1/projects", body),
+  patchProject: (id: string, body: { name?: string; paths?: string[]; cap_per_day?: number | null; notes?: string }) =>
+    api.call<Project>("PATCH", `/v1/projects/${id}`, body),
+  deleteProject: (id: string) => api.call("DELETE", `/v1/projects/${id}`),
+  attachSecret: (id: string, secret: string) => api.call<Project>("POST", `/v1/projects/${id}/secrets`, { secret }),
+  detachSecret: (id: string, secretId: string) => api.call<Project>("DELETE", `/v1/projects/${id}/secrets/${secretId}`),
   deviceStatus: () => wrap(invoke<DeviceUnlock>("device_unlock_status")),
   deviceEnroll: () => wrap(invoke<string>("device_unlock_enroll")),
   deviceUnlock: () => wrap(invoke<void>("device_unlock")),
@@ -154,6 +188,7 @@ export type DaemonEvent =
   | { event: "unlocked" }
   | { event: "locked"; reason: string }
   | { event: "secret_changed"; id: string; change: string }
+  | { event: "project_changed"; id: string; change: string }
   | { event: "revealed"; id: string }
   | { event: "use"; secret: string; label: string; status: number }
   | { event: "egress_blocked"; secret: string; leaked: string[] }
@@ -177,4 +212,17 @@ export function ago(ms: number | null): string {
   if (s < 3600) return `${Math.round(s / 60)}m ago`;
   if (s < 86400) return `${Math.round(s / 3600)}h ago`;
   return `${Math.round(s / 86400)}d ago`;
+}
+
+/** Ask the user for a folder (native dialog). `null` when they cancel. */
+export async function pickFolder(title: string): Promise<string | null> {
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const r = await open({ directory: true, multiple: false, title });
+  return typeof r === "string" ? r : null;
+}
+
+/** Last part of a folder path, for display and default names. */
+export function folderName(path: string): string {
+  const parts = path.replace(/[\\/]+$/, "").split(/[\\/]/);
+  return parts[parts.length - 1] || path;
 }

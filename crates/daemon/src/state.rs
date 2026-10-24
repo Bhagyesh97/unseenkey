@@ -48,6 +48,13 @@ pub enum Event {
         /// Why.
         reason: &'static str,
     },
+    /// A project was created, updated or deleted.
+    ProjectChanged {
+        /// Project id (hex).
+        id: String,
+        /// `created`, `updated`, `deleted`.
+        change: &'static str,
+    },
     /// A secret was created, updated or deleted.
     SecretChanged {
         /// Secret id (hex).
@@ -341,6 +348,20 @@ impl AppState {
         for (id, times) in by_handle {
             map.insert(id, UsageWindow::seeded(&times, now_ms, now));
         }
+    }
+
+    /// Requests in the last 24 hours across these handles.
+    pub async fn day_count(&self, handles: &[Id]) -> u64 {
+        let now = Instant::now();
+        let mut map = self.usage.lock().await;
+        let mut n = 0u64;
+        for h in handles {
+            if let Some(w) = map.get_mut(h) {
+                w.prune(now);
+                n += w.day.len() as u64;
+            }
+        }
+        n
     }
 
     /// Count a request for a handle.

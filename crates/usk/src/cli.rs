@@ -150,6 +150,12 @@ enum Command {
         #[arg(last = true, required = true)]
         command: Vec<String>,
     },
+    /// Group secrets by the code folder that uses them; agents started in a
+    /// project's folder see only its secrets.
+    Project {
+        #[command(subcommand)]
+        action: crate::project::ProjectAction,
+    },
     /// Find real keys in a `.env` file and replace them with handles.
     Guard {
         #[command(subcommand)]
@@ -331,9 +337,22 @@ pub fn run() -> Result<(), CliError> {
                 "usage: usk mcp install <claude-code|claude-desktop|cursor|windsurf|all>, usk mcp clients, usk mcp remove <client>, or usk mcp --client <name> (stdio bridge)",
             )),
         },
+        Command::Project { action } => crate::project::run(&paths, action, cli.json),
         Command::Guard { action } => match action {
             GuardAction::Scan { path } => crate::guard::scan(&path, cli.json).map(|_| ()),
-            GuardAction::Fix { path, dry_run } => crate::guard::fix(&paths, &path, dry_run),
+            GuardAction::Fix {
+                path,
+                dry_run,
+                project,
+            } => match project {
+                None => crate::guard::fix(&paths, &path, dry_run),
+                Some(p) => {
+                    let c = Client::connect(&paths, true)?;
+                    c.ensure_unlocked()?;
+                    let id = crate::project::project_id(&c, &p)?;
+                    crate::guard::fix_for(&paths, &path, dry_run, Some(&id))
+                }
+            },
         },
         Command::Secret { action } => match action {
             SecretAction::Set {
@@ -366,6 +385,7 @@ pub fn run() -> Result<(), CliError> {
                 cap,
                 canary,
                 on_anomaly,
+                project,
             } => handle_create(
                 &paths,
                 &secret,
@@ -378,6 +398,7 @@ pub fn run() -> Result<(), CliError> {
                     cap,
                     canary,
                     on_anomaly,
+                    project,
                 },
                 cli.json,
             ),
@@ -411,6 +432,7 @@ pub fn run() -> Result<(), CliError> {
                 cap,
                 canary: false,
                 on_anomaly,
+                project: None,
             },
         ),
         Command::Log {
@@ -971,6 +993,10 @@ enum HandleAction {
         /// for a canary).
         #[arg(long, value_enum)]
         on_anomaly: Option<OnAnomaly>,
+        /// The project the handle is for; its requests count toward the
+        /// project's daily limit.
+        #[arg(long)]
+        project: Option<String>,
     },
     /// List handles.
     Ls,
@@ -1075,11 +1101,16 @@ struct Incidents {
     cap: Vec<String>,
     canary: bool,
     on_anomaly: Option<OnAnomaly>,
+    /// Project name or id (sent as is; the daemon resolves either).
+    project: Option<String>,
 }
 
 impl Incidents {
     /// Add the settings to a `POST /v1/handles` body.
     fn apply(&self, body: &mut Value) -> Result<(), CliError> {
+        if let Some(p) = &self.project {
+            body["project"] = json!(p);
+        }
         for cap in &self.cap {
             let (n, unit) = cap.split_once('/').ok_or_else(|| {
                 CliError::general(format!("--cap {cap:?}: use N/day or N/min, e.g. 1000/day"))
@@ -1654,6 +1685,9 @@ enum GuardAction {
         /// Show what would change without writing.
         #[arg(long)]
         dry_run: bool,
+        /// Put the moved secrets in this project (see `usk project protect`).
+        #[arg(long)]
+        project: Option<String>,
     },
 }
 

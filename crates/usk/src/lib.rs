@@ -11,4 +11,5 @@ pub mod guard;
 pub mod io;
 pub mod mcp;
 pub mod platform;
+pub mod project;
 pub mod run;

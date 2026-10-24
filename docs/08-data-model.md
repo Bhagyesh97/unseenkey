@@ -23,7 +23,7 @@ All identifiers are UUIDv7 (time-ordered) unless stated. Timestamps are RFC 3339
 | Column | Type | Notes |
 |---|---|---|
 | record_id | UUID | |
-| kind | text | `secret`, `secret_meta`, `policy`, `handle`, `grant`, `caller`, `setting` |
+| kind | text | `secret`, `secret_meta`, `policy`, `handle`, `grant`, `caller`, `setting`, `project` |
 | version | int | monotonically increasing per record |
 | nonce | blob(24) | |
 | ciphertext | blob | includes Poly1305 tag |
@@ -57,9 +57,18 @@ Splitting value and metadata lets the UI list secrets after unlock without decry
   "label": "cursor on laptop", "callers": ["mcp:cursor"], "created_at": "…",
   "expires_at": "…", "revoked_at": null, "use_count": 1234, "last_used_at": "…",
   "remembered": ["POST /v1/customers"], "canary": false, "on_anomaly": "throttle",
-  "status": { "state": "throttled", "until": "…" }, "last_anomaly": { "kind": "denial_burst", "detail": "…", "at": "…", "response": "throttle" } }
+  "status": { "state": "throttled", "until": "…" }, "last_anomaly": { "kind": "denial_burst", "detail": "…", "at": "…", "response": "throttle" },
+  "project": "…" }
 ```
-The handle string itself is never stored. `status` is one of `normal`, `throttled` (with `until`), `approval_required`, `paused`; `on_anomaly` one of `alert`, `throttle`, `approve`, `pause`, `lock` (see [07](07-broker-and-policy.md#caps-canaries-and-unusual-activity)). Records written before these fields existed read as normal, throttle-on-anomaly handles.
+The handle string itself is never stored. `status` is one of `normal`, `throttled` (with `until`), `approval_required`, `paused`; `on_anomaly` one of `alert`, `throttle`, `approve`, `pause`, `lock` (see [07](07-broker-and-policy.md#caps-canaries-and-unusual-activity)). Records written before these fields existed read as normal, throttle-on-anomaly handles. `project` (absent on older records) is the project the handle was made for; its requests count toward that project's daily limit.
+
+**project**
+```json
+{ "project_id": "…", "name": "shop", "paths": ["c:/users/me/code/shop"],
+  "secrets": ["<secret_id>", "…"], "cap_per_day": 500, "notes": null,
+  "created_at": "…", "updated_at": "…" }
+```
+Folders are stored normalised: forward slashes, no trailing slash, lower case for Windows paths. Names are unique ignoring case. See [07](07-broker-and-policy.md#projects).
 
 **caller**
 ```json

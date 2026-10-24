@@ -76,6 +76,9 @@ impl From<VaultError> for ApiError {
             VaultError::LabelExists(_) => (S::CONFLICT, "label_exists"),
             VaultError::PolicyWidensHosts => (S::BAD_REQUEST, "policy_widens_hosts"),
             VaultError::InvalidPolicy(_) => (S::BAD_REQUEST, "invalid_policy"),
+            VaultError::ProjectNotFound => (S::NOT_FOUND, "project_not_found"),
+            VaultError::ProjectExists(_) => (S::CONFLICT, "project_exists"),
+            VaultError::SecretNotInProject => (S::BAD_REQUEST, "secret_not_in_project"),
         };
         ApiError::new(status, code, e.to_string())
     }
@@ -601,6 +604,11 @@ fn resolve(v: &crate::state::DaemonVault, r: &str) -> Result<Id, ApiError> {
     Ok(v.get_by_name(r)?.secret_id)
 }
 
+/// A secret by id (hex) or name.
+pub fn resolve_secret(v: &crate::state::DaemonVault, r: &str) -> Result<Id, ApiError> {
+    resolve(v, r)
+}
+
 /// `GET /v1/secrets/{ref}`
 pub async fn get_secret(
     State(s): State<Arc<AppState>>,
@@ -955,6 +963,9 @@ pub struct CreateHandle {
     /// What unusual activity does to the handle: `alert`, `throttle`
     /// (default), `approve`, `pause` or `lock`.
     pub on_anomaly: Option<AnomalyResponse>,
+    /// The project (name or id) the handle is for; its requests count toward
+    /// the project's daily limit. The secret must be one of the project's.
+    pub project: Option<String>,
 }
 
 /// What a handle looks like to owners. Never includes the handle string
@@ -998,6 +1009,10 @@ pub struct HandleView {
     pub status: HandleStatus,
     /// The incident behind `status`, until the owner resumes the handle.
     pub last_anomaly: Option<Anomaly>,
+    /// Project id (hex) the handle was made for.
+    pub project_id: Option<String>,
+    /// That project's name, while it exists.
+    pub project: Option<String>,
 }
 
 /// Creation response: the only place the handle string appears.
@@ -1038,6 +1053,10 @@ fn handle_view(v: &crate::state::DaemonVault, h: &HandleRecord, now: i64) -> Han
         on_anomaly: h.on_anomaly,
         status: h.status_at(now),
         last_anomaly: h.last_anomaly.clone(),
+        project_id: h.project.map(|p| p.to_hex()),
+        project: h
+            .project
+            .and_then(|p| v.project(&p).ok().map(|p| p.name.clone())),
     }
 }
 
@@ -1092,6 +1111,15 @@ pub async fn create_handle(
             *slot = Some(n);
         }
     }
+    let project = match req
+        .project
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
+        Some(r) => Some(crate::projects::resolve_project(&v, r)?),
+        None => None,
+    };
     let opts = HandleOptions {
         canary: req.canary,
         on_anomaly: req.on_anomaly.unwrap_or(if req.canary {
@@ -1099,6 +1127,7 @@ pub async fn create_handle(
         } else {
             AnomalyResponse::Throttle
         }),
+        project,
     };
     let label = req
         .label

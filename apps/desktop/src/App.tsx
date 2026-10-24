@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 import { api, onDaemonEvent, type Approval, type DaemonEvent, type Status } from "./api";
 import { Gate } from "./pages/Gate";
+import { Projects } from "./pages/Projects";
 import { Secrets } from "./pages/Secrets";
 import { Handles } from "./pages/Handles";
 import { Approvals } from "./pages/Approvals";
@@ -11,9 +12,10 @@ import { checkForUpdate, installUpdate, type UpdateInfo } from "./updates";
 
 import icon from "./assets/icon.png";
 
-type Tab = "secrets" | "handles" | "approvals" | "activity" | "agents" | "settings";
+type Tab = "projects" | "secrets" | "handles" | "approvals" | "activity" | "agents" | "settings";
 
 const I = {
+  folder: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>,
   key: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m11 12 9-9M15 6l3 3M18 3l3 3"/></svg>,
   handle: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="7" width="18" height="10" rx="3"/><circle cx="8" cy="12" r="1.6"/><path d="M12 12h6"/></svg>,
   approve: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="m9 12 2 2 4-4"/></svg>,
@@ -24,8 +26,9 @@ const I = {
 };
 
 const TABS: { id: Tab; label: string; icon: ReactElement }[] = [
-  { id: "secrets", label: "Secrets", icon: I.key },
-  { id: "handles", label: "Handles", icon: I.handle },
+  { id: "projects", label: "Projects", icon: I.folder },
+  { id: "secrets", label: "Keys", icon: I.key },
+  { id: "handles", label: "Agent access", icon: I.handle },
   { id: "approvals", label: "Approvals", icon: I.approve },
   { id: "activity", label: "Activity", icon: I.activity },
   { id: "agents", label: "Agents", icon: I.agents },
@@ -35,7 +38,7 @@ const TABS: { id: Tab; label: string; icon: ReactElement }[] = [
 export function App() {
   const [status, setStatus] = useState<Status | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>("secrets");
+  const [tab, setTab] = useState<Tab>("projects");
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [toast, setToast] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
@@ -166,6 +169,15 @@ export function App() {
           <Gate status={status} onDone={refresh} />
         ) : (
           <>
+            {tab === "projects" && (
+              <Projects
+                tick={tick}
+                status={status}
+                update={update}
+                onUpdate={() => { setUpdating(true); void installUpdate().catch((e) => { setError((e as Error).message); setUpdating(false); }); }}
+                onSettings={() => setTab("settings")}
+              />
+            )}
             {tab === "secrets" && <Secrets tick={tick} />}
             {tab === "handles" && <Handles tick={tick} />}
             {tab === "approvals" && (

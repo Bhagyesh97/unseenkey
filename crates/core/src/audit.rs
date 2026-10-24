@@ -120,6 +120,12 @@ pub mod kinds {
     pub const CANARY_TRIPPED: &str = "canary_tripped";
     /// The owner put a handle back to normal after an incident.
     pub const HANDLE_RESUMED: &str = "handle_resumed";
+    /// A project was created.
+    pub const PROJECT_CREATED: &str = "project_created";
+    /// A project's name, folders, limit, notes or secrets changed.
+    pub const PROJECT_CHANGED: &str = "project_changed";
+    /// A project was deleted (its secrets and handles stay).
+    pub const PROJECT_DELETED: &str = "project_deleted";
     /// On unlock, the keyed head did not match the log (`state`, `head_seq`,
     /// `last_seq`): the log was cut short or rewritten while locked. Recorded
     /// as an event because the next append replaces the head.

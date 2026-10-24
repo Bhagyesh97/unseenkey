@@ -19,12 +19,16 @@ All responses are JSON. Errors: `{ "error": "<code>", "message": "…" }`.
 | POST | `/v1/secrets/{id}/reveal` | requires `{confirm:true}`; returns value once; audit `reveal`; optional `reason` |
 | POST | `/v1/secrets/import` | multipart or `{format, content}` |
 | GET/POST | `/v1/policies`, `/v1/policies/{id}` | CRUD; POST validates and returns `explanation` |
-| POST | `/v1/handles` | `{secret, preset_policy \| policy, label?, expires_in_days?, camouflage?, cap_per_day?, cap_per_minute?, canary?, on_anomaly?}` → returns the handle **once**; the view carries `canary`, `on_anomaly`, `status` and `last_anomaly` |
+| POST | `/v1/handles` | `{secret, preset_policy \| policy, label?, expires_in_days?, camouflage?, cap_per_day?, cap_per_minute?, canary?, on_anomaly?, project?}` → returns the handle **once**; the view carries `canary`, `on_anomaly`, `status` and `last_anomaly` |
 | GET | `/v1/handles` | list (hashes, labels, counts, never handle strings) |
 | DELETE | `/v1/handles/{id}` | revoke |
 | POST | `/v1/handles/{id}/forget` | `{rule?}`: clear "allow always" decisions (one rule, or all). They live in the handle record, survive restarts, and are wiped by a policy change |
 | PATCH | `/v1/handles/{id}` | `{preset_policy \| policy}` replaces the policy (and forgets remembered rules); `{on_anomaly}` changes the incident response alone |
 | POST | `/v1/handles/{id}/resume` | back to normal after an incident: ends a throttle, approval mode or pause, restarts the burst detector |
+| GET | `/v1/projects[?dir=…]` | projects with their folders, secrets, `cap_per_day`, `requests_today`, active `handles`; `dir` returns only the project whose folder most closely contains it |
+| POST | `/v1/projects` | `{name?, paths?, secrets?, cap_per_day?, notes?}`; the name defaults to the first folder's (`shop`, `shop 2`, …) |
+| GET/PATCH/DELETE | `/v1/projects/{id\|name}` | PATCH `{name?, paths?, cap_per_day?, notes?}` (`cap_per_day: null` removes the limit); DELETE keeps the secrets and handles |
+| POST | `/v1/projects/{ref}/secrets` | `{secret}` adds a secret; `DELETE /v1/projects/{ref}/secrets/{secret}` takes it out (it stays in the vault) |
 | GET/POST/DELETE | `/v1/unlock-methods`, `/v1/unlock-methods/{id}` | device unlock methods (Windows Hello); `POST /v1/unlock` also takes `{wrap_id, kek}` |
 | GET | `/v1/callers` / POST / DELETE | manage MCP/device callers |
 | GET | `/v1/audit?since=&kind=&limit=` | decrypted events for the owner |
@@ -95,7 +99,12 @@ usk env <name> [--policy chat] [--shell sh|powershell|cmd|dotenv]   print the va
 usk run --with VAR=name [...] -- <cmd…>   inject secrets into a child's environment (needs --allow-injection); output scrubbed; exit code propagates
 usk secret set <name> [--allow-injection bool] [--no-scrub bool] [--notes …] [--tag …] [--upstream host] [--provider id]   # hosts are normalised (https://host/path → host); a new provider brings its hosts
 usk guard scan [.env]            which lines look like secrets, and which can become handles
-usk guard fix  [.env] [--dry-run] move them into the vault, rewrite the file with handles + base-URL variables
+usk guard fix  [.env] [--dry-run] [--project p]  move them into the vault, rewrite the file with handles + base-URL variables
+usk project protect [dir] [--env .env] [--dry-run]   one step: project for the folder, keys out of its .env, handles for the project
+usk project add [name] [--path dir]… [--secret s]… [--cap 500]   (default: the current folder)
+usk project ls | show [name] | attach <p> <secret>… | detach <p> <secret>… | rm <p>
+usk project set <p> [--name n] [--path dir]… [--cap N | --no-cap] [--notes …]
+usk handle create <secret> --project <p>   the handle's requests count toward the project's daily limit
 usk mcp --client <name>          stdio MCP bridge to the daemon's /mcp (what the clients' configs run)
 usk mcp install <claude-code|claude-desktop|cursor|windsurf|all|custom-name>   register the client (usk_m_ token) and write its config
 usk mcp clients | usk mcp remove <name>
@@ -116,6 +125,8 @@ Conventions: `--json` on every listing; exit code 2 for policy denials, 3 for lo
 ## MCP server
 
 Server name `unseenkey`. Transports: stdio (`usk mcp`) and `http://127.0.0.1:7391/mcp`.
+
+**Project scope.** The stdio bridge sends the folder its client runs in as `X-Usk-Project-Dir` (percent-encoded): `USK_PROJECT_DIR` if set, else `CLAUDE_PROJECT_DIR`, else the bridge's working directory. When a project's folder contains it, every tool sees only that project's secrets (`not_in_project` otherwise), auto-created handles are made for the project (label `mcp:<client>/<project>/<secret>`), and `store_secret` adds the new secret to it. Outside every project nothing changes. The folder is the client's own claim, so this narrows what an honest agent sees; it is not a boundary against a hostile local process.
 
 Claude Desktop / Claude Code config written by `usk mcp install claude`:
 

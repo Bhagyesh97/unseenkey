@@ -60,10 +60,10 @@ export function Handles({ tick }: { tick: number }) {
     <div className="split">
       <section className="list-pane">
         <header className="pane-head">
-          <h2>Handles</h2>
+          <h2>Agent access</h2>
           <button className="primary" onClick={() => setCreating(true)}>+ Create</button>
         </header>
-        <p className="muted small">A handle is what you give a tool instead of the key. It only works through this computer, for one host, within its policy.</p>
+        <p className="muted small">Each entry is a stand-in (a “handle”) you or an AI tool uses instead of the real key. It only works through this computer, for the key's websites, within the rules you set.</p>
         {err && <div className="err">{err}</div>}
         {handles.length === 0 && (
           <div className="empty">
@@ -79,6 +79,7 @@ export function Handles({ tick }: { tick: number }) {
               <div className="row-main">
                 <span className="name">{h.label}</span>
                 <span className="chip">{h.secret}</span>
+                {h.project && <span className="chip info">{h.project}</span>}
                 <span className={`chip ${h.revoked_at ? "off" : h.active ? "ok" : "warn"}`}>{h.revoked_at ? "revoked" : h.active ? "active" : "expired"}</span>
                 {standing(h) && <span className={`chip ${standing(h)!.cls}`}>{standing(h)!.text}</span>}
                 {h.policy.callers?.length ? <span className="chip">{h.policy.callers.join(", ")}</span> : null}

@@ -615,6 +615,32 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
                     ),
                 );
         }
+        // The project's daily limit counts every handle made for the project.
+        if let Some((name, cap)) = handle
+            .project
+            .and_then(|p| vault.project(&p).ok())
+            .and_then(|p| p.cap_per_day.map(|c| (p.name.clone(), c)))
+        {
+            let ids =
+                crate::projects::project_handle_ids(&vault, &handle.project.expect("checked"));
+            if s.day_count(&ids).await >= cap {
+                let _ = vault.audit(
+                    kinds::DENY,
+                    json!({
+                        "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
+                        "caller": call.caller, "reason": "project_cap", "project": name,
+                        "host": upstream.host, "method": call.method, "path": pol_path,
+                    }),
+                );
+                return err(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "project_cap_reached",
+                    format!(
+                        "the project {name:?} reached its limit of {cap} requests a day; the owner can raise it in Unseenkey > Projects or with `usk project set {name:?} --cap N`"
+                    ),
+                );
+            }
+        }
         let preq = PolicyRequest {
             method: &call.method,
             path: &pol_path,

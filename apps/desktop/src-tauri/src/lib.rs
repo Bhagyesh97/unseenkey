@@ -173,10 +173,37 @@ fn guard_scan(path: String) -> Result<Vec<Value>, String> {
         .collect())
 }
 
+/// The env files in a project folder that exist, most common first.
 #[tauri::command(async)]
-fn guard_fix(state: tauri::State<'_, AppData>, path: String) -> Result<String, String> {
+fn env_files(dir: String) -> Vec<String> {
+    [
+        ".env",
+        ".env.local",
+        ".env.development",
+        ".env.development.local",
+        ".env.production",
+    ]
+    .iter()
+    .map(|f| std::path::Path::new(&dir).join(f))
+    .filter(|p| p.is_file())
+    .map(|p| p.display().to_string())
+    .collect()
+}
+
+#[tauri::command(async)]
+fn guard_fix(
+    state: tauri::State<'_, AppData>,
+    path: String,
+    project: Option<String>,
+) -> Result<String, String> {
     let _g = state.connect_lock.lock().unwrap_or_else(|e| e.into_inner());
-    usk::guard::fix(&state.paths, std::path::Path::new(&path), false).map_err(err_string)?;
+    usk::guard::fix_for(
+        &state.paths,
+        std::path::Path::new(&path),
+        false,
+        project.as_deref(),
+    )
+    .map_err(err_string)?;
     Ok(format!(
         "Rewrote {path}: real keys moved into the vault and replaced with handles."
     ))
@@ -384,6 +411,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .manage(AppData {
             paths: paths.clone(),
@@ -399,6 +427,7 @@ pub fn run() {
             install_mcp,
             guard_scan,
             guard_fix,
+            env_files,
             device_unlock_status,
             device_unlock_enroll,
             device_unlock,

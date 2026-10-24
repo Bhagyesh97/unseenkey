@@ -616,3 +616,101 @@ async fn request_access_can_add_a_host_the_secret_is_not_locked_to() {
     );
     env.mgmt("POST", "/v1/shutdown", Some(json!({})));
 }
+
+impl Env {
+    /// A tool call from a client that reports it runs in `dir`.
+    fn tool_in(&self, dir: &str, name: &str, args: Value) -> Value {
+        let (code, v) = call(
+            self.agent
+                .post(&format!("{}/mcp", self.base))
+                .set("Authorization", &format!("Bearer {}", self.mcp_token))
+                .set("Content-Type", "application/json")
+                .set(
+                    unseenkey_daemon::mcp::PROJECT_DIR_HEADER,
+                    &unseenkey_core::projects::encode_dir(dir),
+                )
+                .send_string(
+                    &json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": args } })
+                        .to_string(),
+                ),
+        );
+        assert_eq!(code, 200, "{v}");
+        v["result"].clone()
+    }
+}
+
+/// Inside a project's folder a client sees and uses only that project's
+/// secrets, and the handle it gets is the project's; elsewhere nothing changes.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_in_a_project_folder_sees_only_that_project() {
+    let env = setup().await;
+    let (code, p) = env.mgmt(
+        "POST",
+        "/v1/projects",
+        Some(json!({ "name": "My Shop", "paths": [r"C:\Work\Shöp"], "secrets": ["stripe-live"] })),
+    );
+    assert_eq!(code, 201, "{p}");
+    let inside = r"c:\work\shöp\web\src";
+
+    let r = env.tool_in(inside, "list_secrets", json!({}));
+    assert_eq!(r["isError"], false, "{r}");
+    let list = tool_json(&r);
+    let names: Vec<&str> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["stripe-live"]);
+    assert_eq!(list[0]["project"], "My Shop");
+
+    for (tool, args) in [
+        (
+            "call_api",
+            json!({ "secret": "slack", "method": "GET", "path": "/api/x", "upstream": "https://slack.com" }),
+        ),
+        ("explain_policy", json!({ "secret": "slack" })),
+        (
+            "request_access",
+            json!({ "secret": "slack", "reason": "post a message" }),
+        ),
+    ] {
+        let r = env.tool_in(inside, tool, args);
+        assert_eq!(r["isError"], true, "{tool}: {r}");
+        let text = r["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("not part of the project \"My Shop\""),
+            "{tool}: {text}"
+        );
+    }
+
+    let r = env.tool_in(
+        inside,
+        "call_api",
+        json!({ "secret": "stripe-live", "method": "GET", "path": "/v1/customers" }),
+    );
+    assert_eq!(r["isError"], false, "{r}");
+    let (_, handles) = env.mgmt("GET", "/v1/handles", None);
+    let h = handles
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["label"] == "mcp:cursor/My Shop/stripe-live")
+        .unwrap_or_else(|| panic!("no project handle in {handles}"));
+    assert_eq!(h["project"], "My Shop");
+    let (_, pv) = env.mgmt(
+        "GET",
+        &format!("/v1/projects/{}", p["id"].as_str().unwrap()),
+        None,
+    );
+    assert_eq!(pv["requests_today"], 1, "{pv}");
+    assert_eq!(pv["handles"], 1, "{pv}");
+
+    // Outside the folder, and without a folder, the client sees everything.
+    for r in [
+        env.tool_in(r"C:\Work\Other", "list_secrets", json!({})),
+        env.tool("list_secrets", json!({})),
+    ] {
+        assert_eq!(tool_json(&r).as_array().unwrap().len(), 2, "{r}");
+    }
+}

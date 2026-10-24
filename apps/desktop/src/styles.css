@@ -183,7 +183,7 @@ button.small { padding: 4px 10px; font-size: 12px; border-radius: 7px; }
 .chip.kind-deny, .chip.kind-egress_blocked, .chip.kind-canary_tripped { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 50%, transparent); background: var(--bad-soft); }
 .chip.kind-anomaly { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, transparent); background: var(--warn-soft); }
 .chip.kind-approval_required, .chip.kind-approval_decided, .chip.kind-access_requested { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); background: var(--accent-soft); }
-.chip.kind-unlock, .chip.kind-handle_created, .chip.kind-secret_created, .chip.kind-handle_resumed { color: var(--ok); }
+.chip.kind-unlock, .chip.kind-handle_created, .chip.kind-secret_created, .chip.kind-handle_resumed, .chip.kind-project_created { color: var(--ok); }
 .chip.kind-lock, .chip.kind-handle_revoked, .chip.kind-secret_deleted { color: var(--muted); }
 
 /* ---------- forms ---------- */
@@ -252,3 +252,19 @@ select {
 .section h3 { margin-top: 0; }
 .detail-pane { position: sticky; top: 0; }
 .detail-pane > .muted { border: 1px dashed var(--border-strong); border-radius: 14px; padding: 24px; text-align: center; }
+
+/* ---------- projects ---------- */
+.health { display: flex; flex-direction: column; gap: 7px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 11px 14px; margin-bottom: 14px; box-shadow: var(--shadow); font-size: 13px; }
+.health-item { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; min-width: 0; }
+.health-item > span:not(.dot) { min-width: 0; overflow-wrap: anywhere; }
+.steps { margin: 4px 0 6px; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; color: var(--muted); }
+.steps li.now { color: var(--text); font-weight: 600; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips .chip { font-size: 12.5px; padding: 2px 6px 2px 10px; color: var(--text); }
+.row-main .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.row-main input[type="number"] { width: 130px; }
+
+/* The window can be 880px wide: below that the two panes stack. */
+@media (max-width: 1060px) {
+  .split { grid-template-columns: minmax(0, 1fr); }
+}

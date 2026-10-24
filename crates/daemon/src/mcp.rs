@@ -21,6 +21,7 @@ use unseenkey_core::handles::HandleRecord;
 use unseenkey_core::ids::Id;
 use unseenkey_core::policy::{explain, Policy, Rule};
 use unseenkey_core::presets;
+use unseenkey_core::projects::{decode_dir, ProjectRecord};
 use unseenkey_core::providers;
 use unseenkey_core::vault::{NewSecret, SecretKind, SecretMeta};
 
@@ -28,6 +29,9 @@ use unseenkey_core::vault::{NewSecret, SecretKind, SecretMeta};
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 /// Largest response body returned to a model.
 pub const BODY_LIMIT: usize = 256 * 1024;
+/// Header the stdio bridge uses to report the folder its client runs in,
+/// percent-encoded ([`unseenkey_core::projects::encode_dir`]).
+pub const PROJECT_DIR_HEADER: &str = "x-usk-project-dir";
 
 const INSTRUCTIONS: &str =
     "Unseenkey lets you *use* the owner's API keys without ever seeing them. \
@@ -137,6 +141,7 @@ fn find_handle(
     v: &crate::state::DaemonVault,
     caller: &str,
     secret_id: &Id,
+    project: Option<Id>,
 ) -> Option<HandleRecord> {
     let now = unseenkey_core::time::Clock::now_unix_ms(&unseenkey_core::time::SystemClock);
     v.handles()
@@ -144,6 +149,7 @@ fn find_handle(
         .into_iter()
         .find(|h| {
             h.secret_id == *secret_id
+                && h.project == project
                 && h.is_active(now)
                 && h.policy.callers.len() == 1
                 && h.policy.callers[0] == caller
@@ -158,14 +164,24 @@ fn ensure_handle(
     v: &mut crate::state::DaemonVault,
     caller: &str,
     secret_name: &str,
+    project: Option<&ProjectRecord>,
 ) -> Result<(HandleRecord, SecretMeta), ApiError> {
     let meta = v.get_by_name(secret_name)?.clone();
-    if let Some(h) = find_handle(v, caller, &meta.secret_id) {
+    if let Some(p) = project {
+        if !p.has_secret(&meta.secret_id) {
+            return Err(not_in_project(&meta.name, p));
+        }
+    }
+    let pid = project.map(|p| p.project_id);
+    if let Some(h) = find_handle(v, caller, &meta.secret_id, pid) {
         return Ok((h, meta));
     }
     let mut policy = default_policy(meta.provider.as_deref());
     policy.callers = vec![caller.to_string()];
-    let label = mcp_label(caller, &meta.name);
+    let label = match project {
+        Some(p) => format!("{caller}/{}/{}", p.name, meta.name),
+        None => mcp_label(caller, &meta.name),
+    };
     // A stale label from a revoked handle may exist; suffix if so.
     let label = if v
         .handle_by_label(&label)
@@ -175,12 +191,40 @@ fn ensure_handle(
     } else {
         label
     };
-    let (record, _plain) = v.create_handle(&meta.secret_id, &label, policy, None)?;
+    let (record, _plain) = v.create_handle_with(
+        &meta.secret_id,
+        &label,
+        policy,
+        None,
+        None,
+        unseenkey_core::vault::HandleOptions {
+            project: pid,
+            ..Default::default()
+        },
+    )?;
     let _ = v.audit(
         kinds::HANDLE_CREATED,
-        json!({ "id": record.handle_id.to_hex(), "label": record.label, "secret": meta.name, "caller": caller, "auto": true }),
+        json!({ "id": record.handle_id.to_hex(), "label": record.label, "secret": meta.name, "caller": caller, "auto": true, "project": project.map(|p| p.name.clone()) }),
     );
     Ok((record, meta))
+}
+
+/// The project whose folder the client runs in, if it reported one and a
+/// project covers it.
+fn scope_of(v: &crate::state::DaemonVault, dir: Option<&str>) -> Option<ProjectRecord> {
+    dir.and_then(|d| v.project_for_dir(d).ok().flatten().cloned())
+}
+
+/// Refusal for a secret outside the client's project.
+fn not_in_project(secret: &str, p: &ProjectRecord) -> ApiError {
+    ApiError::new(
+        StatusCode::FORBIDDEN,
+        "not_in_project",
+        format!(
+            "{secret:?} is not part of the project {:?} this folder belongs to; ask the owner to add it in Unseenkey > Projects (or `usk project attach {:?} {secret}`)",
+            p.name, p.name
+        ),
+    )
 }
 
 /// A tool error for a secret name the vault does not have.
@@ -193,15 +237,18 @@ fn unknown_secret(name: &str) -> Value {
     )
 }
 
-async fn list_secrets(s: &Arc<AppState>, caller: &str, args: &Value) -> Value {
+async fn list_secrets(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args: &Value) -> Value {
     let filter = args["filter"].as_str().map(|f| f.to_lowercase());
     let v = s.vault.lock().await;
     let list = match v.list() {
         Ok(l) => l,
         Err(e) => return tool_text(ApiError::from(e).message, true),
     };
+    let project = scope_of(&v, dir);
+    let pid = project.as_ref().map(|p| p.project_id);
     let items: Vec<Value> = list
         .into_iter()
+        .filter(|m| project.as_ref().is_none_or(|p| p.has_secret(&m.secret_id)))
         .filter(|m| {
             filter.as_deref().is_none_or(|f| {
                 m.name.to_lowercase().contains(f)
@@ -210,7 +257,7 @@ async fn list_secrets(s: &Arc<AppState>, caller: &str, args: &Value) -> Value {
             })
         })
         .map(|m| {
-            let (policy, existing) = match find_handle(&v, caller, &m.secret_id) {
+            let (policy, existing) = match find_handle(&v, caller, &m.secret_id, pid) {
                 Some(h) => (h.policy, true),
                 None => (default_policy(m.provider.as_deref()), false),
             };
@@ -220,6 +267,7 @@ async fn list_secrets(s: &Arc<AppState>, caller: &str, args: &Value) -> Value {
                 "mcp": policy.mcp,
                 "policy": explain(&policy),
                 "policy_is_default": !existing,
+                "project": project.as_ref().map(|p| p.name.clone()),
             })
         })
         .filter(|i| i["mcp"].as_bool().unwrap_or(true))
@@ -227,16 +275,22 @@ async fn list_secrets(s: &Arc<AppState>, caller: &str, args: &Value) -> Value {
     tool_json(&json!(items), false)
 }
 
-async fn explain_policy(s: &Arc<AppState>, caller: &str, args: &Value) -> Value {
+async fn explain_policy(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args: &Value) -> Value {
     let Some(name) = args["secret"].as_str() else {
         return tool_text("secret is required", true);
     };
     let v = s.vault.lock().await;
     let meta = match v.get_by_name(name) {
         Ok(m) => m.clone(),
-        Err(e) => return tool_text(ApiError::from(e).message, true),
+        Err(_) => return unknown_secret(name),
     };
-    let policy = find_handle(&v, caller, &meta.secret_id)
+    let project = scope_of(&v, dir);
+    if let Some(p) = &project {
+        if !p.has_secret(&meta.secret_id) {
+            return tool_text(not_in_project(&meta.name, p).message, true);
+        }
+    }
+    let policy = find_handle(&v, caller, &meta.secret_id, project.map(|p| p.project_id))
         .map(|h| h.policy)
         .unwrap_or_else(|| default_policy(meta.provider.as_deref()));
     tool_json(
@@ -245,7 +299,7 @@ async fn explain_policy(s: &Arc<AppState>, caller: &str, args: &Value) -> Value 
     )
 }
 
-async fn call_api(s: &Arc<AppState>, caller: &str, args: &Value) -> Value {
+async fn call_api(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args: &Value) -> Value {
     let (Some(name), Some(method), Some(path)) = (
         args["secret"].as_str(),
         args["method"].as_str(),
@@ -264,7 +318,8 @@ async fn call_api(s: &Arc<AppState>, caller: &str, args: &Value) -> Value {
                 true,
             );
         }
-        match ensure_handle(&mut v, caller, name) {
+        let project = scope_of(&v, dir);
+        match ensure_handle(&mut v, caller, name, project.as_ref()) {
             Ok((h, meta)) => (h, meta.provider),
             Err(e) if e.code == "not_found" => return unknown_secret(name),
             Err(e) => return tool_text(e.message, true),
@@ -377,7 +432,7 @@ async fn call_api(s: &Arc<AppState>, caller: &str, args: &Value) -> Value {
     tool_json(&result, broker_error)
 }
 
-async fn request_access(s: &Arc<AppState>, caller: &str, args: &Value) -> Value {
+async fn request_access(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args: &Value) -> Value {
     let (Some(name), Some(reason)) = (args["secret"].as_str(), args["reason"].as_str()) else {
         return tool_text("secret and reason are required", true);
     };
@@ -394,7 +449,8 @@ async fn request_access(s: &Arc<AppState>, caller: &str, args: &Value) -> Value 
                 true,
             );
         }
-        match ensure_handle(&mut v, caller, name) {
+        let project = scope_of(&v, dir);
+        match ensure_handle(&mut v, caller, name, project.as_ref()) {
             Ok((h, meta)) => {
                 let t = h.policy.approval.timeout_seconds;
                 (h, meta.name, t)
@@ -549,7 +605,7 @@ async fn request_access(s: &Arc<AppState>, caller: &str, args: &Value) -> Value 
     )
 }
 
-async fn store_secret(s: &Arc<AppState>, caller: &str, args: &Value) -> Value {
+async fn store_secret(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args: &Value) -> Value {
     if !s.mcp_allow_store {
         return tool_text(
             "store_secret is disabled; ask the user to run `usk add <name>`",
@@ -592,9 +648,13 @@ async fn store_secret(s: &Arc<AppState>, caller: &str, args: &Value) -> Value {
     });
     match res {
         Ok(id) => {
+            let project = scope_of(&v, dir);
+            if let Some(p) = &project {
+                let _ = v.attach_secret(&p.project_id, &id);
+            }
             let _ = v.audit(
                 kinds::SECRET_CREATED,
-                json!({ "id": id.to_hex(), "name": name, "provider": provider, "caller": caller }),
+                json!({ "id": id.to_hex(), "name": name, "provider": provider, "caller": caller, "project": project.map(|p| p.name) }),
             );
             s.rebuild_scrubber(&v);
             tool_json(
@@ -607,7 +667,15 @@ async fn store_secret(s: &Arc<AppState>, caller: &str, args: &Value) -> Value {
 }
 
 /// Dispatch one JSON-RPC message. `None` for notifications.
-pub async fn handle_message(s: &Arc<AppState>, caller: &str, msg: &Value) -> Option<Value> {
+/// Answer one JSON-RPC message for `caller`. `dir` is the folder the client
+/// reported it runs in (see [`unseenkey_core::projects`]); inside a
+/// project's folder the tools see only that project's secrets.
+pub async fn handle_message(
+    s: &Arc<AppState>,
+    caller: &str,
+    dir: Option<&str>,
+    msg: &Value,
+) -> Option<Value> {
     let id = msg.get("id").cloned();
     let method = msg["method"].as_str().unwrap_or("");
     let params = msg.get("params").cloned().unwrap_or(Value::Null);
@@ -628,11 +696,11 @@ pub async fn handle_message(s: &Arc<AppState>, caller: &str, msg: &Value) -> Opt
             let name = params["name"].as_str().unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
             match name {
-                "list_secrets" => list_secrets(s, caller, &args).await,
-                "call_api" => call_api(s, caller, &args).await,
-                "request_access" => request_access(s, caller, &args).await,
-                "explain_policy" => explain_policy(s, caller, &args).await,
-                "store_secret" => store_secret(s, caller, &args).await,
+                "list_secrets" => list_secrets(s, caller, dir, &args).await,
+                "call_api" => call_api(s, caller, dir, &args).await,
+                "request_access" => request_access(s, caller, dir, &args).await,
+                "explain_policy" => explain_policy(s, caller, dir, &args).await,
+                "store_secret" => store_secret(s, caller, dir, &args).await,
                 other => return Some(rpc_error(id, -32602, format!("unknown tool {other:?}"))),
             }
         }
@@ -712,6 +780,11 @@ pub async fn mcp_http(State(s): State<Arc<AppState>>, headers: HeaderMap, body: 
         .into_response();
     };
     s.touch().await;
+    let dir = headers
+        .get(PROJECT_DIR_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(decode_dir);
+    let dir = dir.as_deref();
     let parsed: Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(e) => {
@@ -727,7 +800,7 @@ pub async fn mcp_http(State(s): State<Arc<AppState>>, headers: HeaderMap, body: 
         Value::Array(batch) => {
             let mut results = Vec::new();
             for m in &batch {
-                if let Some(r) = handle_message(&s, &caller, m).await {
+                if let Some(r) = handle_message(&s, &caller, dir, m).await {
                     results.push(r);
                 }
             }
@@ -737,7 +810,7 @@ pub async fn mcp_http(State(s): State<Arc<AppState>>, headers: HeaderMap, body: 
                 Some(Value::Array(results))
             }
         }
-        m => handle_message(&s, &caller, &m).await,
+        m => handle_message(&s, &caller, dir, &m).await,
     };
     match out {
         Some(v) => (

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, fmtTime, type AuditEvent } from "../api";
 
-const KINDS = ["", "use", "deny", "anomaly", "canary_tripped", "egress_blocked", "approval_required", "approval_decided", "reveal", "inject", "handle_created", "handle_revoked", "handle_resumed", "secret_created", "unlock", "lock", "audit_tampered"];
+const KINDS = ["", "use", "deny", "anomaly", "canary_tripped", "egress_blocked", "approval_required", "approval_decided", "reveal", "inject", "handle_created", "handle_revoked", "handle_resumed", "secret_created", "project_created", "project_changed", "unlock", "lock", "audit_tampered"];
 
 function describe(e: AuditEvent): string {
   const b = e.body as Record<string, string | number | string[] | undefined>;
@@ -26,6 +26,12 @@ function describe(e: AuditEvent): string {
       return `${b.detail} → ${b.response}`;
     case "handle_resumed":
       return `handle ${b.id} back to normal`;
+    case "project_created":
+      return `project ${b.name} created${(b.paths as string[] | undefined)?.length ? ` for ${(b.paths as string[]).join(", ")}` : ""}`;
+    case "project_changed":
+      return `project ${b.name} changed${b.added ? ": key added" : b.removed ? ": key removed" : ""}`;
+    case "project_deleted":
+      return `project ${b.name} deleted (its keys stay)`;
     case "lock":
       return `vault locked${b.reason ? ` (${b.reason})` : ""}`;
     default:

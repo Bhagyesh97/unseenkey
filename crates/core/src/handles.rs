@@ -209,6 +209,10 @@ pub struct HandleRecord {
     /// The incident that set `status`, kept until the owner resumes the handle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_anomaly: Option<Anomaly>,
+    /// The project this handle was made for; its requests count toward that
+    /// project's daily limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<Id>,
 }
 
 /// What the broker does to a handle that behaves unusually. The owner picks
@@ -390,6 +394,7 @@ mod tests {
             on_anomaly: AnomalyResponse::default(),
             status: HandleStatus::default(),
             last_anomaly: None,
+            project: None,
         };
         assert!(r.is_active(99));
         assert!(!r.is_active(100));

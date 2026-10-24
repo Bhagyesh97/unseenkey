@@ -804,3 +804,73 @@ fn provider_changes_and_user_presets_from_the_cli() {
     assert!(env_text.contains("/p/acme"), "{env_text}");
     assert!(env_text.contains("ACME_TOKEN=usk_h_"), "{env_text}");
 }
+
+#[test]
+fn projects_from_the_cli() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    let _stop = StopDaemon(&vault);
+    assert!(usk(&vault, &["init", "--profile", "light"], PW)
+        .status
+        .success());
+    let app = dir.path().join("my-app");
+    std::fs::create_dir_all(&app).unwrap();
+    let openai = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEF";
+    std::fs::write(
+        app.join(".env"),
+        format!("PORT=3000\nOPENAI_API_KEY={openai}\n"),
+    )
+    .unwrap();
+    let app_s = app.to_str().unwrap();
+
+    // One step: project for the folder, keys into the vault, handles in the file.
+    let o = usk(&vault, &["project", "protect", app_s], PW);
+    assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
+    let t = out(&o);
+    assert!(t.contains("Created project my-app"), "{t}");
+    assert!(t.contains("is protected"), "{t}");
+    let env = std::fs::read_to_string(app.join(".env")).unwrap();
+    assert!(!env.contains(openai), "{env}");
+    // Protecting again finds the same project and nothing left to move.
+    let o = usk(&vault, &["project", "protect", app_s], "");
+    assert!(out(&o).contains("nothing to fix"), "{}", out(&o));
+
+    let o = usk(&vault, &["--json", "project", "ls"], "");
+    let list: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
+    assert_eq!(list.as_array().unwrap().len(), 1, "{list}");
+    assert_eq!(list[0]["name"], "my-app");
+    assert_eq!(list[0]["secrets"][0]["name"], "openai-api-key");
+    let o = usk(&vault, &["--json", "handle", "ls"], "");
+    let handles: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
+    assert_eq!(handles[0]["project"], "my-app", "{handles}");
+
+    let o = usk(
+        &vault,
+        &["project", "set", "my-app", "--cap", "500/day"],
+        "",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let o = usk(&vault, &["project", "show", "MY-APP"], "");
+    assert!(out(&o).contains("0 of 500 requests"), "{}", out(&o));
+
+    let o = usk(
+        &vault,
+        &["add", "other", "--stdin"],
+        "sk-proj-zyxwvutsrqponmlkjihgfedcba9876543210ZYXWVU",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let o = usk(&vault, &["project", "attach", "my-app", "other"], "");
+    assert!(out(&o).contains("openai-api-key, other"), "{}", out(&o));
+    let o = usk(&vault, &["project", "detach", "my-app", "other"], "");
+    assert!(out(&o).contains("now uses: openai-api-key."), "{}", out(&o));
+    let o = usk(&vault, &["project", "attach", "nope", "other"], "");
+    assert!(!o.status.success());
+    assert!(err(&o).contains("no project named"), "{}", err(&o));
+
+    let o = usk(&vault, &["project", "rm", "my-app", "--yes"], "");
+    assert!(o.status.success(), "{}", err(&o));
+    let o = usk(&vault, &["project", "ls"], "");
+    assert!(out(&o).contains("No projects yet"), "{}", out(&o));
+    // The secrets stay.
+    assert!(out(&usk(&vault, &["ls"], "")).contains("openai-api-key"));
+}

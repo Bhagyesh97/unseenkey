@@ -32,7 +32,7 @@ export function Secrets({ tick }: { tick: number }) {
     <div className="split">
       <section className="list-pane">
         <header className="pane-head">
-          <h2>Secrets</h2>
+          <h2>Keys</h2>
           <button className="primary" onClick={() => setAdding(true)}>
             + Add
           </button>
@@ -142,7 +142,7 @@ function AddSecret({ onDone, onCancel }: { onDone: () => void; onCancel: () => v
           {presets.map((p) => <option key={p.id} value={p.id}>{p.display}{p.id === "generic" ? "" : ` — ${p.upstreams.join(", ")}`}</option>)}
         </select>
       </label>
-      <label>Allowed host(s) (optional; the provider's hosts when left empty)
+      <label>Allowed websites (optional; the provider's own when left empty)
         <input placeholder="api.example.com, *.example.com" value={hosts} onChange={(e) => setHosts(e.target.value)} />
       </label>
       {err && <div className="err">{err}</div>}
@@ -159,6 +159,12 @@ function SecretDetail({ secret, onChange }: { secret: SecretMeta; onChange: () =
   const [err, setErr] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
+  const [inProjects, setInProjects] = useState<string[] | null>(null);
+  useEffect(() => {
+    void api.projects()
+      .then((ps) => setInProjects(ps.filter((p) => p.secrets.some((s) => s.id === secret.secret_id)).map((p) => p.name)))
+      .catch(() => setInProjects(null));
+  }, [secret.secret_id, secret.updated_at]);
 
   const patch = async (body: Record<string, unknown>) => {
     setBusy(true);
@@ -196,7 +202,8 @@ function SecretDetail({ secret, onChange }: { secret: SecretMeta; onChange: () =
       <dl className="kv">
         <dt>Type</dt><dd>{secret.kind}</dd>
         <dt>Provider</dt><dd>{secret.provider ?? "—"}</dd>
-        <dt>Allowed hosts</dt><dd>{secret.upstreams.join(", ") || <span className="warn-text">none</span>}</dd>
+        <dt>Allowed websites</dt><dd>{secret.upstreams.join(", ") || <span className="warn-text">none</span>}</dd>
+        {inProjects && <><dt>Projects</dt><dd>{inProjects.length ? inProjects.join(", ") : <span className="muted">none (add it from a project's page)</span>}</dd></>}
         <dt>Versions</dt><dd>{secret.value_version}</dd>
         <dt>Notes</dt><dd>{secret.notes ?? "—"}</dd>
         <dt>Value</dt>
@@ -285,7 +292,7 @@ function EditSettings({ secret, onDone, onCancel }: { secret: SecretMeta; onDone
           {presets.map((p) => <option key={p.id} value={p.id}>{p.display}</option>)}
         </select>
       </label>
-      <label>Allowed hosts (comma separated; the only places this secret can ever be sent)
+      <label>Allowed websites (comma separated; the only places this key can ever be sent)
         <input placeholder="api.example.com, *.example.com" value={hosts} onChange={(e) => setHosts(e.target.value)} />
       </label>
       {splitHosts(hosts).length === 0 && <div className="err">With no host the secret cannot be used anywhere. Add at least one.</div>}

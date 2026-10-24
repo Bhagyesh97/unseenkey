@@ -215,6 +215,15 @@ The standing (`status`: `normal`, `throttled` with `until`, `approval_required`,
 
 What this does not do yet: baselines ("5× the usual volume for this hour"), first-seen endpoints or models, spend in currency, and binding a handle to the process that may use it. Those are the next slices; this one makes the simplest claims true: a leaked handle cannot run up a bill past its cap, a planted canary tells you the moment someone has your files, and a tool that probes gets slowed, stopped or asked.
 
+## Projects
+
+A project names the code folders of one app and the secrets it uses; a secret can be in several. It is an encrypted `project` record (name, normalised folders, secret ids, `cap_per_day`, notes). Two things follow from it:
+
+- **Agent scope.** An MCP client whose reported folder falls inside a project's folder (the deepest match wins) sees and uses only that project's secrets; see the MCP section.
+- **A daily limit per project.** Handles may carry the project they were made for (`usk project protect`, `usk guard fix --project`, `usk handle create --project`, and MCP handles created inside the folder). After the host lock and before policy evaluation, the broker sums the last 24 hours of requests across the project's handles; at `cap_per_day` it answers `429 project_cap_reached` and audits a `deny` with `reason: project_cap`. Handles not made for the project are not counted or held back.
+
+Deleting a secret takes it out of every project. Deleting a project keeps its secrets and handles; the handles stop counting toward any limit.
+
 ## Injection mode (`usk run`)
 
 ```

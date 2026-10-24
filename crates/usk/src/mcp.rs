@@ -220,6 +220,20 @@ pub fn clients(paths: &VaultPaths, json_out: bool) -> Result<(), CliError> {
     Ok(())
 }
 
+/// The folder the MCP client is working in: `USK_PROJECT_DIR` if set, then
+/// `CLAUDE_PROJECT_DIR` (Claude Code), then the folder the client started
+/// this bridge in. The daemon scopes the client to the project covering it.
+fn client_dir() -> Option<String> {
+    ["USK_PROJECT_DIR", "CLAUDE_PROJECT_DIR"]
+        .iter()
+        .find_map(|k| std::env::var(k).ok().filter(|v| !v.trim().is_empty()))
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|d| d.display().to_string())
+        })
+}
+
 /// stdio ⇄ `/mcp` bridge. Runs until stdin closes.
 pub fn bridge(paths: &VaultPaths, client: &str) -> Result<(), CliError> {
     let token = std::fs::read_to_string(token_path(paths, client))
@@ -231,6 +245,7 @@ pub fn bridge(paths: &VaultPaths, client: &str) -> Result<(), CliError> {
         })?;
     let c = Client::connect(paths, true)?;
     let url = format!("{}/mcp", c.base_url());
+    let dir = client_dir().map(|d| unseenkey_core::projects::encode_dir(&d));
     let agent = ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(600))
         .build();
@@ -247,11 +262,14 @@ pub fn bridge(paths: &VaultPaths, client: &str) -> Result<(), CliError> {
         let req_id = serde_json::from_str::<Value>(&line)
             .ok()
             .and_then(|v| v.get("id").cloned());
-        let resp = agent
+        let mut req = agent
             .post(&url)
             .set("Authorization", &format!("Bearer {token}"))
-            .set("Content-Type", "application/json")
-            .send_string(&line);
+            .set("Content-Type", "application/json");
+        if let Some(d) = &dir {
+            req = req.set(unseenkey_daemon::mcp::PROJECT_DIR_HEADER, d);
+        }
+        let resp = req.send_string(&line);
         let out = match resp {
             Ok(r) if r.status() == 202 => None,
             Ok(r) => Some(r.into_string().unwrap_or_default()),

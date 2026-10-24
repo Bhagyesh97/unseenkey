@@ -33,6 +33,8 @@ pub enum RecordKind {
     Caller,
     /// A vault-level setting.
     Setting,
+    /// A project: folders and the secrets they use.
+    Project,
 }
 
 impl RecordKind {
@@ -46,6 +48,7 @@ impl RecordKind {
             RecordKind::Grant => "grant",
             RecordKind::Caller => "caller",
             RecordKind::Setting => "setting",
+            RecordKind::Project => "project",
         }
     }
 
@@ -59,6 +62,7 @@ impl RecordKind {
             "grant" => RecordKind::Grant,
             "caller" => RecordKind::Caller,
             "setting" => RecordKind::Setting,
+            "project" => RecordKind::Project,
             _ => return None,
         })
     }

@@ -24,6 +24,7 @@ pub mod ids;
 pub mod import;
 pub mod policy;
 pub mod presets;
+pub mod projects;
 pub mod providers;
 pub mod storage;
 pub mod time;
