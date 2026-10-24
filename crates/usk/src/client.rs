@@ -32,8 +32,13 @@ impl Client {
             token: token.trim().to_string(),
             agent,
         };
-        // Stale files from a crashed daemon: probe.
-        match c.agent.get(&format!("{}/healthz", c.base)).call() {
+        // Stale files from a crashed daemon: probe, and with the token. A new
+        // daemon binds its port before it writes `daemon.token`, so right
+        // after a spawn the address can answer while the token on disk is
+        // still the dead daemon's; an unauthenticated probe would hand that
+        // token to the first request (a 401 on the first unlock). Treat a
+        // refused token as "not ready" so `connect` keeps waiting.
+        match c.request("GET", "/v1/status").call() {
             Ok(r) if r.status() == 200 => Some(c),
             _ => None,
         }

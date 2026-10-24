@@ -2,6 +2,10 @@
 
 The top section of this file becomes the release notes when a `v*` tag is pushed.
 
+## Unreleased
+
+- **The first unlock after the daemon starts no longer fails with "missing or invalid session token".** A new daemon opens its port a moment before it writes its token, and the app and CLI checked only that the port answered, so the first request could carry the previous daemon's token; the second try worked. They now check with the token and wait until it is the current one.
+
 ## 0.1.2 — 2026-10-24
 
 Projects:
