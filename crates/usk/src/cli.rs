@@ -355,6 +355,7 @@ pub fn run() -> Result<(), CliError> {
             },
         },
         Command::Secret { action } => match action {
+            SecretAction::Replace { name, stdin } => secret_replace(&paths, &name, stdin),
             SecretAction::Set {
                 name,
                 allow_injection,
@@ -1693,7 +1694,15 @@ enum GuardAction {
 
 #[derive(Subcommand)]
 enum SecretAction {
-    /// Set flags and metadata on a secret.
+    /// Replace a secret's value (a new or rotated key). Handles keep working.
+    Replace {
+        /// Secret name.
+        name: String,
+        /// Read the new value from standard input instead of prompting.
+        #[arg(long)]
+        stdin: bool,
+    },
+    /// Set flags and metadata on a secret (never the value: see `replace`).
     Set {
         /// Secret name.
         name: String,
@@ -1716,6 +1725,43 @@ enum SecretAction {
         #[arg(long)]
         provider: Option<String>,
     },
+}
+
+fn secret_replace(paths: &VaultPaths, name: &str, stdin: bool) -> Result<(), CliError> {
+    let c = unlocked(paths)?;
+    let meta = c.get(&format!("/v1/secrets/{name}"))?;
+    if matches!(
+        meta["kind"].as_str(),
+        Some("aws_credentials" | "oauth2_client")
+    ) {
+        return Err(CliError::general(format!(
+            "{name} holds several values; remove it with `usk rm {name}` and add it again"
+        )));
+    }
+    let value = if stdin {
+        uio::read_secret_rest()?
+    } else {
+        uio::read_secret_line(&format!("New value for {name} (hidden): "))?
+    };
+    let text = std::str::from_utf8(value.expose())
+        .map_err(|_| CliError::general("value must be UTF-8 text"))?;
+    if text.trim().is_empty() {
+        return Err(CliError::general("empty value; nothing changed"));
+    }
+    // Same rule as `add` and the daemon: a single-line key loses stray
+    // spaces and line breaks at either end (older daemons do not do this).
+    let text = if text.trim().contains('\n') {
+        text
+    } else {
+        text.trim()
+    };
+    let m = c.patch(&format!("/v1/secrets/{name}"), json!({ "value": text }))?;
+    println!(
+        "Replaced the value of {} (now version {}). Its handles keep working with the new key.",
+        m["name"].as_str().unwrap_or(name),
+        m["value_version"].as_u64().unwrap_or(0)
+    );
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

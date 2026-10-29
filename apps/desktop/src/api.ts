@@ -169,6 +169,7 @@ export const api = {
   callers: () => api.call<{ name: string; caller: string; last_seen_at: number | null }[]>("GET", "/v1/callers"),
   guardScan: (path: string) => wrap(invoke<EnvFinding[]>("guard_scan", { path })),
   guardFix: (path: string, project?: string) => wrap(invoke<string>("guard_fix", { path, project: project ?? null })),
+  restartDaemon: () => wrap(invoke<void>("restart_daemon")),
   envFiles: (dir: string) => wrap(invoke<string[]>("env_files", { dir })),
   projects: () => api.call<Project[]>("GET", "/v1/projects"),
   projectForDir: (dir: string) => api.call<Project[]>("GET", `/v1/projects?dir=${encodeURIComponent(dir)}`).then((l) => l[0] ?? null),

@@ -404,8 +404,9 @@ pub struct Detected {
 /// `POST /v1/secrets`
 pub async fn create_secret(
     State(s): State<Arc<AppState>>,
-    Json(req): Json<CreateSecret>,
+    Json(mut req): Json<CreateSecret>,
 ) -> Result<(StatusCode, Json<Created>), ApiError> {
+    tidy_value(&mut req.value);
     if req.value.is_empty() {
         return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
@@ -604,6 +605,17 @@ fn resolve(v: &crate::state::DaemonVault, r: &str) -> Result<Id, ApiError> {
     Ok(v.get_by_name(r)?.secret_id)
 }
 
+/// A pasted key often carries a space, tab or line break at either end (a
+/// copy button, a textarea). Providers refuse such a key with a plain 401, so
+/// single-line values are trimmed; multi-line ones (PEM keys, credential
+/// files) are kept exactly as given.
+fn tidy_value(v: &mut Zeroizing<String>) {
+    let t = v.trim_matches(|c: char| c.is_whitespace());
+    if !t.contains('\n') && t.len() != v.len() {
+        *v = Zeroizing::new(t.to_string());
+    }
+}
+
 /// A secret by id (hex) or name.
 pub fn resolve_secret(v: &crate::state::DaemonVault, r: &str) -> Result<Id, ApiError> {
     resolve(v, r)
@@ -680,8 +692,11 @@ pub struct PatchSecret {
 pub async fn patch_secret(
     State(s): State<Arc<AppState>>,
     Path(r): Path<String>,
-    Json(p): Json<PatchSecret>,
+    Json(mut p): Json<PatchSecret>,
 ) -> ApiResult<SecretMeta> {
+    if let Some(value) = p.value.as_mut() {
+        tidy_value(value);
+    }
     let mut v = s.vault.lock().await;
     let id = resolve(&v, &r)?;
     if let Some(value) = &p.value {

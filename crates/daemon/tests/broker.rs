@@ -719,8 +719,25 @@ async fn template_mode_fills_a_bearer_authorization_header_and_refuses_unfillabl
     );
     assert_eq!(code, 200, "{body}");
     assert!(body["headers"].get("authorization").is_none(), "{body}");
+    // A pasted value with a line break at the end is tidied on the way in,
+    // so it fills the header like any other.
+    let (code, _) = env.post("/v1/secrets", json!({ "name": "pasted", "value": "tok_abcdefghijklmnop\n", "provider": "generic", "upstreams": ["127.0.0.1"] }));
+    assert_eq!(code, 201);
+    let (handle_p, _) = create_handle(&env, "pasted", "tmpl-pasted", None);
+    let (code, body, _) = Env::call(
+        env.agent
+            .request("GET", &format!("{}/p/generic/api/me", env.base))
+            .set("X-Usk-Handle", &handle_p)
+            .set(
+                "X-Usk-Upstream",
+                &format!("http://127.0.0.1:{}", env.mock.port()),
+            )
+            .set("Authorization", "Bearer {{usk:pasted}}")
+            .call(),
+    );
+    assert_eq!(code, 200, "{body}");
     // A stored value that cannot live in a header is refused, not dropped.
-    let (code, _) = env.post("/v1/secrets", json!({ "name": "ragged", "value": "tok_abcdefghijklmnop\n", "provider": "generic", "upstreams": ["127.0.0.1"] }));
+    let (code, _) = env.post("/v1/secrets", json!({ "name": "ragged", "value": "tok_abcdefgh\u{7f}ijklmnop", "provider": "generic", "upstreams": ["127.0.0.1"] }));
     assert_eq!(code, 201);
     let (handle2, _) = create_handle(&env, "ragged", "tmpl-ragged", None);
     let (code, body, _) = Env::call(

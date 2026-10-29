@@ -4,6 +4,13 @@ The top section of this file becomes the release notes when a `v*` tag is pushed
 
 ## Unreleased
 
+From a second Claude Code session stuck asking its owner to "check" a Hostinger and a Cloudflare key:
+
+- **`usk secret replace <name>` and "Replace value" in the app.** There was no way to put a new key under an existing name: `usk secret set` only changes settings, so following the advice to "store it again" changed nothing. The handles keep working with the new value.
+- **Pasted keys lose stray spaces and line breaks.** The app sent a pasted key exactly as typed, and the daemon stored it that way; providers answer such a key with a bare 401. Single-line values are now trimmed by the app, the CLI and the daemon; multi-line ones (PEM keys) are kept as given.
+- **A refused key says what to do.** When the provider itself answers 401 or 403, `call_api` adds a `hint`: retrying will not help, here is how the owner replaces the key; for a secret without a provider, that no credentials were sent and how to set one.
+- **The app notices an outdated service.** If the running daemon is another version than the app (an older install, or a developer build an MCP client started first), a banner says so and offers "Restart the service".
+
 - **The first unlock after the daemon starts no longer fails with "missing or invalid session token".** A new daemon opens its port a moment before it writes its token, and the app and CLI checked only that the port answered, so the first request could carry the previous daemon's token; the second try worked. They now check with the token and wait until it is the current one.
 
 ## 0.1.2 — 2026-10-24

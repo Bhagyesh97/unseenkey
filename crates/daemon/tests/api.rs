@@ -484,3 +484,55 @@ async fn one_daemon_per_vault() {
     r.shutdown().await;
     serve(opts(true)).await.unwrap().shutdown().await;
 }
+
+/// A key pasted with a space or line break at either end is stored without
+/// it (providers answer such a key with a bare 401); a multi-line value is
+/// kept as given. Replacing the value goes through the same tidying.
+#[tokio::test(flavor = "multi_thread")]
+async fn pasted_values_lose_surrounding_whitespace() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = start(dir.path(), false).await;
+    let c = C::new(&r);
+    assert_eq!(c.post("/v1/unlock", json!({ "password": PW })).0, 200);
+    let reveal = |name: &str| {
+        c.post(
+            &format!("/v1/secrets/{name}/reveal"),
+            json!({ "confirm": true }),
+        )
+        .1["value"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    let (code, b) = c.post(
+        "/v1/secrets",
+        json!({ "name": "pasted", "value": "  sk_test_51Hpaddedvalue1234567 
+" }),
+    );
+    assert_eq!(code, 201, "{b}");
+    assert_eq!(reveal("pasted"), "sk_test_51Hpaddedvalue1234567");
+
+    let pem = "-----BEGIN KEY-----
+abc
+-----END KEY-----
+";
+    let (code, b) = c.post("/v1/secrets", json!({ "name": "pem", "value": pem }));
+    assert_eq!(code, 201, "{b}");
+    assert_eq!(reveal("pem"), pem, "multi-line values are kept exactly");
+
+    let (code, m) = c.patch(
+        "/v1/secrets/pasted",
+        json!({ "value": "	sk_test_51Hrotatedvalue7654321  " }),
+    );
+    assert_eq!(code, 200, "{m}");
+    assert_eq!(m["value_version"], 2);
+    assert_eq!(reveal("pasted"), "sk_test_51Hrotatedvalue7654321");
+    let (code, e) = c.patch("/v1/secrets/pasted", json!({ "value": "   " }));
+    assert_eq!(
+        (code, e["error"].as_str()),
+        (400, Some("empty_value")),
+        "{e}"
+    );
+    r.shutdown().await;
+}

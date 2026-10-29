@@ -227,6 +227,24 @@ fn not_in_project(secret: &str, p: &ProjectRecord) -> ApiError {
     )
 }
 
+/// What to tell the agent (and through it the owner) when the provider itself
+/// refused the request: retrying cannot help, only the owner can.
+fn refused_hint(secret: &str, preset: &str, status: u16, templated: bool) -> String {
+    if preset == "generic" && !templated {
+        return format!(
+            "{secret:?} has no provider, so Unseenkey sent no credentials. Ask the owner to set its provider (Unseenkey app: Keys > {secret} > Edit settings > Provider, or `usk secret set {secret} --provider <id>`; `usk presets` lists them), or send the header yourself with the placeholder {{{{usk:{secret}}}}}."
+        );
+    }
+    let why = if status == 401 {
+        "the stored key is wrong, expired or revoked"
+    } else {
+        "the stored key lacks permission for this endpoint, or is wrong"
+    };
+    format!(
+        "The provider refused the stored key (HTTP {status}): most likely {why}. Retrying will not help. Ask the owner to paste a fresh key: Unseenkey app: Keys > {secret} > Replace value, or `usk secret replace {secret}`. (`usk secret set` changes settings only, never the value.)"
+    )
+}
+
 /// A tool error for a secret name the vault does not have.
 fn unknown_secret(name: &str) -> Value {
     tool_text(
@@ -352,6 +370,10 @@ async fn call_api(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args: &Val
             true,
         );
     }
+    let templated = args["headers"].as_object().is_some_and(|h| {
+        h.values()
+            .any(|v| v.as_str().is_some_and(|s| s.contains("{{usk:")))
+    });
     let mut headers = HeaderMap::new();
     if let Some(h) = args["headers"].as_object() {
         for (k, v) in h {
@@ -426,9 +448,12 @@ async fn call_api(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args: &Val
     let body_text = String::from_utf8_lossy(&collected).into_owned();
     // Broker-side refusals (4xx with our JSON error body) surface as tool errors.
     let broker_error = out_headers.get("x-usk-handle-id").is_none() && status >= 400;
-    let result = json!({
+    let mut result = json!({
         "status": status, "headers": out_headers, "body": body_text, "truncated": truncated,
     });
+    if !broker_error && (status == 401 || status == 403) {
+        result["hint"] = json!(refused_hint(name, &preset.id, status, templated));
+    }
     tool_json(&result, broker_error)
 }
 

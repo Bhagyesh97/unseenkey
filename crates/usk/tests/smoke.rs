@@ -874,3 +874,45 @@ fn projects_from_the_cli() {
     // The secrets stay.
     assert!(out(&usk(&vault, &["ls"], "")).contains("openai-api-key"));
 }
+
+#[test]
+fn replacing_a_value_keeps_the_handles() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    let _stop = StopDaemon(&vault);
+    assert!(usk(&vault, &["init", "--profile", "light"], PW)
+        .status
+        .success());
+    let o = usk(
+        &vault,
+        &["add", "deploy", "--stdin"],
+        &format!("{PW}qwertyuiopasdfghjklzxcvbnm123456"),
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let o = usk(&vault, &["handle", "create", "deploy", "--label", "ci"], "");
+    assert!(o.status.success(), "{}", err(&o));
+
+    let o = usk(
+        &vault,
+        &["secret", "replace", "deploy", "--stdin"],
+        "  zxcvbnmasdfghjklqwertyuiop654321 
+",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(out(&o).contains("now version 2"), "{}", out(&o));
+    let o = usk(&vault, &["reveal", "deploy", "--yes"], "");
+    assert!(
+        out(&o).contains("zxcvbnmasdfghjklqwertyuiop654321"),
+        "{}",
+        out(&o)
+    );
+    assert!(!out(&o).contains(" zxcv"), "trimmed: {}", out(&o));
+    let o = usk(&vault, &["--json", "handle", "ls"], "");
+    let hs: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
+    assert_eq!(hs[0]["label"], "ci");
+    assert_eq!(hs[0]["active"], true, "the handle survives the new value");
+
+    let o = usk(&vault, &["secret", "replace", "deploy", "--stdin"], "   ");
+    assert!(!o.status.success());
+    assert!(err(&o).contains("empty value"), "{}", err(&o));
+}

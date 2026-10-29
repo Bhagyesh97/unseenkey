@@ -96,7 +96,7 @@ function AddSecret({ onDone, onCancel }: { onDone: () => void; onCancel: () => v
     setErr(null);
     setBusy(true);
     try {
-      const body: Record<string, unknown> = { name: name.trim(), value, notes: notes || null };
+      const body: Record<string, unknown> = { name: name.trim(), value: value.includes("\n") ? value : value.trim(), notes: notes || null };
       if (provider) body.provider = provider;
       const list = splitHosts(hosts);
       if (list.length) body.upstreams = list;
@@ -159,6 +159,7 @@ function SecretDetail({ secret, onChange }: { secret: SecretMeta; onChange: () =
   const [err, setErr] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
+  const [replacing, setReplacing] = useState(false);
   const [inProjects, setInProjects] = useState<string[] | null>(null);
   useEffect(() => {
     void api.projects()
@@ -219,9 +220,14 @@ function SecretDetail({ secret, onChange }: { secret: SecretMeta; onChange: () =
       </dl>
       {editing ? (
         <EditSettings secret={secret} onDone={async () => { setEditing(false); await onChange(); }} onCancel={() => setEditing(false)} />
+      ) : replacing ? (
+        <ReplaceValue secret={secret} onDone={async () => { setReplacing(false); await onChange(); }} onCancel={() => setReplacing(false)} />
       ) : (
         <div className="actions">
           <button onClick={() => setEditing(true)}>Edit settings</button>
+          {secret.kind !== "aws_credentials" && secret.kind !== "oauth2_client" && (
+            <button onClick={() => setReplacing(true)}>Replace value</button>
+          )}
         </div>
       )}
       <h3>Flags</h3>
@@ -303,6 +309,40 @@ function EditSettings({ secret, onDone, onCancel }: { secret: SecretMeta; onDone
       <div className="actions">
         <button onClick={onCancel} disabled={busy}>Cancel</button>
         <button className="primary" disabled={busy || splitHosts(hosts).length === 0} onClick={() => void save()}>{busy ? "Saving…" : "Save settings"}</button>
+      </div>
+    </div>
+  );
+}
+
+/** Paste a new or rotated key. The handles keep working; only the value changes. */
+function ReplaceValue({ secret, onDone, onCancel }: { secret: SecretMeta; onDone: () => Promise<void>; onCancel: () => void }) {
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const save = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.call("PATCH", `/v1/secrets/${secret.secret_id}`, { value: value.trim() });
+      setValue("");
+      await onDone();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="section">
+      <h3>Replace the value of {secret.name}</h3>
+      <p className="muted small">Paste the new key, for example after you made a fresh one at the provider. Everything that uses {secret.name} keeps working and gets the new key on its next request.</p>
+      <label>New value
+        <input type="password" autoFocus autoComplete="off" spellCheck={false} value={value} onChange={(e) => setValue(e.target.value)} placeholder="Paste the new key" />
+      </label>
+      {err && <div className="err">{err}</div>}
+      <div className="actions">
+        <button className="primary" disabled={busy || !value.trim()} onClick={() => void save()}>{busy ? "Saving…" : "Save new value"}</button>
+        <button onClick={onCancel}>Cancel</button>
       </div>
     </div>
   );

@@ -98,6 +98,7 @@ usk policy explain <id>
 usk env <name> [--policy chat] [--shell sh|powershell|cmd|dotenv]   print the variables for the provider preset (creates handle)
 usk run --with VAR=name [...] -- <cmd…>   inject secrets into a child's environment (needs --allow-injection); output scrubbed; exit code propagates
 usk secret set <name> [--allow-injection bool] [--no-scrub bool] [--notes …] [--tag …] [--upstream host] [--provider id]   # hosts are normalised (https://host/path → host); a new provider brings its hosts
+usk secret replace <name> [--stdin]   new value under the same name (a rotated key); handles keep working
 usk guard scan [.env]            which lines look like secrets, and which can become handles
 usk guard fix  [.env] [--dry-run] [--project p]  move them into the vault, rewrite the file with handles + base-URL variables
 usk project protect [dir] [--env .env] [--dry-run]   one step: project for the folder, keys out of its .env, handles for the project

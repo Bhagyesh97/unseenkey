@@ -93,6 +93,26 @@ fn unlock(state: tauri::State<'_, AppData>, password: String) -> Result<(), Stri
         .map_err(err_string)
 }
 
+/// Stop whatever daemon serves the vault and start this app's own. Used when
+/// the running one is another version (an older install, a developer build
+/// that an MCP client started first). The vault comes back locked.
+#[tauri::command(async)]
+fn restart_daemon(state: tauri::State<'_, AppData>) -> Result<(), String> {
+    let _g = state.connect_lock.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(c) = Client::try_connect(&state.paths) {
+        let _ = c.post("/v1/shutdown", json!({}));
+        let gone = usk::daemon::wait_until(std::time::Duration::from_secs(10), || {
+            Client::try_connect(&state.paths).is_none().then_some(())
+        });
+        if gone.is_none() {
+            return Err("error: the running service did not stop; quit it from its tray icon or restart the computer".into());
+        }
+    }
+    Client::connect(&state.paths, true)
+        .map(|_| ())
+        .map_err(err_string)
+}
+
 #[tauri::command(async)]
 fn lock(state: tauri::State<'_, AppData>) -> Result<(), String> {
     if let Some(c) = Client::try_connect(&state.paths) {
@@ -428,6 +448,7 @@ pub fn run() {
             guard_scan,
             guard_fix,
             env_files,
+            restart_daemon,
             device_unlock_status,
             device_unlock_enroll,
             device_unlock,

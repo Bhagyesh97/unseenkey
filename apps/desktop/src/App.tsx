@@ -44,6 +44,7 @@ export function App() {
   const [tick, setTick] = useState(0);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [updating, setUpdating] = useState(false);
+  const [restarting, setRestarting] = useState(false);
 
   // One silent check at startup; failures (offline, private repo) are ignored.
   useEffect(() => {
@@ -153,6 +154,15 @@ export function App() {
       </aside>
       <main className="content">
         {error && <div className="banner error">{error}</div>}
+        {status?.daemon && status.daemon.version !== status.app_version && (
+          <div className="banner error">
+            The Unseenkey service running now is version {status.daemon.version}, but this app is {status.app_version}, so some pages will not work.{" "}
+            <button className="link" disabled={restarting} onClick={() => { setRestarting(true); void api.restartDaemon().catch((e) => setError((e as Error).message)).finally(() => { setRestarting(false); void refresh(); }); }}>
+              {restarting ? "Restarting…" : "Restart the service"}
+            </button>
+            <span className="muted small"> (the vault locks; unlock it again afterwards)</span>
+          </div>
+        )}
         {toast && <div className="banner info">{toast}</div>}
         {update && (
           <div className="banner info">

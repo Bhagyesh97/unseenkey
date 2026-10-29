@@ -30,8 +30,14 @@ async fn echo(req: Request) -> axum::response::Response {
     let body = axum::body::to_bytes(body, 1 << 20)
         .await
         .unwrap_or_default();
+    // `/…/refuse` plays a provider that rejects the key.
+    let code = if parts.uri.path().ends_with("/refuse") {
+        axum::http::StatusCode::UNAUTHORIZED
+    } else {
+        axum::http::StatusCode::OK
+    };
     (
-        axum::http::StatusCode::OK,
+        code,
         [
             ("content-type", "application/json"),
             ("x-request-id", "req_123"),
@@ -713,4 +719,48 @@ async fn a_client_in_a_project_folder_sees_only_that_project() {
     ] {
         assert_eq!(tool_json(&r).as_array().unwrap().len(), 2, "{r}");
     }
+}
+
+/// When the provider itself refuses the key, the agent is told that retrying
+/// cannot help and how the owner fixes it, instead of guessing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_key_comes_with_the_owners_fix() {
+    let env = setup().await;
+    let r = env.tool(
+        "call_api",
+        json!({ "secret": "stripe-live", "method": "GET", "path": "/v1/refuse" }),
+    );
+    assert_eq!(
+        r["isError"], false,
+        "the provider answered; it is not a broker error: {r}"
+    );
+    let body = tool_json(&r);
+    assert_eq!(body["status"], 401);
+    let hint = body["hint"].as_str().unwrap();
+    assert!(
+        hint.contains("Replace value") && hint.contains("usk secret replace stripe-live"),
+        "{hint}"
+    );
+
+    // A secret without a provider sends no credentials: the hint says so.
+    let (code, c) = env.mgmt(
+        "POST",
+        "/v1/secrets",
+        Some(json!({ "name": "plain", "value": "qwertyuiopasdfghjklzxcvbnm123456", "upstreams": ["api.stripe.com"] })),
+    );
+    assert_eq!(code, 201, "{c}");
+    assert!(c["provider"].is_null(), "{c}");
+    let r = env.tool(
+        "call_api",
+        json!({ "secret": "plain", "method": "GET", "path": "/v1/refuse", "upstream": "https://api.stripe.com" }),
+    );
+    let hint = tool_json(&r)["hint"].as_str().unwrap().to_string();
+    assert!(hint.contains("has no provider"), "{hint}");
+
+    // A success carries no hint.
+    let r = env.tool(
+        "call_api",
+        json!({ "secret": "stripe-live", "method": "GET", "path": "/v1/customers" }),
+    );
+    assert!(tool_json(&r)["hint"].is_null(), "{r}");
 }
