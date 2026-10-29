@@ -2,7 +2,7 @@
 
 The top section of this file becomes the release notes when a `v*` tag is pushed.
 
-## Unreleased
+## 0.1.4 — 2026-10-30
 
 - **How careful: relaxed, balanced (new default) or strict.** On your own machine the risk is not you but what touches your keys: an AI tool talked into misusing them, a package you never read, a loop that runs up a bill. The access Unseenkey hands out by itself (an AI tool's first use of a key, a handle created without a policy) now follows one setting in Settings or `usk care`:
   - *Relaxed*: anything goes; deleting things and moving money out (refunds, payouts, transfers) ask you first.
