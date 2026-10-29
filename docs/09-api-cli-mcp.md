@@ -26,6 +26,7 @@ All responses are JSON. Errors: `{ "error": "<code>", "message": "…" }`.
 | PATCH | `/v1/handles/{id}` | `{preset_policy \| policy}` replaces the policy (and forgets remembered rules); `{on_anomaly}` changes the incident response alone |
 | POST | `/v1/handles/{id}/resume` | back to normal after an incident: ends a throttle, approval mode or pause, restarts the burst detector |
 | GET | `/v1/projects[?dir=…]` | projects with their folders, secrets, `cap_per_day`, `requests_today`, active `handles`; `dir` returns only the project whose folder most closely contains it |
+| PATCH | `/v1/settings` | `{idle_lock_minutes}` (0 = never, at most 1440): takes effect at once and is saved to `config.toml`; audited as `settings_changed`. Polling reads (`GET /v1/status`, `/approvals`, `/events`, `/callers`) do not count as activity for the idle lock |
 | POST | `/v1/detect` | `{value?, name?}` → `{recognised: {provider, display, how: shape\|name, note, testable} \| null}`; stores and sends nothing |
 | POST | `/v1/secrets/{ref}/test` | one read-only request from the provider preset's `[verify]`, on a host the secret is locked to → `{tested, ok, status, provider, message}`; audited as `key_tested` |
 | POST | `/v1/projects` | `{name?, paths?, secrets?, cap_per_day?, notes?}`; the name defaults to the first folder's (`shop`, `shop 2`, …) |

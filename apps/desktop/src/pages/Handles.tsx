@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, ago, RESPONSES, type AnomalyResponse, type HandleCreated, type HandleView, type Preset, type SecretMeta } from "../api";
+import { who } from "../words";
 
 // A daemon older than the incidents feature sends no status; read it as normal.
 const stateOf = (h: HandleView) => h.status?.state ?? "normal";
@@ -61,30 +62,30 @@ export function Handles({ tick }: { tick: number }) {
       <section className="list-pane">
         <header className="pane-head">
           <h2>Agent access</h2>
-          <button className="primary" onClick={() => setCreating(true)}>+ Create</button>
+          <button className="primary" onClick={() => setCreating(true)}>+ Give access</button>
         </header>
-        <p className="muted small">Each entry is a stand-in (a “handle”) you or an AI tool uses instead of the real key. It only works through this computer, for the key's websites, within the rules you set.</p>
+        <p className="muted small">Who can use which key, and what they may do with it. Tools get a stand-in instead of the real key; it only works through this computer, only on the key's websites, and only within these rules.</p>
         {err && <div className="err">{err}</div>}
         {handles.length === 0 && (
           <div className="empty">
             <div className="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="7" width="18" height="10" rx="3"/><circle cx="8" cy="12" r="1.6"/><path d="M12 12h6"/></svg></div>
-            <b>No handles yet</b>
-            <p>A handle is what a tool gets instead of the key. Create one with a policy and copy the environment variables into the tool.</p>
-            <button className="primary" onClick={() => setCreating(true)}>Create a handle</button>
+            <b>No access given yet</b>
+            <p>AI tools get access by themselves the first time they use a key. To give a script or another person access, create it here and copy the settings it shows.</p>
+            <button className="primary" onClick={() => setCreating(true)}>Give access</button>
           </div>
         )}
         <ul className="rows">
           {handles.map((h) => (
             <li key={h.id} className="row static">
               <div className="row-main">
-                <span className="name">{h.label}</span>
+                <span className="name">{h.policy.callers?.length === 1 ? who(h.policy.callers[0]) : h.label}</span>
+                <span className="muted small">uses</span>
                 <span className="chip">{h.secret}</span>
                 {h.project && <span className="chip info">{h.project}</span>}
-                <span className={`chip ${h.revoked_at ? "off" : h.active ? "ok" : "warn"}`}>{h.revoked_at ? "revoked" : h.active ? "active" : "expired"}</span>
+                <span className={`chip ${h.revoked_at ? "off" : h.active ? "ok" : "warn"}`}>{h.revoked_at ? "removed" : h.active ? "working" : "expired"}</span>
                 {standing(h) && <span className={`chip ${standing(h)!.cls}`}>{standing(h)!.text}</span>}
-                {h.policy.callers?.length ? <span className="chip">{h.policy.callers.join(", ")}</span> : null}
               </div>
-              <div className="row-sub muted">{h.use_count} uses · last {ago(h.last_used_at)}</div>
+              <div className="row-sub muted">Used {h.use_count} {h.use_count === 1 ? "time" : "times"} · last {ago(h.last_used_at)}{h.policy.callers?.length === 1 && who(h.policy.callers[0]) !== h.label ? ` · “${h.label}”` : ""}</div>
               {h.last_anomaly && !h.revoked_at && (
                 <div className="err">
                   {h.last_anomaly.kind === "canary" ? "Canary tripped" : "Unusual activity"} {ago(h.last_anomaly.at)}: {h.last_anomaly.detail}.
@@ -95,7 +96,11 @@ export function Handles({ tick }: { tick: number }) {
               {h.canary ? (
                 <p className="muted small">A tripwire: it never works. Plant it where only an intruder would find it; any use is an incident.</p>
               ) : (
-                <pre className="policy">{h.policy_explanation}</pre>
+                <details className="tech">
+                  <summary>What it may do: {h.policy_explanation.split("\n")[0]}</summary>
+                  <pre className="policy">{h.policy_explanation}</pre>
+                  <p className="muted small">Label <code>{h.label}</code> · id <code>{h.id}</code>{h.policy.callers?.length ? <> · only for <code>{h.policy.callers.join(", ")}</code></> : null}</p>
+                </details>
               )}
               {!h.revoked_at && (
                 <div className="row-main">
@@ -118,7 +123,7 @@ export function Handles({ tick }: { tick: number }) {
               )}
               {!h.revoked_at && (
                 <div className="actions right">
-                  <button className="danger small" onClick={() => void revoke(h)}>Revoke</button>
+                  <button className="danger small" onClick={() => void revoke(h)}>Remove access</button>
                 </div>
               )}
             </li>
@@ -126,7 +131,7 @@ export function Handles({ tick }: { tick: number }) {
         </ul>
       </section>
       <section className="detail-pane">
-        {creating ? <CreateHandle onDone={() => { setCreating(false); void load(); }} onCancel={() => setCreating(false)} /> : <div className="muted">Create a handle to get the environment variables for a tool.</div>}
+        {creating ? <CreateHandle onDone={() => { setCreating(false); void load(); }} onCancel={() => setCreating(false)} /> : <div className="empty muted">“Give access” makes a stand-in key for a script, a server or a person, with its own rules and an end date.</div>}
       </section>
     </div>
   );

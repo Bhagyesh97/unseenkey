@@ -120,6 +120,8 @@ pub mod kinds {
     pub const CANARY_TRIPPED: &str = "canary_tripped";
     /// The owner put a handle back to normal after an incident.
     pub const HANDLE_RESUMED: &str = "handle_resumed";
+    /// An owner setting changed (idle lock).
+    pub const SETTINGS_CHANGED: &str = "settings_changed";
     /// A stored key was tested with one read-only request to its provider.
     pub const KEY_TESTED: &str = "key_tested";
     /// A project was created.

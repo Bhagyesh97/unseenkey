@@ -213,7 +213,8 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
         unlock_attempts: Mutex::new(Vec::new()),
         events,
         started: Instant::now(),
-        idle_lock: Duration::from_secs(opts.idle_lock_minutes * 60),
+        idle_lock_secs: std::sync::atomic::AtomicU64::new(opts.idle_lock_minutes * 60),
+        config_path: VaultPaths::from_vault_file(&opts.vault_path).config,
         shutdown: watch::channel(false).0,
         scrubber: RwLock::new(Scrubber::empty()),
         usage: Mutex::new(HashMap::new()),
@@ -302,6 +303,7 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
             "/callers/{name}",
             axum::routing::delete(api::callers_remove),
         )
+        .route("/settings", axum::routing::patch(api::patch_settings))
         .route("/shutdown", post(api::shutdown))
         .route_layer(from_fn_with_state(state.clone(), require_token));
 
@@ -317,15 +319,20 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
         .layer(from_fn_with_state(state.clone(), ingress_guard))
         .with_state(state.clone());
 
-    // Idle lock timer.
-    if !state.idle_lock.is_zero() {
+    // Idle lock timer. Always running: the owner can turn the idle lock on,
+    // off or change it while the daemon runs (`PATCH /v1/settings`).
+    {
         let s = state.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(15));
             loop {
                 tick.tick().await;
+                let limit = s.idle_lock();
+                if limit.is_zero() {
+                    continue;
+                }
                 let idle = s.last_activity.lock().await.elapsed();
-                if idle >= s.idle_lock {
+                if idle >= limit {
                     s.lock_vault("idle").await;
                 }
             }

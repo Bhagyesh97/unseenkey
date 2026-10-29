@@ -59,6 +59,25 @@ pub async fn ingress_guard(
     next.run(req).await
 }
 
+/// Reads that clients make on their own, on a timer or on a stream: the app
+/// polls status and approvals every few seconds and keeps the event stream
+/// open. Counting them as activity kept the vault unlocked for as long as the
+/// app was open, so the idle lock never fired.
+pub fn is_background(method: &axum::http::Method, path: &str) -> bool {
+    method == axum::http::Method::GET
+        && matches!(
+            path,
+            "/v1/status"
+                | "/v1/approvals"
+                | "/v1/events"
+                | "/v1/callers"
+                | "/status"
+                | "/approvals"
+                | "/events"
+                | "/callers"
+        )
+}
+
 /// Require `Authorization: Bearer <session token>` on management routes (INV-3).
 pub async fn require_token(
     State(state): State<Arc<AppState>>,
@@ -73,7 +92,9 @@ pub async fn require_token(
         .map(str::trim);
     match presented {
         Some(t) if crate::token::verify(&state.token_hash, t) => {
-            state.touch().await;
+            if !is_background(req.method(), req.uri().path()) {
+                state.touch().await;
+            }
             next.run(req).await
         }
         _ => ApiError::new(
@@ -82,5 +103,29 @@ pub async fn require_token(
             "missing or invalid session token; read it from daemon.token",
         )
         .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod idle_tests {
+    use super::is_background;
+    use axum::http::Method;
+
+    #[test]
+    fn polling_does_not_keep_the_vault_awake() {
+        for p in [
+            "/v1/status",
+            "/v1/approvals",
+            "/v1/events",
+            "/v1/callers",
+            "/status",
+        ] {
+            assert!(is_background(&Method::GET, p), "{p}");
+        }
+        // Anything the owner does still counts.
+        assert!(!is_background(&Method::POST, "/v1/approvals"));
+        assert!(!is_background(&Method::GET, "/v1/secrets"));
+        assert!(!is_background(&Method::GET, "/v1/audit"));
+        assert!(!is_background(&Method::POST, "/v1/unlock"));
     }
 }

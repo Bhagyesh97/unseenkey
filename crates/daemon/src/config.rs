@@ -57,6 +57,27 @@ pub enum ConfigError {
     Parse(String, String),
 }
 
+/// Set one `[daemon]` key in `config.toml`, keeping everything else in the file.
+pub fn set_daemon_value(path: &Path, key: &str, value: toml::Value) -> Result<(), ConfigError> {
+    let shown = path.display().to_string();
+    let mut doc: toml::Table = match std::fs::read_to_string(path) {
+        Ok(t) => {
+            toml::from_str(&t).map_err(|e| ConfigError::Parse(shown.clone(), e.to_string()))?
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
+        Err(e) => return Err(ConfigError::Io(shown, e)),
+    };
+    let daemon = doc
+        .entry("daemon")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    if let toml::Value::Table(t) = daemon {
+        t.insert(key.to_string(), value);
+    }
+    let text = toml::to_string_pretty(&doc)
+        .map_err(|e| ConfigError::Parse(shown.clone(), e.to_string()))?;
+    std::fs::write(path, text).map_err(|e| ConfigError::Io(shown, e))
+}
+
 /// Load `path` if it exists; defaults otherwise.
 pub fn load(path: &Path) -> Result<Config, ConfigError> {
     if !path.exists() {

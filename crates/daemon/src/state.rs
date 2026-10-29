@@ -239,7 +239,9 @@ pub struct AppState {
     /// Daemon start time.
     pub started: Instant,
     /// Idle lock timeout; zero disables.
-    pub idle_lock: Duration,
+    pub idle_lock_secs: std::sync::atomic::AtomicU64,
+    /// `config.toml` next to the vault, where a changed idle time is saved.
+    pub config_path: std::path::PathBuf,
     /// Becomes `true` once a shutdown was requested (API or signal).
     pub shutdown: watch::Sender<bool>,
     /// Secret values to guard, rebuilt on unlock and on secret changes.
@@ -291,6 +293,14 @@ impl AppState {
         self.emit(Event::Locked { reason });
         tracing::info!(reason, "vault locked");
         true
+    }
+
+    /// Idle time after which the vault locks; zero means never.
+    pub fn idle_lock(&self) -> Duration {
+        Duration::from_secs(
+            self.idle_lock_secs
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
     }
 
     /// Record activity for the idle timer.

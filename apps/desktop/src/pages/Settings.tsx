@@ -65,21 +65,41 @@ export function Settings({ status, onLock }: { status: Status; onLock: () => Pro
     }
   };
 
+  const [lockAfter, setLockAfter] = useState<number | null>(null);
+  const [lockMsg, setLockMsg] = useState<string | null>(null);
+  const saveLock = async (m: number) => {
+    setLockMsg(null);
+    try {
+      await api.call("PATCH", "/v1/settings", { idle_lock_minutes: m });
+      setLockAfter(m);
+      setLockMsg(m === 0 ? "The vault will only lock when you lock it, lock Windows or the computer sleeps." : "Saved.");
+    } catch (e) {
+      setLockMsg((e as Error).message);
+    }
+  };
   return (
     <div className="single">
       <header className="pane-head"><h2>Settings</h2></header>
       <section className="section">
-      <dl className="kv">
-        <dt>Vault file</dt><dd><code>{status.vault_path}</code></dd>
-        <dt>Daemon</dt><dd>{status.daemon ? `running (v${status.daemon.version}, up ${Math.round(status.daemon.uptime_s / 60)} min, ${status.daemon.locked ? "locked" : "unlocked"})` : "not running"}</dd>
-        <dt>Auto-lock</dt><dd>{status.daemon ? `${status.daemon.idle_lock_minutes} min idle (config.toml)` : "—"}</dd>
-        <dt>App</dt><dd>v{status.app_version}</dd>
-      </dl>
-      {status.daemon && !status.daemon.locked && (
-        <div className="actions">
-          <button onClick={() => void onLock()}>Lock vault now</button>
-        </div>
-      )}
+      <h3>Locking</h3>
+      <p className="muted small">The vault also locks when you lock Windows or the computer sleeps.</p>
+      <div className="row-main">
+        <span>Lock when not used for</span>
+        <select value={String(lockAfter ?? status.daemon?.idle_lock_minutes ?? 15)} disabled={!status.daemon || status.daemon.locked} onChange={(e) => void saveLock(Number(e.target.value))}>
+          {[5, 15, 30, 60, 240, 0].map((m) => <option key={m} value={m}>{m === 0 ? "never" : m < 60 ? `${m} minutes` : `${m / 60} hour${m === 60 ? "" : "s"}`}</option>)}
+        </select>
+        {status.daemon && !status.daemon.locked && <button onClick={() => void onLock()}>Lock now</button>}
+      </div>
+      {lockMsg && <p className="muted small">{lockMsg}</p>}
+      <details className="tech">
+        <summary>Technical details</summary>
+        <dl className="kv small">
+          <dt>Vault file</dt><dd><code>{status.vault_path}</code></dd>
+          <dt>Background service</dt><dd>{status.daemon ? `running, version ${status.daemon.version}, for ${Math.round(status.daemon.uptime_s / 60)} min, ${status.daemon.locked ? "locked" : "unlocked"}` : "not running"}</dd>
+          <dt>App</dt><dd>version {status.app_version}</dd>
+          <dt>Settings file</dt><dd><code>config.toml</code> next to the vault file</dd>
+        </dl>
+      </details>
       </section>
       <section className="section">
       <h3>Windows Hello</h3>
@@ -120,8 +140,8 @@ export function Settings({ status, onLock }: { status: Status; onLock: () => Pro
 
       </section>
       <section className="section">
-      <h3>.env guard</h3>
-      <p className="muted small">Find real keys in a project's .env file, move them into the vault and replace them with handles.</p>
+      <h3>Protect a single .env file</h3>
+      <p className="muted small">The easiest way is “Protect a project” on the Projects page. Here you can point at one .env file directly: real keys move into the vault and are replaced by stand-ins.</p>
       <div className="row-main">
         <input style={{ flex: 1 }} value={path} onChange={(e) => setPath(e.target.value)} placeholder="C:\path\to\project\.env" />
         <button onClick={() => void api.guardScan(path).then(setScan).catch((e) => setMsg((e as Error).message))}>Scan</button>

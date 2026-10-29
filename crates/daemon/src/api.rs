@@ -117,8 +117,55 @@ pub async fn status(State(s): State<Arc<AppState>>) -> ApiResult<Status> {
         version: env!("CARGO_PKG_VERSION"),
         uptime_s: s.started.elapsed().as_secs(),
         secrets: if v.is_locked() { None } else { Some(v.len()) },
-        idle_lock_minutes: s.idle_lock.as_secs() / 60,
+        idle_lock_minutes: s.idle_lock().as_secs() / 60,
     }))
+}
+
+/// `PATCH /v1/settings` body.
+#[derive(Deserialize)]
+pub struct PatchSettings {
+    /// Lock after this many idle minutes; 0 = never. At most a day.
+    pub idle_lock_minutes: Option<u64>,
+}
+
+/// `PATCH /v1/settings`: change the idle lock now and keep it in `config.toml`.
+pub async fn patch_settings(
+    State(s): State<Arc<AppState>>,
+    Json(p): Json<PatchSettings>,
+) -> ApiResult<serde_json::Value> {
+    if let Some(m) = p.idle_lock_minutes {
+        if m > 24 * 60 {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid",
+                "the idle lock is at most 1440 minutes (a day); 0 turns it off",
+            ));
+        }
+        crate::config::set_daemon_value(
+            &s.config_path,
+            "idle_lock_minutes",
+            toml::Value::Integer(m as i64),
+        )
+        .map_err(|e| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "config_error",
+                e.to_string(),
+            )
+        })?;
+        s.idle_lock_secs
+            .store(m * 60, std::sync::atomic::Ordering::Relaxed);
+        s.touch().await;
+        let mut v = s.vault.lock().await;
+        let _ = v.audit(
+            kinds::SETTINGS_CHANGED,
+            serde_json::json!({ "idle_lock_minutes": m }),
+        );
+        tracing::info!(minutes = m, "idle lock changed");
+    }
+    Ok(Json(
+        serde_json::json!({ "ok": true, "idle_lock_minutes": s.idle_lock().as_secs() / 60 }),
+    ))
 }
 
 /// `POST /v1/unlock` body: either the password, or a device unlock method's
