@@ -2,7 +2,7 @@
 
 The top section of this file becomes the release notes when a `v*` tag is pushed.
 
-## Unreleased
+## 0.1.3 — 2026-10-30
 
 From a second Claude Code session stuck asking its owner to "check" a Hostinger and a Cloudflare key:
 
