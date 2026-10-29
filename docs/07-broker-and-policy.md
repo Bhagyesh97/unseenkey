@@ -215,6 +215,18 @@ The standing (`status`: `normal`, `throttled` with `until`, `approval_required`,
 
 What this does not do yet: baselines ("5× the usual volume for this hour"), first-seen endpoints or models, spend in currency, and binding a handle to the process that may use it. Those are the next slices; this one makes the simplest claims true: a leaked handle cannot run up a bill past its cap, a planted canary tells you the moment someone has your files, and a tool that probes gets slowed, stopped or asked.
 
+## Care levels
+
+The policy Unseenkey hands out by itself, to an MCP client on its first use of a secret or to a handle created without a policy, comes from `presets::policy_for(preset, care)`:
+
+| Level | Policy |
+|---|---|
+| `relaxed` | allow `* /**`; approval (`mode = paths`) for `DELETE /**` and the preset's money-out rules (refund, payout, transfer, withdraw, disburse, top-up) |
+| `balanced` (default) | allow `* /**`; approval for the preset's `ask_first` rules, or deletes plus the deny rules of its non-`full` policies |
+| `strict` | the preset's recommended policy |
+
+The policy's own host list is left empty, so the secret's host lock decides where it may go. Such handles carry `follows_care`; changing the level rewrites their policy (keeping callers, limits, expiry and remembered answers). Editing a handle's policy clears the flag. Handles from before the flag whose label is `mcp:…` and whose rules still equal the strict default are treated as following. Host locks, the scrubber, the egress guard and the audit log do not depend on the level.
+
 ## Recognising and testing a pasted key
 
 Order of evidence, strongest first: the value's shape (`providers::detect`), a `key_prefixes` entry only one preset claims (`presets::detect_by_prefix`; prefixes under four characters or shared by two presets never decide), then the secret's name (`presets::guess_by_name`: an exact variable from `[env]`/`env_names`, or a word equal to a preset id or display name). Recognition sends nothing anywhere.

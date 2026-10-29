@@ -30,6 +30,8 @@ pub struct HandleOptions {
     pub on_anomaly: AnomalyResponse,
     /// The project it is made for. The secret must belong to it.
     pub project: Option<Id>,
+    /// The policy follows the owner's care level until someone edits it.
+    pub follows_care: bool,
 }
 
 impl Default for HandleOptions {
@@ -39,6 +41,7 @@ impl Default for HandleOptions {
             canary: false,
             on_anomaly: AnomalyResponse::Throttle,
             project: None,
+            follows_care: false,
         }
     }
 }
@@ -50,6 +53,7 @@ impl HandleOptions {
             canary: true,
             on_anomaly: AnomalyResponse::Lock,
             project: None,
+            follows_care: false,
         }
     }
 }
@@ -194,6 +198,7 @@ impl<S: Storage, C: Clock> Vault<S, C> {
             status: HandleStatus::Normal,
             last_anomaly: None,
             project: opts.project,
+            follows_care: opts.follows_care,
         };
         self.write_handle(&vk, record.clone())?;
         Ok((record, plain))
@@ -351,6 +356,31 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         h.policy = policy;
         // Standing approvals were given against the old rules.
         h.remembered.clear();
+        // An edited policy is the owner's own from now on.
+        h.follows_care = false;
+        self.write_handle(&vk, h)
+    }
+
+    /// Replace a policy that follows the care level with the one for a new
+    /// level, keeping its callers, limits, expiry and MCP visibility, and
+    /// keeping it marked as following. "Always allow" answers survive: they
+    /// were given for requests the new level still lets through or asks about.
+    pub fn apply_care_policy(&mut self, id: &Id, mut policy: Policy) -> Result<(), VaultError> {
+        let vk = self.vk()?.clone();
+        let mut h = self
+            .handles
+            .get(id)
+            .ok_or(VaultError::HandleNotFound)?
+            .clone();
+        policy.callers = h.policy.callers.clone();
+        policy.limits = h.policy.limits.clone();
+        policy.expires_at = h.policy.expires_at;
+        policy.mcp = h.policy.mcp;
+        policy
+            .validate()
+            .map_err(|e| VaultError::InvalidPolicy(e.to_string()))?;
+        h.policy = policy;
+        h.follows_care = true;
         self.write_handle(&vk, h)
     }
 

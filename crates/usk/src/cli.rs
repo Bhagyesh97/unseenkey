@@ -153,6 +153,12 @@ enum Command {
         #[arg(last = true, required = true)]
         command: Vec<String>,
     },
+    /// How careful the access Unseenkey hands out by itself is: show it, or
+    /// set `relaxed`, `balanced` (default) or `strict`.
+    Care {
+        /// The level to set.
+        level: Option<String>,
+    },
     /// Group secrets by the code folder that uses them; agents started in a
     /// project's folder see only its secrets.
     Project {
@@ -350,6 +356,7 @@ pub fn run() -> Result<(), CliError> {
             )),
         },
         Command::Project { action } => crate::project::run(&paths, action, cli.json),
+        Command::Care { level } => care(&paths, level.as_deref()),
         Command::Guard { action } => match action {
             GuardAction::Scan { path } => crate::guard::scan(&path, cli.json).map(|_| ()),
             GuardAction::Fix {
@@ -1790,6 +1797,37 @@ enum SecretAction {
         #[arg(long)]
         provider: Option<String>,
     },
+}
+
+fn care(paths: &VaultPaths, level: Option<&str>) -> Result<(), CliError> {
+    let c = unlocked(paths)?;
+    let explain = |l: &str| {
+        match l {
+        "relaxed" => "anything goes; deletes and money out (refunds, payouts, transfers) ask you first",
+        "strict" => "each provider's cautious default, often read only; best for keys you share",
+        _ => "anything goes except deletes, money out and key, billing or account changes, which ask you first",
+    }
+    };
+    match level {
+        None => {
+            let l = c.get("/v1/status")?["care"]
+                .as_str()
+                .unwrap_or("balanced")
+                .to_string();
+            println!("Care: {l}: {}.", explain(&l));
+            println!("Change it with `usk care relaxed|balanced|strict`. Allowed websites, scrubbing and the log apply at every level.");
+        }
+        Some(l) => {
+            let r = c.patch("/v1/settings", json!({ "care": l }))?;
+            let l = r["care"].as_str().unwrap_or(l).to_string();
+            println!("Care is now {l}: {}.", explain(&l));
+            let n = r["handles_updated"].as_u64().unwrap_or(0);
+            if n > 0 {
+                println!("Updated {n} access {} Unseenkey had handed out; access you set up yourself is unchanged.", if n == 1 { "entry" } else { "entries" });
+            }
+        }
+    }
+    Ok(())
 }
 
 fn secret_replace(paths: &VaultPaths, name: &str, stdin: bool) -> Result<(), CliError> {

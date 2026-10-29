@@ -7,6 +7,8 @@ base_path = ""
 category = "payments"
 key_prefixes = ["sk_live_", "sk_test_", "rk_live_", "rk_test_"]
 
+ask_first = ["DELETE /**", "* /v1/refunds", "* /v1/refunds/**", "* /v1/charges/*/refund", "* /v1/charges/*/refunds/**", "* /v1/payouts", "* /v1/payouts/**", "* /v1/transfers", "* /v1/transfers/**", "* /v1/topups/**", "POST /v1/accounts/**", "* /v1/account_links/**"]
+
 [env]
 base_url = "STRIPE_API_BASE"
 api_key = "STRIPE_SECRET_KEY"

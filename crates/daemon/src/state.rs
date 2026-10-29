@@ -242,6 +242,8 @@ pub struct AppState {
     pub idle_lock_secs: std::sync::atomic::AtomicU64,
     /// `config.toml` next to the vault, where a changed idle time is saved.
     pub config_path: std::path::PathBuf,
+    /// The care level as `Care as u8` (see [`AppState::care`]).
+    pub care: std::sync::atomic::AtomicU8,
     /// Becomes `true` once a shutdown was requested (API or signal).
     pub shutdown: watch::Sender<bool>,
     /// Secret values to guard, rebuilt on unlock and on secret changes.
@@ -293,6 +295,27 @@ impl AppState {
         self.emit(Event::Locked { reason });
         tracing::info!(reason, "vault locked");
         true
+    }
+
+    /// How careful the access Unseenkey hands out by itself is.
+    pub fn care(&self) -> unseenkey_core::presets::Care {
+        use unseenkey_core::presets::Care;
+        match self.care.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => Care::Relaxed,
+            2 => Care::Strict,
+            _ => Care::Balanced,
+        }
+    }
+
+    /// Set the care level.
+    pub fn set_care(&self, care: unseenkey_core::presets::Care) {
+        use unseenkey_core::presets::Care;
+        let n = match care {
+            Care::Relaxed => 0,
+            Care::Balanced => 1,
+            Care::Strict => 2,
+        };
+        self.care.store(n, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Idle time after which the vault locks; zero means never.

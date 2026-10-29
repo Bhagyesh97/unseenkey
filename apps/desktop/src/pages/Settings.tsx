@@ -2,6 +2,12 @@ import { useEffect, useState } from "react";
 import { api, type DeviceUnlock, type Status } from "../api";
 import { checkForUpdate, installUpdate, type UpdateInfo } from "../updates";
 
+const CARE = [
+  { id: "relaxed", title: "Relaxed", text: "For your own projects. AI tools can do anything; only deleting things and moving money out (refunds, payouts) ask you first." },
+  { id: "balanced", title: "Balanced", text: "AI tools can do the work; deleting, moving money out, and changing keys, billing or account settings ask you first, with “Always allow this”." },
+  { id: "strict", title: "Strict", text: "Each provider's cautious default, often read only. Best when you share keys with other people." },
+];
+
 export function Settings({ status, onLock }: { status: Status; onLock: () => Promise<void> }) {
   const [path, setPath] = useState(".env");
   const [scan, setScan] = useState<{ line: number; key: string; detected: string | null; fixable: boolean }[] | null>(null);
@@ -65,6 +71,19 @@ export function Settings({ status, onLock }: { status: Status; onLock: () => Pro
     }
   };
 
+  const [care, setCare] = useState<string>(status.daemon?.care ?? "balanced");
+  const [careMsg, setCareMsg] = useState<string | null>(null);
+  const saveCare = async (c: string) => {
+    setCareMsg(null);
+    try {
+      const r = await api.call<{ care: string; handles_updated: number | null }>("PATCH", "/v1/settings", { care: c });
+      setCare(r.care);
+      const n = r.handles_updated ?? 0;
+      setCareMsg(n ? `Saved. Updated ${n} AI tool ${n === 1 ? "access" : "accesses"}; access you set up yourself is unchanged.` : "Saved.");
+    } catch (e) {
+      setCareMsg((e as Error).message);
+    }
+  };
   const [lockAfter, setLockAfter] = useState<number | null>(null);
   const [lockMsg, setLockMsg] = useState<string | null>(null);
   const saveLock = async (m: number) => {
@@ -81,6 +100,19 @@ export function Settings({ status, onLock }: { status: Status; onLock: () => Pro
     <div className="single">
       <header className="pane-head"><h2>Settings</h2></header>
       <section className="section">
+      <h3>How careful should Unseenkey be?</h3>
+      <p className="muted small">This decides what AI tools may do with your keys when they first use them. Whatever you pick, a key only ever goes to its own provider, never shows up in an AI tool's answers, and every use is in Activity.</p>
+      <div className="care">
+        {CARE.map((c) => (
+          <label key={c.id} className={`care-option ${care === c.id ? "on" : ""}`}>
+            <input type="radio" name="care" checked={care === c.id} disabled={!status.daemon || status.daemon.locked} onChange={() => void saveCare(c.id)} />
+            <span><b>{c.title}</b>{c.id === "balanced" && <span className="chip info">recommended</span>}<br /><span className="muted small">{c.text}</span></span>
+          </label>
+        ))}
+      </div>
+      {careMsg && <p className="muted small">{careMsg}</p>}
+      <p className="muted small">In a terminal: <code>usk care {care}</code></p>
+
       <h3>Locking</h3>
       <p className="muted small">The vault also locks when you lock Windows or the computer sleeps.</p>
       <div className="row-main">

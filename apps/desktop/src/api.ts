@@ -15,6 +15,7 @@ export interface Status {
     uptime_s: number;
     secrets: number | null;
     idle_lock_minutes: number;
+    care?: "relaxed" | "balanced" | "strict";
   };
   app_version: string;
 }

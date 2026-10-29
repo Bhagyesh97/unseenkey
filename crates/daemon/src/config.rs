@@ -33,6 +33,9 @@ pub struct DaemonConfig {
     pub lock_on_sleep: bool,
     /// Lock when the interactive session locks (Win+L, lock screen).
     pub lock_on_session_lock: bool,
+    /// How careful the access Unseenkey hands out by itself is:
+    /// `relaxed`, `balanced` (default) or `strict`.
+    pub care: String,
 }
 
 impl Default for DaemonConfig {
@@ -42,6 +45,7 @@ impl Default for DaemonConfig {
             idle_lock_minutes: 15,
             lock_on_sleep: true,
             lock_on_session_lock: true,
+            care: "balanced".into(),
         }
     }
 }

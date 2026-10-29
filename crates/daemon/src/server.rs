@@ -175,6 +175,11 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
     }
     let storage = SqliteStorage::open(&opts.vault_path)?;
     let vault = Vault::open(storage, SystemClock)?;
+    // The care level lives in config.toml with the other owner settings.
+    let care = crate::config::load(&VaultPaths::from_vault_file(&opts.vault_path).config)
+        .ok()
+        .and_then(|c| presets::Care::parse(&c.daemon.care))
+        .unwrap_or_default();
     // reqwest is built without a default TLS provider; use ring (pure Rust).
     let _ = rustls::crypto::ring::default_provider().install_default();
     let http = reqwest::Client::builder()
@@ -215,6 +220,7 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
         started: Instant::now(),
         idle_lock_secs: std::sync::atomic::AtomicU64::new(opts.idle_lock_minutes * 60),
         config_path: VaultPaths::from_vault_file(&opts.vault_path).config,
+        care: std::sync::atomic::AtomicU8::new(1),
         shutdown: watch::channel(false).0,
         scrubber: RwLock::new(Scrubber::empty()),
         usage: Mutex::new(HashMap::new()),
@@ -369,6 +375,7 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
         });
     }
 
+    state.set_care(care);
     let mut shutdown_rx = state.shutdown.subscribe();
     let handle = tokio::spawn(async move {
         let server = axum::serve(listener, app).with_graceful_shutdown(async move {

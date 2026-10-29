@@ -26,7 +26,7 @@ All responses are JSON. Errors: `{ "error": "<code>", "message": "…" }`.
 | PATCH | `/v1/handles/{id}` | `{preset_policy \| policy}` replaces the policy (and forgets remembered rules); `{on_anomaly}` changes the incident response alone |
 | POST | `/v1/handles/{id}/resume` | back to normal after an incident: ends a throttle, approval mode or pause, restarts the burst detector |
 | GET | `/v1/projects[?dir=…]` | projects with their folders, secrets, `cap_per_day`, `requests_today`, active `handles`; `dir` returns only the project whose folder most closely contains it |
-| PATCH | `/v1/settings` | `{idle_lock_minutes}` (0 = never, at most 1440): takes effect at once and is saved to `config.toml`; audited as `settings_changed`. Polling reads (`GET /v1/status`, `/approvals`, `/events`, `/callers`) do not count as activity for the idle lock |
+| PATCH | `/v1/settings` | `{care}` (`relaxed` \| `balanced` \| `strict`): what Unseenkey hands out by itself; re-applied to handles that follow it, returns `handles_updated`. `{idle_lock_minutes}` (0 = never, at most 1440): takes effect at once and is saved to `config.toml`; audited as `settings_changed`. Polling reads (`GET /v1/status`, `/approvals`, `/events`, `/callers`) do not count as activity for the idle lock |
 | POST | `/v1/detect` | `{value?, name?}` → `{recognised: {provider, display, how: shape\|name, note, testable} \| null}`; stores and sends nothing |
 | POST | `/v1/secrets/{ref}/test` | one read-only request from the provider preset's `[verify]`, on a host the secret is locked to → `{tested, ok, status, provider, message}`; audited as `key_tested` |
 | POST | `/v1/projects` | `{name?, paths?, secrets?, cap_per_day?, notes?}`; the name defaults to the first folder's (`shop`, `shop 2`, …) |
@@ -101,6 +101,7 @@ usk policy explain <id>
 usk env <name> [--policy chat] [--shell sh|powershell|cmd|dotenv]   print the variables for the provider preset (creates handle)
 usk run --with VAR=name [...] -- <cmd…>   inject secrets into a child's environment (needs --allow-injection); output scrubbed; exit code propagates
 usk secret set <name> [--allow-injection bool] [--no-scrub bool] [--notes …] [--tag …] [--upstream host] [--provider id]   # hosts are normalised (https://host/path → host); a new provider brings its hosts
+usk care [relaxed|balanced|strict]   show or set how careful the access Unseenkey hands out by itself is
 usk secret test <name>             one read-only request to the key's provider: works / refused / unclear
 usk secret replace <name> [--stdin]   new value under the same name (a rotated key); handles keep working
 usk guard scan [.env]            which lines look like secrets, and which can become handles

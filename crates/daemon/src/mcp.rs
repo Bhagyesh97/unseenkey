@@ -122,18 +122,18 @@ fn mcp_label(caller: &str, secret: &str) -> String {
     format!("{caller}/{secret}")
 }
 
-/// The provider's recommended policy, or allow-all for secrets without a preset.
-fn default_policy(provider: Option<&str>) -> Policy {
-    provider
-        .and_then(presets::get)
-        .and_then(|p| {
-            p.policies
-                .iter()
-                .find(|pp| pp.recommended)
-                .or(p.policies.first())
-                .and_then(|pp| p.policy(&pp.id))
-        })
-        .unwrap_or_else(Policy::allow_all)
+/// A policy that leaves its hosts to the secret's lock, shown with those hosts.
+fn with_hosts(mut p: Policy, secret_hosts: &[String]) -> Policy {
+    if p.upstreams.is_empty() {
+        p.upstreams = secret_hosts.to_vec();
+    }
+    p
+}
+
+/// The policy an AI tool gets on first use: the owner's care level applied
+/// to the provider (see [`presets::policy_for`]).
+fn default_policy(provider: Option<&str>, care: presets::Care) -> Policy {
+    presets::policy_for(provider.and_then(presets::get), care)
 }
 
 /// Find the active handle this caller has for a secret.
@@ -165,6 +165,7 @@ fn ensure_handle(
     caller: &str,
     secret_name: &str,
     project: Option<&ProjectRecord>,
+    care: presets::Care,
 ) -> Result<(HandleRecord, SecretMeta), ApiError> {
     let meta = v.get_by_name(secret_name)?.clone();
     if let Some(p) = project {
@@ -176,7 +177,7 @@ fn ensure_handle(
     if let Some(h) = find_handle(v, caller, &meta.secret_id, pid) {
         return Ok((h, meta));
     }
-    let mut policy = default_policy(meta.provider.as_deref());
+    let mut policy = default_policy(meta.provider.as_deref(), care);
     policy.callers = vec![caller.to_string()];
     let label = match project {
         Some(p) => format!("{caller}/{}/{}", p.name, meta.name),
@@ -199,6 +200,7 @@ fn ensure_handle(
         None,
         unseenkey_core::vault::HandleOptions {
             project: pid,
+            follows_care: true,
             ..Default::default()
         },
     )?;
@@ -277,8 +279,9 @@ async fn list_secrets(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args: 
         .map(|m| {
             let (policy, existing) = match find_handle(&v, caller, &m.secret_id, pid) {
                 Some(h) => (h.policy, true),
-                None => (default_policy(m.provider.as_deref()), false),
+                None => (default_policy(m.provider.as_deref(), s.care()), false),
             };
+            let policy = with_hosts(policy, &m.upstreams);
             json!({
                 "name": m.name, "type": m.kind.as_str(), "provider": m.provider,
                 "upstreams": m.upstreams, "tags": m.tags,
@@ -310,7 +313,8 @@ async fn explain_policy(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args
     }
     let policy = find_handle(&v, caller, &meta.secret_id, project.map(|p| p.project_id))
         .map(|h| h.policy)
-        .unwrap_or_else(|| default_policy(meta.provider.as_deref()));
+        .unwrap_or_else(|| default_policy(meta.provider.as_deref(), s.care()));
+    let policy = with_hosts(policy, &meta.upstreams);
     tool_json(
         &json!({ "secret": meta.name, "text": explain(&policy), "callers": policy.callers }),
         false,
@@ -337,7 +341,7 @@ async fn call_api(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args: &Val
             );
         }
         let project = scope_of(&v, dir);
-        match ensure_handle(&mut v, caller, name, project.as_ref()) {
+        match ensure_handle(&mut v, caller, name, project.as_ref(), s.care()) {
             Ok((h, meta)) => (h, meta.provider),
             Err(e) if e.code == "not_found" => return unknown_secret(name),
             Err(e) => return tool_text(e.message, true),
@@ -475,7 +479,7 @@ async fn request_access(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args
             );
         }
         let project = scope_of(&v, dir);
-        match ensure_handle(&mut v, caller, name, project.as_ref()) {
+        match ensure_handle(&mut v, caller, name, project.as_ref(), s.care()) {
             Ok((h, meta)) => {
                 let t = h.policy.approval.timeout_seconds;
                 (h, meta.name, t)

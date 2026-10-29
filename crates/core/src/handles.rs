@@ -213,6 +213,10 @@ pub struct HandleRecord {
     /// project's daily limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<Id>,
+    /// The policy was handed out by Unseenkey (AI tool on first use, or no
+    /// policy given) and follows the owner's care level until edited.
+    #[serde(default)]
+    pub follows_care: bool,
 }
 
 /// What the broker does to a handle that behaves unusually. The owner picks
@@ -395,6 +399,7 @@ mod tests {
             status: HandleStatus::default(),
             last_anomaly: None,
             project: None,
+            follows_care: false,
         };
         assert!(r.is_active(99));
         assert!(!r.is_active(100));

@@ -4,6 +4,13 @@ The top section of this file becomes the release notes when a `v*` tag is pushed
 
 ## Unreleased
 
+- **How careful: relaxed, balanced (new default) or strict.** On your own machine the risk is not you but what touches your keys: an AI tool talked into misusing them, a package you never read, a loop that runs up a bill. The access Unseenkey hands out by itself (an AI tool's first use of a key, a handle created without a policy) now follows one setting in Settings or `usk care`:
+  - *Relaxed*: anything goes; deleting things and moving money out (refunds, payouts, transfers) ask you first.
+  - *Balanced*: anything goes except deletes, money out, and key, billing or account changes, which ask you first with "Always allow this". Taking a payment or calling a model just works.
+  - *Strict*: each provider's cautious default, as before (Stripe read only); best for keys you share.
+
+  Allowed websites, response scrubbing and the activity log apply at every level. Changing the level updates the access Unseenkey handed out (and AI-tool access from before that still has its untouched default), never access you set up or edited yourself. The level is kept in `config.toml` (`care`), set with `PATCH /v1/settings {care}`, shown in `/v1/status`, and audited. Presets may name what asks first (`ask_first`); otherwise it is deletes plus the deny rules of their non-full policies.
+
 - **The vault locks itself again while the app is open.** The app checks status and approvals every few seconds and keeps the event stream open, and every one of those requests counted as "the owner is here", so the idle lock never fired as long as the app ran. Those background reads no longer reset the timer; anything you actually do still does.
 - **Choose when it locks.** Settings has "Lock when not used for" (5, 15, 30 minutes, 1 or 4 hours, never); it takes effect at once and is kept in `config.toml` (`PATCH /v1/settings {idle_lock_minutes}`, audited as `settings_changed`). Locking Windows or sleep still lock it either way.
 - **Activity in plain words.** Each entry is a sentence ("Claude Code used openai: sent api.openai.com/v1/chat/completions · OK", "“contractor” was stopped from using stripe-live: the rules for this access do not allow it"), grouped by day, with today's counts on top, simple filters (keys used, blocked, alerts, requests to you, changes, lock and unlock) and search. Click an entry for the technical record and the matching `usk log` command. "Verify log" became "Check nothing was changed" with a plain answer.

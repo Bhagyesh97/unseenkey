@@ -6,7 +6,7 @@
 //! clash.
 
 use crate::policy::{Policy, PolicyError, Rule};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::{OnceLock, RwLock};
 
@@ -126,6 +126,125 @@ pub struct Preset {
     /// One read-only request that tells a working key from a refused one.
     #[serde(default)]
     pub verify: Option<Verify>,
+    /// Requests that ask the owner first under the "balanced" care level
+    /// (deletes, money out, keys, billing and account changes). Empty: the
+    /// deny rules of the preset's policies other than `full`, plus deletes.
+    #[serde(default)]
+    pub ask_first: Vec<Rule>,
+}
+
+/// How careful Unseenkey is with the access it hands out by itself (to AI
+/// tools on first use, and to handles created without a policy). Host locks,
+/// scrubbing and the audit log apply at every level.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Care {
+    /// Anything goes except deletes and money out, which ask first.
+    Relaxed,
+    /// Anything goes except deletes, money out and key, billing or account
+    /// changes, which ask first ("Always allow" is offered).
+    #[default]
+    Balanced,
+    /// The provider's cautious recommended policy (often read-only).
+    Strict,
+}
+
+impl Care {
+    /// Parse `relaxed`, `balanced` or `strict`.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "relaxed" => Some(Care::Relaxed),
+            "balanced" => Some(Care::Balanced),
+            "strict" => Some(Care::Strict),
+            _ => None,
+        }
+    }
+
+    /// The word for it.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Care::Relaxed => "relaxed",
+            Care::Balanced => "balanced",
+            Care::Strict => "strict",
+        }
+    }
+}
+
+/// Words that mark a request as moving money out of the account.
+const MONEY_OUT: &[&str] = &[
+    "refund", "payout", "transfer", "withdraw", "disburse", "topup",
+];
+
+fn any_delete() -> Rule {
+    Rule::parse("DELETE /**").expect("static rule")
+}
+
+impl Preset {
+    /// What asks first under [`Care::Balanced`].
+    pub fn ask_first_rules(&self) -> Vec<Rule> {
+        if !self.ask_first.is_empty() {
+            return self.ask_first.clone();
+        }
+        let mut out = vec![any_delete()];
+        for pp in self.policies.iter().filter(|pp| pp.id != "full") {
+            for d in &pp.deny {
+                if !out.contains(d) {
+                    out.push(d.clone());
+                }
+            }
+        }
+        out
+    }
+
+    /// What asks first under [`Care::Relaxed`]: deletes and money out.
+    pub fn money_out_rules(&self) -> Vec<Rule> {
+        let mut out = vec![any_delete()];
+        for r in self.ask_first_rules() {
+            let text = r.to_string().to_ascii_lowercase();
+            if MONEY_OUT.iter().any(|w| text.contains(w)) && !out.contains(&r) {
+                out.push(r);
+            }
+        }
+        out
+    }
+}
+
+/// The policy Unseenkey hands out by itself for a provider at a care level.
+/// Its hosts are left to the secret's own lock.
+pub fn policy_for(preset: Option<&Preset>, care: Care) -> Policy {
+    let ask = |rules: Vec<Rule>, word: &str| {
+        let mut p = Policy::allow_all();
+        p.approval.mode = crate::policy::ApprovalMode::Paths;
+        p.approval.paths = rules;
+        p.notes = Some(match preset {
+            Some(pr) => format!("{}: {word}", pr.display),
+            None => word.to_string(),
+        });
+        p
+    };
+    match (care, preset.filter(|p| p.id != "generic")) {
+        (Care::Strict, Some(p)) => {
+            let mut pol = p
+                .policies
+                .iter()
+                .find(|pp| pp.recommended)
+                .or(p.policies.first())
+                .and_then(|pp| p.policy(&pp.id))
+                .unwrap_or_else(Policy::allow_all);
+            pol.upstreams.clear();
+            pol
+        }
+        (Care::Strict, None) => Policy::allow_all(),
+        (Care::Balanced, Some(p)) => ask(
+            p.ask_first_rules(),
+            "balanced: deletes, money out and account changes ask first",
+        ),
+        (Care::Relaxed, Some(p)) => ask(
+            p.money_out_rules(),
+            "relaxed: only deletes and money out ask first",
+        ),
+        (_, None) => ask(vec![any_delete()], "deletes ask first"),
+    }
 }
 
 /// A harmless request that tests a key: 2xx means accepted, 401/403 refused.
@@ -521,6 +640,78 @@ pub fn policy_ref(spec: &str) -> Result<Policy, PolicyError> {
 mod tests {
     use super::*;
     use crate::policy::{evaluate, explain, Decision, Request, Usage};
+
+    #[test]
+    fn care_levels_ask_first_for_the_right_things() {
+        use crate::policy::{evaluate, Request, Usage};
+        let stripe = get("stripe").unwrap();
+        let decide = |care: Care, method: &str, path: &str| {
+            let p = policy_for(Some(stripe), care);
+            let req = Request {
+                method,
+                path,
+                host: "api.stripe.com",
+                body_len: Some(0),
+                caller: None,
+            };
+            match evaluate(&p, &req, 0, Usage::default()) {
+                Decision::Allow(_) => "allow",
+                Decision::NeedsApproval { .. } => "ask",
+                Decision::Deny(_) => "deny",
+            }
+        };
+        // Balanced: work goes through; money out, deletes and admin ask.
+        assert_eq!(
+            decide(Care::Balanced, "POST", "/v1/payment_intents"),
+            "allow"
+        );
+        assert_eq!(decide(Care::Balanced, "GET", "/v1/balance"), "allow");
+        assert_eq!(decide(Care::Balanced, "POST", "/v1/refunds"), "ask");
+        assert_eq!(decide(Care::Balanced, "POST", "/v1/payouts"), "ask");
+        assert_eq!(
+            decide(
+                Care::Balanced,
+                "POST",
+                "/v1/accounts/acct_1/external_accounts"
+            ),
+            "ask"
+        );
+        assert_eq!(
+            decide(Care::Balanced, "DELETE", "/v1/customers/cus_1"),
+            "ask"
+        );
+        // Relaxed: only deletes and money out ask.
+        assert_eq!(
+            decide(
+                Care::Relaxed,
+                "POST",
+                "/v1/accounts/acct_1/external_accounts"
+            ),
+            "allow"
+        );
+        assert_eq!(decide(Care::Relaxed, "POST", "/v1/refunds"), "ask");
+        assert_eq!(
+            decide(Care::Relaxed, "DELETE", "/v1/customers/cus_1"),
+            "ask"
+        );
+        // Strict: the cautious recommended policy (Stripe: read only).
+        assert_eq!(decide(Care::Strict, "GET", "/v1/customers"), "allow");
+        assert_ne!(decide(Care::Strict, "POST", "/v1/payment_intents"), "allow");
+        // Hosts are always left to the secret's own lock.
+        for care in [Care::Relaxed, Care::Balanced, Care::Strict] {
+            assert!(policy_for(Some(stripe), care).upstreams.is_empty());
+        }
+        // Every preset yields a valid policy at every level.
+        for p in all() {
+            for care in [Care::Relaxed, Care::Balanced, Care::Strict] {
+                policy_for(Some(p), care)
+                    .validate()
+                    .unwrap_or_else(|e| panic!("{} {care:?}: {e}", p.id));
+            }
+        }
+        assert_eq!(Care::parse("Balanced"), Some(Care::Balanced));
+        assert_eq!(Care::default(), Care::Balanced);
+    }
 
     #[test]
     fn a_pasted_key_is_recognised_only_by_a_prefix_it_owns() {

@@ -118,6 +118,15 @@ fn tool_json(result: &Value) -> Value {
 async fn setup() -> Arc<Env> {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("vault.db");
+    // These tests were written for the provider's cautious default; the care
+    // levels have their own test below.
+    std::fs::write(
+        dir.path().join("config.toml"),
+        "[daemon]
+care = \"strict\"
+",
+    )
+    .unwrap();
     std::mem::forget(dir);
     {
         let (_v, _k) = Vault::create(
@@ -763,4 +772,80 @@ async fn a_refused_key_comes_with_the_owners_fix() {
         json!({ "secret": "stripe-live", "method": "GET", "path": "/v1/customers" }),
     );
     assert!(tool_json(&r)["hint"].is_null(), "{r}");
+}
+
+/// Balanced, the default: an AI tool can do the work, and money out asks
+/// first instead of failing. Switching levels updates the access Unseenkey
+/// handed out, and leaves access the owner set up alone.
+#[tokio::test(flavor = "multi_thread")]
+async fn care_levels_change_what_an_ai_tool_may_do() {
+    let env = setup().await;
+    // Back to the default for this test.
+    let (code, b) = env.mgmt("PATCH", "/v1/settings", Some(json!({ "care": "balanced" })));
+    assert_eq!(code, 200, "{b}");
+    assert_eq!(env.mgmt("GET", "/v1/status", None).1["care"], "balanced");
+
+    // Creating a charge works straight away under balanced (strict would refuse).
+    let r = env.tool("call_api", json!({ "secret": "stripe-live", "method": "POST", "path": "/v1/payment_intents", "body": { "amount": 100 } }));
+    assert_eq!(r["isError"], false, "{r}");
+    assert_eq!(tool_json(&r)["status"], 200);
+
+    // A refund asks the owner: an approval appears while the call waits.
+    let env2 = env.clone();
+    let call = tokio::task::spawn_blocking(move || {
+        env2.tool("call_api", json!({ "secret": "stripe-live", "method": "POST", "path": "/v1/refunds", "body": { "charge": "ch_1" } }))
+    });
+    let mut pending = Value::Null;
+    for _ in 0..50 {
+        pending = env.mgmt("GET", "/v1/approvals", None).1;
+        if pending.as_array().is_some_and(|a| !a.is_empty()) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let id = pending[0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no approval: {pending}"))
+        .to_string();
+    assert_eq!(pending[0]["path"], "/v1/refunds");
+    assert_eq!(
+        env.mgmt(
+            "POST",
+            &format!("/v1/approvals/{id}"),
+            Some(json!({ "decision": "deny" }))
+        )
+        .0,
+        200
+    );
+    let r = call.await.unwrap();
+    assert_eq!(r["isError"], true, "a refused refund is an error: {r}");
+
+    // The owner's own access is not touched by a level change.
+    let (code, mine) = env.mgmt("POST", "/v1/handles", Some(json!({ "secret": "stripe-live", "label": "mine", "preset_policy": "stripe:read-only" })));
+    assert_eq!(code, 201, "{mine}");
+    let (_, b) = env.mgmt("PATCH", "/v1/settings", Some(json!({ "care": "strict" })));
+    assert!(b["handles_updated"].as_u64().unwrap() >= 1, "{b}");
+    let handles = env.mgmt("GET", "/v1/handles", None).1;
+    let ai = handles
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["label"] == "mcp:cursor/stripe-live")
+        .unwrap();
+    assert!(
+        ai["policy"]["approval"]["paths"]
+            .as_array()
+            .is_none_or(|a| a.is_empty()),
+        "strict again: {ai}"
+    );
+    let mine = handles
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["label"] == "mine")
+        .unwrap();
+    assert_eq!(mine["policy"]["allow"], json!(["GET /v1/**"]), "{mine}");
+
+    let (code, e) = env.mgmt("PATCH", "/v1/settings", Some(json!({ "care": "reckless" })));
+    assert_eq!(code, 400, "{e}");
 }

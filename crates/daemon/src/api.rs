@@ -106,6 +106,8 @@ pub struct Status {
     pub secrets: Option<usize>,
     /// Idle lock timeout in minutes (0 = off).
     pub idle_lock_minutes: u64,
+    /// Care level: `relaxed`, `balanced` or `strict`.
+    pub care: &'static str,
 }
 
 /// `GET /v1/status`
@@ -118,6 +120,7 @@ pub async fn status(State(s): State<Arc<AppState>>) -> ApiResult<Status> {
         uptime_s: s.started.elapsed().as_secs(),
         secrets: if v.is_locked() { None } else { Some(v.len()) },
         idle_lock_minutes: s.idle_lock().as_secs() / 60,
+        care: s.care().as_str(),
     }))
 }
 
@@ -126,6 +129,49 @@ pub async fn status(State(s): State<Arc<AppState>>) -> ApiResult<Status> {
 pub struct PatchSettings {
     /// Lock after this many idle minutes; 0 = never. At most a day.
     pub idle_lock_minutes: Option<u64>,
+    /// `relaxed`, `balanced` or `strict`; applied to every active handle whose
+    /// policy Unseenkey handed out and nobody edited.
+    pub care: Option<String>,
+}
+
+/// Re-apply the care level to the handles that follow it. Handles made by AI
+/// tools before the care level existed are included when their policy is
+/// still exactly the strict default they were given.
+fn apply_care(v: &mut crate::state::DaemonVault, care: presets::Care) -> Result<usize, ApiError> {
+    let now = now_ms();
+    let targets: Vec<(Id, Option<String>)> = v
+        .handles()?
+        .into_iter()
+        .filter(|h| h.is_active(now) && !h.canary)
+        .filter(|h| {
+            if h.follows_care {
+                return true;
+            }
+            if !h.label.starts_with("mcp:") {
+                return false;
+            }
+            // Untouched first-use default from before: same rules as strict gave.
+            let provider = v.get(&h.secret_id).ok().and_then(|m| m.provider.clone());
+            let old = presets::policy_for(
+                provider.as_deref().and_then(presets::get),
+                presets::Care::Strict,
+            );
+            h.policy.allow == old.allow
+                && h.policy.deny == old.deny
+                && h.policy.approval == old.approval
+        })
+        .map(|h| {
+            (
+                h.handle_id,
+                v.get(&h.secret_id).ok().and_then(|m| m.provider.clone()),
+            )
+        })
+        .collect();
+    for (id, provider) in &targets {
+        let p = presets::policy_for(provider.as_deref().and_then(presets::get), care);
+        v.apply_care_policy(id, p)?;
+    }
+    Ok(targets.len())
 }
 
 /// `PATCH /v1/settings`: change the idle lock now and keep it in `config.toml`.
@@ -163,9 +209,47 @@ pub async fn patch_settings(
         );
         tracing::info!(minutes = m, "idle lock changed");
     }
-    Ok(Json(
-        serde_json::json!({ "ok": true, "idle_lock_minutes": s.idle_lock().as_secs() / 60 }),
-    ))
+    let mut applied = None;
+    if let Some(c) = p.care.as_deref() {
+        let care = presets::Care::parse(c).ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid",
+                "care is relaxed, balanced or strict",
+            )
+        })?;
+        crate::config::set_daemon_value(
+            &s.config_path,
+            "care",
+            toml::Value::String(care.as_str().into()),
+        )
+        .map_err(|e| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "config_error",
+                e.to_string(),
+            )
+        })?;
+        s.set_care(care);
+        let mut v = s.vault.lock().await;
+        let n = if v.is_locked() {
+            0
+        } else {
+            apply_care(&mut v, care)?
+        };
+        let _ = v.audit(
+            kinds::SETTINGS_CHANGED,
+            serde_json::json!({ "care": care.as_str(), "handles_updated": n }),
+        );
+        tracing::info!(care = care.as_str(), handles = n, "care level changed");
+        applied = Some(n);
+    }
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "idle_lock_minutes": s.idle_lock().as_secs() / 60,
+        "care": s.care().as_str(),
+        "handles_updated": applied,
+    })))
 }
 
 /// `POST /v1/unlock` body: either the password, or a device unlock method's
@@ -1126,17 +1210,25 @@ pub struct HandleCreated {
 }
 
 fn handle_view(v: &crate::state::DaemonVault, h: &HandleRecord, now: i64) -> HandleView {
-    let (secret, provider) = v
+    let (secret, provider, hosts) = v
         .get(&h.secret_id)
-        .map(|m| (m.name.clone(), m.provider.clone()))
-        .unwrap_or_else(|_| ("(deleted)".into(), None));
+        .map(|m| (m.name.clone(), m.provider.clone(), m.upstreams.clone()))
+        .unwrap_or_else(|_| ("(deleted)".into(), None, Vec::new()));
+    // A policy without hosts of its own goes where its secret may go: say so.
+    let shown = if h.policy.upstreams.is_empty() {
+        let mut p = h.policy.clone();
+        p.upstreams = hosts;
+        p
+    } else {
+        h.policy.clone()
+    };
     HandleView {
         id: h.handle_id.to_hex(),
         label: h.label.clone(),
         secret,
         secret_id: h.secret_id.to_hex(),
         provider,
-        policy_explanation: explain(&h.policy),
+        policy_explanation: explain(&shown),
         policy: h.policy.clone(),
         created_at: h.created_at,
         expires_at: h.expires_at,
@@ -1183,15 +1275,11 @@ pub async fn create_handle(
         (Some(p), _) => p.clone(),
         (None, Some(spec)) => presets::policy_ref(spec)
             .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, "invalid_policy", e.to_string()))?,
-        (None, None) => match meta.provider.as_deref().and_then(presets::get) {
-            Some(p) => p
-                .policies
-                .first()
-                .and_then(|pp| p.policy(&pp.id))
-                .unwrap_or_else(Policy::allow_all),
-            None => Policy::allow_all(),
-        },
+        (None, None) => {
+            presets::policy_for(meta.provider.as_deref().and_then(presets::get), s.care())
+        }
     };
+    let follows_care = req.policy.is_none() && req.preset_policy.is_none() && !req.canary;
     for (cap, slot) in [
         (req.cap_per_day, &mut policy.limits.requests_per_day),
         (req.cap_per_minute, &mut policy.limits.requests_per_minute),
@@ -1224,6 +1312,7 @@ pub async fn create_handle(
             AnomalyResponse::Throttle
         }),
         project,
+        follows_care,
     };
     let label = req
         .label
