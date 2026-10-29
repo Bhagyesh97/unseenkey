@@ -4,10 +4,17 @@ upstreams = ["api.openai.com"]
 auth = { kind = "bearer" }
 docs = "https://platform.openai.com/api-keys"
 base_path = "/v1"
+category = "ai"
+key_prefixes = ["sk-proj-", "sk-svcacct-", "sk-admin-"]
 
 [env]
 base_url = "OPENAI_BASE_URL"
 api_key = "OPENAI_API_KEY"
+
+
+[verify]
+method = "GET"
+path = "/v1/models"
 
 [[policies]]
 id = "chat"

@@ -4,6 +4,7 @@ upstreams = ["*.amazonaws.com"]
 auth = { kind = "aws_sigv4" }
 docs = "https://console.aws.amazon.com/iam/home#/security_credentials"
 base_path = ""
+category = "hosting"
 
 # The SDK gets the handle as its access key id and signs with a placeholder
 # secret; the broker signs again with the real key. What a key may do in AWS is

@@ -4,10 +4,16 @@ upstreams = ["api.mistral.ai"]
 auth = { kind = "bearer" }
 docs = "https://console.mistral.ai/api-keys"
 base_path = "/v1"
+category = "ai"
 
 [env]
 base_url = "MISTRAL_BASE_URL"
 api_key = "MISTRAL_API_KEY"
+
+
+[verify]
+method = "GET"
+path = "/v1/models"
 
 [[policies]]
 id = "chat"

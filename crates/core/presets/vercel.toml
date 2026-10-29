@@ -4,9 +4,15 @@ upstreams = ["api.vercel.com"]
 auth = { kind = "bearer" }
 docs = "https://vercel.com/account/tokens"
 base_path = ""
+category = "hosting"
 
 [env]
 api_key = "VERCEL_TOKEN"
+
+
+[verify]
+method = "GET"
+path = "/v2/user"
 
 [[policies]]
 id = "read-only"

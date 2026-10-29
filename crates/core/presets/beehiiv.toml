@@ -1,0 +1,33 @@
+id = "beehiiv"
+display = "beehiiv"
+category = "email"
+upstreams = ["api.beehiiv.com"]
+auth = { kind = "bearer" }
+docs = "https://app.beehiiv.com/settings/workspace/api"
+base_path = "/v2"
+key_prefixes = []
+env_names = []
+
+[env]
+api_key = "BEEHIIV_API_KEY"
+
+[verify]
+method = "GET"
+path = "/v2/publications"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "* /v2/publications/*/posts", "* /v2/publications/*/posts/**", "* /v2/publications/*/webhooks", "* /v2/publications/*/webhooks/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

@@ -1,0 +1,33 @@
+id = "polar"
+display = "Polar"
+category = "payments"
+upstreams = ["api.polar.sh", "sandbox-api.polar.sh"]
+auth = { kind = "bearer" }
+docs = "https://polar.sh/dashboard (Settings > Developers > New Token)"
+base_path = "/v1"
+key_prefixes = ["polar_oat_"]
+env_names = ["POLAR_WEBHOOK_SECRET"]
+
+[env]
+api_key = "POLAR_ACCESS_TOKEN"
+
+[verify]
+method = "GET"
+path = "/v1/products/?limit=1"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "POST /v1/refunds", "POST /v1/refunds/**", "DELETE /v1/subscriptions/*", "DELETE /v1/subscriptions/*/**", "PATCH /v1/subscriptions/*", "PATCH /v1/subscriptions/*/**", "* /v1/benefits", "* /v1/benefits/**", "* /v1/discounts", "* /v1/discounts/**", "* /v1/webhooks", "* /v1/webhooks/**", "* /v1/organizations", "* /v1/organizations/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

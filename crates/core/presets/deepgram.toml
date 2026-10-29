@@ -1,0 +1,33 @@
+id = "deepgram"
+display = "Deepgram"
+category = "ai"
+upstreams = ["api.deepgram.com"]
+auth = { kind = "scheme", scheme = "Token" }
+docs = "https://console.deepgram.com"
+base_path = "/v1"
+key_prefixes = []
+env_names = []
+
+[env]
+api_key = "DEEPGRAM_API_KEY"
+
+[verify]
+method = "GET"
+path = "/v1/projects"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "* /v1/projects/*/keys/**", "* /v1/projects/*/members/**", "* /v1/projects/*/invites/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

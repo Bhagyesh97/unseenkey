@@ -4,6 +4,7 @@ upstreams = []
 auth = { kind = "template" }
 docs = ""
 base_path = ""
+category = "other"
 
 [[policies]]
 id = "read-only"

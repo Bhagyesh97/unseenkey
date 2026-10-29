@@ -26,6 +26,8 @@ All responses are JSON. Errors: `{ "error": "<code>", "message": "…" }`.
 | PATCH | `/v1/handles/{id}` | `{preset_policy \| policy}` replaces the policy (and forgets remembered rules); `{on_anomaly}` changes the incident response alone |
 | POST | `/v1/handles/{id}/resume` | back to normal after an incident: ends a throttle, approval mode or pause, restarts the burst detector |
 | GET | `/v1/projects[?dir=…]` | projects with their folders, secrets, `cap_per_day`, `requests_today`, active `handles`; `dir` returns only the project whose folder most closely contains it |
+| POST | `/v1/detect` | `{value?, name?}` → `{recognised: {provider, display, how: shape\|name, note, testable} \| null}`; stores and sends nothing |
+| POST | `/v1/secrets/{ref}/test` | one read-only request from the provider preset's `[verify]`, on a host the secret is locked to → `{tested, ok, status, provider, message}`; audited as `key_tested` |
 | POST | `/v1/projects` | `{name?, paths?, secrets?, cap_per_day?, notes?}`; the name defaults to the first folder's (`shop`, `shop 2`, …) |
 | GET/PATCH/DELETE | `/v1/projects/{id\|name}` | PATCH `{name?, paths?, cap_per_day?, notes?}` (`cap_per_day: null` removes the limit); DELETE keeps the secrets and handles |
 | POST | `/v1/projects/{ref}/secrets` | `{secret}` adds a secret; `DELETE /v1/projects/{ref}/secrets/{secret}` takes it out (it stays in the vault) |
@@ -98,6 +100,7 @@ usk policy explain <id>
 usk env <name> [--policy chat] [--shell sh|powershell|cmd|dotenv]   print the variables for the provider preset (creates handle)
 usk run --with VAR=name [...] -- <cmd…>   inject secrets into a child's environment (needs --allow-injection); output scrubbed; exit code propagates
 usk secret set <name> [--allow-injection bool] [--no-scrub bool] [--notes …] [--tag …] [--upstream host] [--provider id]   # hosts are normalised (https://host/path → host); a new provider brings its hosts
+usk secret test <name>             one read-only request to the key's provider: works / refused / unclear
 usk secret replace <name> [--stdin]   new value under the same name (a rotated key); handles keep working
 usk guard scan [.env]            which lines look like secrets, and which can become handles
 usk guard fix  [.env] [--dry-run] [--project p]  move them into the vault, rewrite the file with handles + base-URL variables

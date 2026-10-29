@@ -649,11 +649,7 @@ async fn store_secret(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args: 
         .map(str::to_string)
         .or_else(|| detected.map(|d| d.provider.to_string()));
     let kind = detected.map(|d| d.kind).unwrap_or(SecretKind::ApiKey);
-    let upstreams = provider
-        .as_deref()
-        .and_then(providers::provider)
-        .map(|d| d.upstreams.iter().map(|u| u.to_string()).collect())
-        .unwrap_or_default();
+    let upstreams = crate::api::provider_hosts(provider.as_deref());
     let mut v = s.vault.lock().await;
     if v.is_locked() {
         return tool_text(

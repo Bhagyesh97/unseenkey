@@ -20,6 +20,7 @@ pub mod api;
 pub mod callers;
 pub mod config;
 pub mod guard;
+pub mod keytest;
 pub mod logging;
 pub mod mcp;
 pub mod oauth;

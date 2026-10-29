@@ -126,6 +126,8 @@ export interface Preset {
   upstreams: string[];
   docs: string;
   camouflage: boolean;
+  category?: string;
+  testable?: boolean;
   policies: { id: string; display: string; recommended: boolean; explanation: string }[];
 }
 

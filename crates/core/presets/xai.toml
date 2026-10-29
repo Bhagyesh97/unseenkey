@@ -1,0 +1,33 @@
+id = "xai"
+display = "xAI (Grok)"
+category = "ai"
+upstreams = ["api.x.ai"]
+auth = { kind = "bearer" }
+docs = "https://console.x.ai"
+base_path = "/v1"
+key_prefixes = ["xai-"]
+env_names = []
+
+[env]
+api_key = "XAI_API_KEY"
+
+[verify]
+method = "GET"
+path = "/v1/models"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "* /v1/api-key/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

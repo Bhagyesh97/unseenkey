@@ -1,0 +1,33 @@
+id = "tally"
+display = "Tally"
+category = "productivity"
+upstreams = ["api.tally.so"]
+auth = { kind = "bearer" }
+docs = "https://tally.so/settings/api-keys"
+base_path = ""
+key_prefixes = []
+env_names = []
+
+[env]
+api_key = "TALLY_API_KEY"
+
+[verify]
+method = "GET"
+path = "/users/me"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "DELETE /forms/*", "DELETE /forms/*/**", "DELETE /forms/*/submissions/*", "DELETE /forms/*/submissions/*/**", "* /workspaces/*/invites*", "* /workspaces/*/invites*/**", "* /webhooks*", "* /webhooks*/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

@@ -1,0 +1,33 @@
+id = "hubspot"
+display = "HubSpot"
+category = "crm"
+upstreams = ["api.hubapi.com"]
+auth = { kind = "bearer" }
+docs = "https://app.hubspot.com/ (Settings > Integrations > Private Apps / Legacy apps)"
+base_path = ""
+key_prefixes = ["pat-na1-", "pat-eu1-"]
+env_names = ["HUBSPOT_PRIVATE_APP_TOKEN", "HUBSPOT_API_KEY"]
+
+[env]
+api_key = "HUBSPOT_ACCESS_TOKEN"
+
+[verify]
+method = "GET"
+path = "/account-info/v3/details"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "* /crm/v3/objects/*/batch/archive", "* /crm/v3/objects/*/batch/archive/**", "* /settings/v3/users*", "* /settings/v3/users*/**", "* /marketing/v3/transactional/single-email/send", "* /marketing/v3/transactional/single-email/send/**", "* /communication-preferences*", "* /communication-preferences*/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

@@ -78,35 +78,89 @@ export function Secrets({ tick }: { tick: number }) {
   );
 }
 
-function AddSecret({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
-  const [name, setName] = useState("");
-  const [value, setValue] = useState("");
-  const [notes, setNotes] = useState("");
-  const [hosts, setHosts] = useState("");
-  const [provider, setProvider] = useState("");
-  const [presets, setPresets] = useState<Preset[]>([]);
-  const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    void api.presets().then(setPresets).catch(() => {});
-  }, []);
-  const [err, setErr] = useState<string | null>(null);
-  const [result, setResult] = useState<{ detected?: { display: string; note: string }; upstreams: string[]; name: string } | null>(null);
+type Recognised = { provider: string; display: string; how: "shape" | "name"; note: string; testable: boolean };
+type TestResult = { tested: boolean; ok: boolean | null; status: number | null; provider: string | null; message: string };
 
-  const submit = async () => {
+const CATEGORY_NAMES: Record<string, string> = {
+  ai: "AI", payments: "Payments", hosting: "Hosting", database: "Databases", email: "Email", messaging: "Messaging",
+  devtools: "Developer tools", productivity: "Productivity", crm: "CRM", auth: "Sign-in", backend: "Backend",
+  maps: "Maps", social: "Social", other: "Other",
+};
+
+function TestBanner({ t }: { t: TestResult }) {
+  const cls = t.ok === true ? "ok" : t.ok === false ? "error" : "info";
+  const head = t.ok === true ? "It works." : t.ok === false ? "This key was refused." : t.tested ? "Tested, result unclear." : "Not tested.";
+  return <div className={`banner ${cls}`}><b>{head}</b> {t.message}</div>;
+}
+
+/** Paste a key; Unseenkey works out the rest. Everything stays editable under "More options". */
+function AddSecret({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
+  const [value, setValue] = useState("");
+  const [name, setName] = useState("");
+  const [nameTouched, setNameTouched] = useState(false);
+  const [picked, setPicked] = useState<string>("");
+  const [hosts, setHosts] = useState("");
+  const [notes, setNotes] = useState("");
+  const [more, setMore] = useState(false);
+  const [search, setSearch] = useState("");
+  const [presets, setPresets] = useState<Preset[]>([]);
+  const [recog, setRecog] = useState<Recognised | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState<{ name: string; display: string | null; upstreams: string[]; test: TestResult | null } | null>(null);
+
+  const [taken, setTaken] = useState<string[]>([]);
+  useEffect(() => {
+    void api.presets().then((p) => setPresets(p.filter((x) => x.id !== "generic"))).catch(() => {});
+    void api.secrets().then((l) => setTaken(l.map((s) => s.name.toLowerCase()))).catch(() => {});
+  }, []);
+  // Recognise as the user types. Nothing is stored or sent off this computer.
+  useEffect(() => {
+    if (!value.trim()) {
+      setRecog(null);
+      return;
+    }
+    const id = setTimeout(() => {
+      void api.call<{ recognised: Recognised | null }>("POST", "/v1/detect", { value: value.trim(), name: nameTouched ? name : null })
+        .then((r) => setRecog(r.recognised))
+        .catch(() => setRecog(null));
+    }, 250);
+    return () => clearTimeout(id);
+  }, [value, name, nameTouched]);
+
+  const provider = picked === "other" || picked === "__choose" ? "" : picked || recog?.provider || "";
+  const preset = presets.find((p) => p.id === provider);
+  const display = preset?.display ?? (provider ? recog?.display : null) ?? null;
+  // A default name never clashes with a key you already have: openai, openai-2, …
+  const defaultName = (() => {
+    if (!provider) return "";
+    let n = provider;
+    for (let i = 2; taken.includes(n.toLowerCase()); i++) n = `${provider}-${i}`;
+    return n;
+  })();
+  const effectiveName = (nameTouched ? name : "").trim() || defaultName;
+  const needHosts = picked === "other";
+  const canSave = !!value.trim() && !!effectiveName && (!!provider || (needHosts && splitHosts(hosts).length > 0));
+
+  const save = async () => {
     setErr(null);
     setBusy(true);
     try {
-      const body: Record<string, unknown> = { name: name.trim(), value: value.includes("\n") ? value : value.trim(), notes: notes || null };
+      const body: Record<string, unknown> = { name: effectiveName, value: value.includes("\n") ? value : value.trim(), notes: notes || null };
       if (provider) body.provider = provider;
       const list = splitHosts(hosts);
       if (list.length) body.upstreams = list;
-      const r = await api.call<{ detected?: { display: string; note: string }; upstreams: string[]; name: string }>(
-        "POST",
-        "/v1/secrets",
-        body,
-      );
+      const r = await api.call<{ id: string; name: string; upstreams: string[] }>("POST", "/v1/secrets", body);
       setValue("");
-      setResult(r);
+      let test: TestResult | null = null;
+      if (provider) {
+        try {
+          test = await api.call<TestResult>("POST", `/v1/secrets/${r.id}/test`, {});
+        } catch (e) {
+          test = { tested: false, ok: null, status: null, provider: display, message: (e as Error).message };
+        }
+      }
+      setDone({ name: r.name, display, upstreams: r.upstreams, test });
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -114,42 +168,91 @@ function AddSecret({ onDone, onCancel }: { onDone: () => void; onCancel: () => v
     }
   };
 
-  if (result) {
+  if (done) {
     return (
       <div className="form">
-        <h2>Saved {result.name}</h2>
-        {result.detected && (
-          <p>
-            Detected: <b>{result.detected.display}</b> {result.detected.note && `(${result.detected.note})`}
-          </p>
-        )}
-        <p>{result.upstreams.length ? <>Locked to <b>{result.upstreams.join(", ")}</b>. It can only ever be sent there.</> : "No host lock yet: add an allowed host in the secret's settings before using it."}</p>
-        <p className="muted">The value is encrypted and will not be shown again. Create a handle to use it.</p>
-        <button className="primary" onClick={onDone}>Done</button>
+        <h2>Saved {done.name}</h2>
+        {done.test && <TestBanner t={done.test} />}
+        <p className="muted small">
+          {done.display ? `${done.display} · ` : ""}It can only ever be sent to {done.upstreams.join(", ") || "the websites you set"}. The key is encrypted and is not shown again.
+        </p>
+        {done.test?.ok === false && <p className="small">Fix it by opening the key and choosing <b>Replace value</b>, or paste the right key again.</p>}
+        <div className="actions"><button className="primary" onClick={onDone}>Done</button></div>
       </div>
     );
   }
 
+  const q = search.trim().toLowerCase();
+  const shown = presets.filter((p) => !q || p.display.toLowerCase().includes(q) || p.id.includes(q) || (p.category ?? "").includes(q));
+  const groups = new Map<string, Preset[]>();
+  for (const p of shown) {
+    const c = p.category || "other";
+    groups.set(c, [...(groups.get(c) ?? []), p]);
+  }
+
   return (
     <div className="form">
-      <h2>Add a secret</h2>
-      <label>Name<input autoFocus placeholder="openai, stripe-live, …" value={name} onChange={(e) => setName(e.target.value)} /></label>
-      <label>Value<textarea rows={3} placeholder="Paste the key. It is detected, encrypted and never shown again." value={value} onChange={(e) => setValue(e.target.value)} /></label>
-      <label>Notes (optional)<input value={notes} onChange={(e) => setNotes(e.target.value)} /></label>
-      <label>Provider (optional; detected from the value when left empty)
-        <select value={provider} onChange={(e) => setProvider(e.target.value)}>
-          <option value="">detect</option>
-          {presets.map((p) => <option key={p.id} value={p.id}>{p.display}{p.id === "generic" ? "" : ` — ${p.upstreams.join(", ")}`}</option>)}
-        </select>
+      <h2>Add a key</h2>
+      <label>Paste your key
+        <textarea rows={2} autoFocus spellCheck={false} autoComplete="off" placeholder="Paste it here. It is encrypted on this computer and never shown again." value={value} onChange={(e) => setValue(e.target.value)} />
       </label>
-      <label>Allowed websites (optional; the provider's own when left empty)
-        <input placeholder="api.example.com, *.example.com" value={hosts} onChange={(e) => setHosts(e.target.value)} />
-      </label>
+
+      {value.trim() && (provider ? (
+        <div className="recog">
+          <span className="avatar small">{(display ?? provider).slice(0, 1).toUpperCase()}</span>
+          <span>
+            <b>{display ?? provider}</b>
+            {picked ? "" : recog?.how === "name" ? " (from the name)" : recog?.note ? ` (${recog.note})` : ""}
+          </span>
+          <button className="link" onClick={() => { setSearch(""); setPicked("__choose"); }}>change</button>
+        </div>
+      ) : picked !== "other" ? (
+        <div className="section">
+          <h3>Which service is this key for?</h3>
+          <input placeholder="Search: stripe, supabase, gemini…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <div className="picker">
+            {[...groups.entries()].map(([cat, list]) => (
+              <div key={cat}>
+                <div className="muted small picker-cat">{CATEGORY_NAMES[cat] ?? cat}</div>
+                <div className="picker-grid">
+                  {list.map((p) => (
+                    <button key={p.id} className="picker-item" onClick={() => setPicked(p.id)} title={p.upstreams.join(", ")}>
+                      <span className="avatar small">{p.display.slice(0, 1).toUpperCase()}</span>
+                      <span>{p.display}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          <button className="link" onClick={() => setPicked("other")}>It is not in the list</button>
+        </div>
+      ) : (
+        <label>Which website is this key for?
+          <input autoFocus placeholder="api.example.com" value={hosts} onChange={(e) => setHosts(e.target.value)} />
+          <span className="muted small">The key will only ever be sent there. <button className="link" onClick={() => setPicked("__choose")}>Back to the list</button></span>
+        </label>
+      ))}
+
+      <button className="link" onClick={() => setMore(!more)}>{more ? "Fewer options" : "More options"}</button>
+      {more && (
+        <>
+          <label>Name<input placeholder={provider || "openai, stripe-live, …"} value={nameTouched ? name : ""} onChange={(e) => { setName(e.target.value); setNameTouched(true); }} /></label>
+          {!needHosts && (
+            <label>Allowed websites (empty: the provider's own)
+              <input placeholder={preset?.upstreams.join(", ") ?? "api.example.com"} value={hosts} onChange={(e) => setHosts(e.target.value)} />
+            </label>
+          )}
+          <label>Notes<input value={notes} onChange={(e) => setNotes(e.target.value)} /></label>
+        </>
+      )}
+      {!effectiveName && value.trim() && needHosts && <p className="muted small">Give it a name under More options.</p>}
       {err && <div className="err">{err}</div>}
       <div className="actions">
         <button onClick={onCancel}>Cancel</button>
-        <button className="primary" disabled={busy || !name.trim() || !value} onClick={() => void submit()}>{busy ? "Saving…" : "Save"}</button>
+        <button className="primary" disabled={busy || !canSave} onClick={() => void save()}>{busy ? "Saving and testing…" : preset?.testable ? "Save and test" : "Save"}</button>
       </div>
+      <p className="muted small">In a terminal: <code>usk add {effectiveName || "<name>"}</code></p>
     </div>
   );
 }
@@ -160,6 +263,19 @@ function SecretDetail({ secret, onChange }: { secret: SecretMeta; onChange: () =
   const [revealed, setRevealed] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [replacing, setReplacing] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [test, setTest] = useState<TestResult | null>(null);
+  const runTest = async () => {
+    setTesting(true);
+    setTest(null);
+    try {
+      setTest(await api.call<TestResult>("POST", `/v1/secrets/${secret.secret_id}/test`, {}));
+    } catch (e) {
+      setTest({ tested: false, ok: null, status: null, provider: null, message: (e as Error).message });
+    } finally {
+      setTesting(false);
+    }
+  };
   const [inProjects, setInProjects] = useState<string[] | null>(null);
   useEffect(() => {
     void api.projects()
@@ -218,6 +334,7 @@ function SecretDetail({ secret, onChange }: { secret: SecretMeta; onChange: () =
           )}
         </dd>
       </dl>
+      {test && <TestBanner t={test} />}
       {editing ? (
         <EditSettings secret={secret} onDone={async () => { setEditing(false); await onChange(); }} onCancel={() => setEditing(false)} />
       ) : replacing ? (
@@ -225,6 +342,7 @@ function SecretDetail({ secret, onChange }: { secret: SecretMeta; onChange: () =
       ) : (
         <div className="actions">
           <button onClick={() => setEditing(true)}>Edit settings</button>
+          {secret.provider && <button disabled={testing} onClick={() => void runTest()}>{testing ? "Testing…" : "Test key"}</button>}
           {secret.kind !== "aws_credentials" && secret.kind !== "oauth2_client" && (
             <button onClick={() => setReplacing(true)}>Replace value</button>
           )}

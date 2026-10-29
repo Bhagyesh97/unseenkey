@@ -1,0 +1,33 @@
+id = "calendly"
+display = "Calendly"
+category = "productivity"
+upstreams = ["api.calendly.com"]
+auth = { kind = "bearer" }
+docs = "https://calendly.com/integrations/api_webhooks"
+base_path = ""
+key_prefixes = []
+env_names = ["CALENDLY_PERSONAL_ACCESS_TOKEN", "CALENDLY_TOKEN"]
+
+[env]
+api_key = "CALENDLY_API_KEY"
+
+[verify]
+method = "GET"
+path = "/users/me"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "POST /scheduled_events/*/cancellation", "POST /scheduled_events/*/cancellation/**", "* /organizations/*/invitations*", "* /organizations/*/invitations*/**", "* /webhook_subscriptions*", "* /webhook_subscriptions*/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

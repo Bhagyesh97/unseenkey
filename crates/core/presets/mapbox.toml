@@ -1,0 +1,33 @@
+id = "mapbox"
+display = "Mapbox"
+category = "maps"
+upstreams = ["api.mapbox.com", "events.mapbox.com"]
+auth = { kind = "query", param = "access_token" }
+docs = "https://account.mapbox.com/access-tokens/"
+base_path = ""
+key_prefixes = ["sk."]
+env_names = ["NEXT_PUBLIC_MAPBOX_TOKEN", "MAPBOX_TOKEN"]
+
+[env]
+api_key = "MAPBOX_ACCESS_TOKEN"
+
+[verify]
+method = "GET"
+path = "/tokens/v2"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "* /tokens/v2/*", "* /tokens/v2/*/**", "* /uploads/v1*", "* /uploads/v1*/**", "DELETE /styles/v1/*", "DELETE /styles/v1/*/**", "DELETE /datasets/v1/*", "DELETE /datasets/v1/*/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

@@ -1,0 +1,33 @@
+id = "linode"
+display = "Linode (Akamai Cloud)"
+category = "hosting"
+upstreams = ["api.linode.com"]
+auth = { kind = "bearer" }
+docs = "https://cloud.linode.com/profile/tokens"
+base_path = "/v4"
+key_prefixes = []
+env_names = ["LINODE_CLI_TOKEN"]
+
+[env]
+api_key = "LINODE_TOKEN"
+
+[verify]
+method = "GET"
+path = "/v4/profile"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "POST /v4/linode/instances", "POST /v4/linode/instances/**", "* /v4/account/users", "* /v4/account/users/**", "* /v4/profile/tokens", "* /v4/profile/tokens/**", "* /v4/account/payments", "* /v4/account/payments/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

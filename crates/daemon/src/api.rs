@@ -399,6 +399,10 @@ pub struct Detected {
     pub display: String,
     /// Extra note.
     pub note: String,
+    /// `shape` (the key itself says so) or `name` (only its name suggests it).
+    pub how: String,
+    /// Whether `POST /v1/secrets/{ref}/test` can test it.
+    pub testable: bool,
 }
 
 /// `POST /v1/secrets`
@@ -439,10 +443,27 @@ pub async fn create_secret(
         None if oauth_text.is_some() => SecretKind::Oauth2Client,
         None => detected.map(|d| d.kind).unwrap_or(SecretKind::ApiKey),
     };
+    // No shape the hand-written detector knows: a prefix only one preset
+    // claims, then the name the owner typed (`cloudflare`, `OPENAI_API_KEY`).
+    let recognised = if detected.is_none()
+        && req.provider.is_none()
+        && aws_text.is_none()
+        && oauth_text.is_none()
+    {
+        crate::keytest::recognise(Some(req.value.as_str()), Some(req.name.as_str()))
+    } else {
+        detected.map(|d| crate::keytest::Recognised {
+            provider: d.provider.to_string(),
+            display: d.display.to_string(),
+            how: "shape",
+            note: d.note.to_string(),
+            testable: presets::get(d.provider).is_some_and(|p| p.verify.is_some()),
+        })
+    };
     let provider = req
         .provider
         .clone()
-        .or_else(|| detected.map(|d| d.provider.to_string()))
+        .or_else(|| recognised.as_ref().map(|r| r.provider.clone()))
         .or_else(|| (kind == SecretKind::AwsCredentials).then(|| "aws".to_string()));
     let is_aws = kind == SecretKind::AwsCredentials || provider.as_deref() == Some("aws");
     let kind = if is_aws && req.kind.is_none() {
@@ -451,11 +472,7 @@ pub async fn create_secret(
         kind
     };
     let mut upstreams: Vec<String> = if req.upstreams.is_empty() {
-        provider
-            .as_deref()
-            .and_then(providers::provider)
-            .map(|d| d.upstreams.iter().map(|u| u.to_string()).collect())
-            .unwrap_or_default()
+        provider_hosts(provider.as_deref())
     } else {
         req.upstreams.clone()
     };
@@ -586,10 +603,12 @@ pub async fn create_secret(
             kind: kind.as_str().to_string(),
             provider,
             upstreams,
-            detected: detected.map(|d| Detected {
-                provider: d.provider.into(),
-                display: d.display.into(),
-                note: d.note.into(),
+            detected: recognised.map(|r| Detected {
+                provider: r.provider,
+                display: r.display,
+                note: r.note,
+                how: r.how.to_string(),
+                testable: r.testable,
             }),
         }),
     ))
@@ -614,6 +633,21 @@ fn tidy_value(v: &mut Zeroizing<String>) {
     if !t.contains('\n') && t.len() != v.len() {
         *v = Zeroizing::new(t.to_string());
     }
+}
+
+/// The hosts a provider's keys may go to: the built-in table, else the
+/// provider's preset (built-in or the owner's own).
+pub fn provider_hosts(provider: Option<&str>) -> Vec<String> {
+    let Some(id) = provider else {
+        return Vec::new();
+    };
+    if let Some(d) = providers::provider(id) {
+        return d.upstreams.iter().map(|u| u.to_string()).collect();
+    }
+    presets::get(id)
+        .filter(|p| p.id != "generic")
+        .map(|p| p.upstreams.clone())
+        .unwrap_or_default()
 }
 
 /// A secret by id (hex) or name.

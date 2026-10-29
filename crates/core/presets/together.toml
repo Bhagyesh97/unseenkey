@@ -1,0 +1,33 @@
+id = "together"
+display = "Together AI"
+category = "ai"
+upstreams = ["api.together.xyz"]
+auth = { kind = "bearer" }
+docs = "https://api.together.ai/settings/api-keys"
+base_path = "/v1"
+key_prefixes = []
+env_names = []
+
+[env]
+api_key = "TOGETHER_API_KEY"
+
+[verify]
+method = "GET"
+path = "/v1/models"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "* /v1/fine-tunes/**", "* /v1/endpoints/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

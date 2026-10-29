@@ -89,6 +89,12 @@ fn extract_handle(preset: &Preset, headers: &HeaderMap, query: Option<&str>) -> 
     let primary = match &preset.auth {
         Auth::Bearer { .. } | Auth::Basic => bearer(),
         Auth::Header { name } => header(name),
+        // `Authorization: Token <handle>`: what follows the scheme.
+        Auth::Scheme { scheme } => header("authorization").and_then(|v| {
+            let (s, rest) = v.split_once(' ')?;
+            s.eq_ignore_ascii_case(scheme)
+                .then(|| rest.trim().to_string())
+        }),
         Auth::Query { param } => from_query(param),
         // AWS SDKs put their access key id (our handle) inside the SigV4 scope.
         Auth::AwsSigv4 => header("authorization")
@@ -862,7 +868,10 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
     // Bearer`, even for providers whose API keys travel in another header or in
     // the query string. Template and basic styles keep their own shape.
     let auth = match (&preset.auth, meta.kind) {
-        (Auth::Header { .. } | Auth::Query { .. }, SecretKind::BearerToken) => Auth::Bearer {
+        (
+            Auth::Header { .. } | Auth::Query { .. } | Auth::Scheme { .. },
+            SecretKind::BearerToken,
+        ) => Auth::Bearer {
             also_headers: Vec::new(),
         },
         // An OAuth client's handle stands where an access token goes.

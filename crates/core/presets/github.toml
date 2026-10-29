@@ -4,10 +4,18 @@ upstreams = ["api.github.com"]
 auth = { kind = "bearer" }
 docs = "https://github.com/settings/tokens"
 base_path = ""
+category = "devtools"
+key_prefixes = ["github_pat_", "ghp_", "gho_", "ghu_", "ghs_", "ghr_"]
 
 [env]
 base_url = "GITHUB_API_URL"
 api_key = "GITHUB_TOKEN"
+
+
+[verify]
+method = "GET"
+path = "/user"
+headers = { "Accept" = "application/vnd.github+json" }
 
 [[policies]]
 id = "read-only"

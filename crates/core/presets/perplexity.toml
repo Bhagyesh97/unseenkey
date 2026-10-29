@@ -1,0 +1,29 @@
+id = "perplexity"
+display = "Perplexity"
+category = "ai"
+upstreams = ["api.perplexity.ai"]
+auth = { kind = "bearer" }
+docs = "https://www.perplexity.ai/settings/api"
+base_path = ""
+key_prefixes = ["pplx-"]
+env_names = []
+
+[env]
+api_key = "PERPLEXITY_API_KEY"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

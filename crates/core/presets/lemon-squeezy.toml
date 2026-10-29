@@ -1,0 +1,34 @@
+id = "lemon-squeezy"
+display = "Lemon Squeezy"
+category = "payments"
+upstreams = ["api.lemonsqueezy.com"]
+auth = { kind = "bearer" }
+docs = "https://app.lemonsqueezy.com/settings/api"
+base_path = "/v1"
+key_prefixes = []
+env_names = ["LEMON_SQUEEZY_API_KEY"]
+
+[env]
+api_key = "LEMONSQUEEZY_API_KEY"
+
+[verify]
+method = "GET"
+path = "/v1/users/me"
+headers = { "Accept" = "application/vnd.api+json" }
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "* /v1/orders/*/refund", "* /v1/subscriptions/*/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

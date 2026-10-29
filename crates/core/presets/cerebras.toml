@@ -1,0 +1,33 @@
+id = "cerebras"
+display = "Cerebras"
+category = "ai"
+upstreams = ["api.cerebras.ai"]
+auth = { kind = "bearer" }
+docs = "https://cloud.cerebras.ai"
+base_path = "/v1"
+key_prefixes = ["csk-"]
+env_names = []
+
+[env]
+api_key = "CEREBRAS_API_KEY"
+
+[verify]
+method = "GET"
+path = "/v1/models"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

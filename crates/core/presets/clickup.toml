@@ -1,0 +1,33 @@
+id = "clickup"
+display = "ClickUp"
+category = "productivity"
+upstreams = ["api.clickup.com"]
+auth = { kind = "header", name = "Authorization" }
+docs = "https://app.clickup.com/settings/apps"
+base_path = "/api/v2"
+key_prefixes = []
+env_names = ["CLICKUP_API_KEY"]
+
+[env]
+api_key = "CLICKUP_API_TOKEN"
+
+[verify]
+method = "GET"
+path = "/api/v2/user"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "* /api/v2/team/*/user*", "* /api/v2/team/*/user*/**", "* /api/v2/team/*/guest*", "* /api/v2/team/*/guest*/**", "* /api/v2/team/*/webhook", "* /api/v2/team/*/webhook/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

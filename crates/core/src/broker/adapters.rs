@@ -40,6 +40,13 @@ pub fn inject(auth: &Auth, secret: &Revealed) -> Result<Injection, BrokerError> 
             inj.headers
                 .push((name.to_ascii_lowercase(), text(&secret.value)?));
         }
+        Auth::Scheme { scheme } => {
+            let v = text(&secret.value)?;
+            inj.headers.push((
+                "authorization".into(),
+                Zeroizing::new(format!("{scheme} {}", *v)),
+            ));
+        }
         Auth::Basic => {
             // username/password fields, falling back to value as password with an empty user.
             let user = secret

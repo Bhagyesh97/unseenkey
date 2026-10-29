@@ -1,0 +1,33 @@
+id = "fireworks"
+display = "Fireworks AI"
+category = "ai"
+upstreams = ["api.fireworks.ai"]
+auth = { kind = "bearer" }
+docs = "https://fireworks.ai/account/api-keys"
+base_path = "/inference/v1"
+key_prefixes = ["fw_"]
+env_names = []
+
+[env]
+api_key = "FIREWORKS_API_KEY"
+
+[verify]
+method = "GET"
+path = "/inference/v1/models"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "* /v1/accounts/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

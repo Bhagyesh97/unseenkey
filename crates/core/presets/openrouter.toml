@@ -4,10 +4,17 @@ upstreams = ["openrouter.ai"]
 auth = { kind = "bearer" }
 docs = "https://openrouter.ai/settings/keys"
 base_path = "/api/v1"
+category = "ai"
+key_prefixes = ["sk-or-"]
 
 [env]
 base_url = "OPENROUTER_BASE_URL"
 api_key = "OPENROUTER_API_KEY"
+
+
+[verify]
+method = "GET"
+path = "/api/v1/key"
 
 [[policies]]
 id = "chat"

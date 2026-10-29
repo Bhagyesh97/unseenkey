@@ -4,9 +4,16 @@ upstreams = ["api.sendgrid.com"]
 auth = { kind = "bearer" }
 docs = "https://app.sendgrid.com/settings/api_keys"
 base_path = ""
+category = "email"
+key_prefixes = ["SG."]
 
 [env]
 api_key = "SENDGRID_API_KEY"
+
+
+[verify]
+method = "GET"
+path = "/v3/scopes"
 
 [[policies]]
 id = "read-only"

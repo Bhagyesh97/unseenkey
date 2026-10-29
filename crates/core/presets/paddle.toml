@@ -1,0 +1,33 @@
+id = "paddle"
+display = "Paddle Billing"
+category = "payments"
+upstreams = ["api.paddle.com", "sandbox-api.paddle.com"]
+auth = { kind = "bearer" }
+docs = "https://vendors.paddle.com/authentication-v2"
+base_path = ""
+key_prefixes = ["pdl_live_apikey_", "pdl_sdbx_apikey_"]
+env_names = ["NEXT_PUBLIC_PADDLE_CLIENT_TOKEN"]
+
+[env]
+api_key = "PADDLE_API_KEY"
+
+[verify]
+method = "GET"
+path = "/event-types"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "POST /adjustments", "POST /adjustments/**", "POST /subscriptions/*/cancel", "POST /subscriptions/*/cancel/**", "PATCH /subscriptions/*", "PATCH /subscriptions/*/**", "POST /subscriptions/*/charge", "POST /subscriptions/*/charge/**", "* /prices", "* /prices/**", "* /discounts", "* /discounts/**", "* /notification-settings", "* /notification-settings/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

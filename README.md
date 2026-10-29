@@ -101,7 +101,9 @@ Archives and installers for every platform are on the [Releases](https://github.
 | AWS | s3-read-only, s3, full | | SendGrid, Resend | read-only, write, full |
 | Supabase | read-only, data, full | | Twilio | read-only, messaging, full |
 
-Plus `generic` for any other host, and OAuth2 refresh-token clients for Google and anything RFC 6749. `usk presets` lists them with their plain-English explanations.
+Plus 47 more with a safe default, read-only and full each: xAI, Together, Fireworks, Deepgram, ElevenLabs, AssemblyAI, Cohere, DeepSeek, Replicate, Perplexity, Cerebras; Paddle, Polar, Paystack, Mollie, Mercado Pago, Lemon Squeezy, Square; DigitalOcean, Linode, Vultr, Hetzner, Netlify, Render, Heroku, Neon, Supabase management, Hostinger; Postmark, Brevo, Loops, beehiiv, Vapi, Telnyx, Discord bots; Figma, Airtable, ClickUp, Coda, Calendly, Tally, HubSpot, Clerk, CircleCI, Mapbox, YouTube, OpenWeatherMap and Alpha Vantage.
+
+Paste a key and the provider, its allowed websites and a safe default fill in, from the key's shape or, failing that, its name; then one read-only request checks the key works. `generic` covers any other host, OAuth2 refresh-token clients cover Google and anything RFC 6749, and `usk presets` lists everything with plain-English explanations. The [provider research](docs/research/provider-catalogue.md) covers 247 services and is where new presets come from.
 
 ## Security
 

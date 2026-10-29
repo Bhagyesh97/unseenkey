@@ -1,0 +1,33 @@
+id = "loops"
+display = "Loops"
+category = "email"
+upstreams = ["app.loops.so"]
+auth = { kind = "bearer" }
+docs = "https://app.loops.so/settings?page=api"
+base_path = "/api/v1"
+key_prefixes = []
+env_names = []
+
+[env]
+api_key = "LOOPS_API_KEY"
+
+[verify]
+method = "GET"
+path = "/api/v1/api-key"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "POST /api/v1/contacts/delete", "POST /api/v1/contacts/delete/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

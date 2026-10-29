@@ -265,6 +265,8 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
                 .delete(api::delete_secret),
         )
         .route("/secrets/{r}/reveal", post(api::reveal_secret))
+        .route("/secrets/{r}/test", post(crate::keytest::test_secret))
+        .route("/detect", post(crate::keytest::detect))
         .route("/secrets/{r}/inject", post(api::inject_secret))
         .route("/events", get(api::events))
         .route("/handles", get(api::list_handles).post(api::create_handle))

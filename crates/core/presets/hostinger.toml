@@ -4,9 +4,15 @@ upstreams = ["developers.hostinger.com"]
 auth = { kind = "bearer" }
 docs = "https://developers.hostinger.com/"
 base_path = ""
+category = "hosting"
 
 [env]
 api_key = "HOSTINGER_API_TOKEN"
+
+
+[verify]
+method = "GET"
+path = "/api/hosting/v1/websites"
 
 [[policies]]
 id = "read-only"

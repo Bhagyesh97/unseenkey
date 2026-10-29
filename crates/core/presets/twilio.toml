@@ -4,6 +4,7 @@ upstreams = ["api.twilio.com"]
 auth = { kind = "basic" }
 docs = "https://console.twilio.com/"
 base_path = "/2010-04-01"
+category = "messaging"
 
 [env]
 api_key = "TWILIO_AUTH_TOKEN"

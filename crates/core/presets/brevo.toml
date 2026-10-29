@@ -1,0 +1,33 @@
+id = "brevo"
+display = "Brevo"
+category = "email"
+upstreams = ["api.brevo.com"]
+auth = { kind = "header", name = "api-key" }
+docs = "https://app.brevo.com/settings/keys/api"
+base_path = "/v3"
+key_prefixes = ["xkeysib-"]
+env_names = ["SENDINBLUE_API_KEY"]
+
+[env]
+api_key = "BREVO_API_KEY"
+
+[verify]
+method = "GET"
+path = "/v3/account"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "* /v3/senders/**", "* /v3/organization/**", "* /v3/corporate/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

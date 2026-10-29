@@ -1,0 +1,33 @@
+id = "discord"
+display = "Discord (bot)"
+category = "messaging"
+upstreams = ["discord.com"]
+auth = { kind = "scheme", scheme = "Bot" }
+docs = "https://discord.com/developers/applications"
+base_path = "/api/v10"
+key_prefixes = []
+env_names = ["DISCORD_TOKEN"]
+
+[env]
+api_key = "DISCORD_BOT_TOKEN"
+
+[verify]
+method = "GET"
+path = "/api/v10/users/@me"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "* /api/v10/guilds/*/bans/**", "* /api/v10/guilds/*/members/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

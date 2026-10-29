@@ -1,0 +1,33 @@
+id = "hetzner-cloud"
+display = "Hetzner Cloud"
+category = "hosting"
+upstreams = ["api.hetzner.cloud"]
+auth = { kind = "bearer" }
+docs = "https://console.hetzner.cloud"
+base_path = "/v1"
+key_prefixes = []
+env_names = ["HETZNER_API_TOKEN"]
+
+[env]
+api_key = "HCLOUD_TOKEN"
+
+[verify]
+method = "GET"
+path = "/v1/servers?per_page=1"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

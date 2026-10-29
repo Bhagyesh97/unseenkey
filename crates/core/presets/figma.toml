@@ -1,0 +1,33 @@
+id = "figma"
+display = "Figma"
+category = "devtools"
+upstreams = ["api.figma.com"]
+auth = { kind = "header", name = "X-Figma-Token" }
+docs = "https://www.figma.com/settings (Security > Personal access tokens)"
+base_path = "/v1"
+key_prefixes = ["figd_"]
+env_names = ["FIGMA_TOKEN", "FIGMA_API_KEY"]
+
+[env]
+api_key = "FIGMA_ACCESS_TOKEN"
+
+[verify]
+method = "GET"
+path = "/v1/me"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "DELETE /v1/comments/*", "DELETE /v1/comments/*/**", "* /v1/webhooks*", "* /v1/webhooks*/**", "POST /v1/files/*/variables", "POST /v1/files/*/variables/**", "* /v1/files/*/dev_resources", "* /v1/files/*/dev_resources/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

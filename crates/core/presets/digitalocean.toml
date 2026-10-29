@@ -1,0 +1,33 @@
+id = "digitalocean"
+display = "DigitalOcean"
+category = "hosting"
+upstreams = ["api.digitalocean.com"]
+auth = { kind = "bearer" }
+docs = "https://cloud.digitalocean.com/account/api/tokens"
+base_path = "/v2"
+key_prefixes = ["dop_v1_", "doo_v1_", "dor_v1_"]
+env_names = ["DIGITALOCEAN_ACCESS_TOKEN", "DO_API_TOKEN"]
+
+[env]
+api_key = "DIGITALOCEAN_TOKEN"
+
+[verify]
+method = "GET"
+path = "/v2/account"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "POST /v2/droplets", "POST /v2/droplets/**", "* /v2/apps/*", "* /v2/apps/*/**", "* /v2/account/keys", "* /v2/account/keys/**", "* /v2/firewalls", "* /v2/firewalls/**", "* /v2/domains/*/records", "* /v2/domains/*/records/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

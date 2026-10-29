@@ -1,0 +1,33 @@
+id = "openweathermap"
+display = "OpenWeatherMap"
+category = "other"
+upstreams = ["api.openweathermap.org", "pro.openweathermap.org"]
+auth = { kind = "query", param = "appid" }
+docs = "https://home.openweathermap.org/api_keys"
+base_path = "/data"
+key_prefixes = []
+env_names = ["OPENWEATHERMAP_API_KEY", "NEXT_PUBLIC_OPENWEATHER_API_KEY"]
+
+[env]
+api_key = "OPENWEATHER_API_KEY"
+
+[verify]
+method = "GET"
+path = "/data/2.5/weather?q=London"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "* /data/3.0/onecall*", "* /data/3.0/onecall*/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

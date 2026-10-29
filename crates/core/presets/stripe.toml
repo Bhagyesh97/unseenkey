@@ -4,10 +4,17 @@ upstreams = ["api.stripe.com"]
 auth = { kind = "bearer" }
 docs = "https://dashboard.stripe.com/apikeys"
 base_path = ""
+category = "payments"
+key_prefixes = ["sk_live_", "sk_test_", "rk_live_", "rk_test_"]
 
 [env]
 base_url = "STRIPE_API_BASE"
 api_key = "STRIPE_SECRET_KEY"
+
+
+[verify]
+method = "GET"
+path = "/v1/balance"
 
 [[policies]]
 id = "read-only"

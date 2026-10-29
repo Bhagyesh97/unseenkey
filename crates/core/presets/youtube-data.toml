@@ -1,0 +1,33 @@
+id = "youtube-data"
+display = "YouTube Data API v3"
+category = "social"
+upstreams = ["www.googleapis.com", "youtube.googleapis.com"]
+auth = { kind = "query", param = "key" }
+docs = "https://console.cloud.google.com/apis/credentials"
+base_path = "/youtube/v3"
+key_prefixes = []
+env_names = ["GOOGLE_API_KEY"]
+
+[env]
+api_key = "YOUTUBE_API_KEY"
+
+[verify]
+method = "GET"
+path = "/youtube/v3/i18nLanguages?part=snippet"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "POST /youtube/v3/videos", "POST /youtube/v3/videos/**", "* /youtube/v3/search", "* /youtube/v3/search/**", "* /youtube/v3/upload/youtube/v3/*", "* /youtube/v3/upload/youtube/v3/*/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

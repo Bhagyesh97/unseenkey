@@ -2,6 +2,16 @@
 
 The top section of this file becomes the release notes when a `v*` tag is pushed.
 
+## Unreleased
+
+Paste and done:
+
+- **65 providers instead of 18.** New presets for AI (xAI, Together, Fireworks, Deepgram, ElevenLabs, AssemblyAI, Cohere, DeepSeek, Replicate, Perplexity, Cerebras), payments (Paddle, Polar, Paystack, Mollie, Mercado Pago, Lemon Squeezy, Square), hosting and databases (DigitalOcean, Linode, Vultr, Hetzner, Netlify, Render, Heroku, Neon, Supabase management), email and messaging (Postmark, Brevo, Loops, beehiiv, Vapi, Telnyx, Discord bots), and everyday tools (Figma, Airtable, ClickUp, Coda, Calendly, Tally, HubSpot, Clerk, CircleCI, Mapbox, YouTube, OpenWeatherMap, Alpha Vantage). Each has a safe default ("everything except deletes and account, key and billing changes"), read-only and full. They come from [the provider research](docs/research/provider-catalogue.md).
+- **Paste a key, the rest fills in.** A key's shape decides first, then a prefix only one provider uses (Cloudflare's new `cfut_`/`cfat_`, Brevo `xkeysib-`, Paddle, Neon, Heroku …), then the name you gave it (`cloudflare`, `OPENAI_API_KEY`). Allowed websites come from the provider. In the app, an unrecognised key opens a searchable list of providers; "It is not in the list" asks only for the website. `POST /v1/detect` does this without storing or sending anything.
+- **Every key can be tested.** `usk add` and the app send one read-only request to the key's own provider right after saving ("It works." or "This key was refused", with what to do); `usk secret test <name>`, "Test key" in the app and `POST /v1/secrets/{ref}/test` do it on demand. The key goes only to its provider, on a host it is locked to, and each test is audited (`key_tested`). Test suites set `USK_NO_KEY_TEST=1`.
+- **Providers that do not say `Bearer`.** A new auth style sends `Authorization: <scheme> <key>` (Deepgram `Token`, Discord `Bot`), in both directions through the broker.
+- `usk presets --json` lists each provider's category, whether it can be tested, and its rules; the website's provider list is generated from it.
+
 ## 0.1.3 — 2026-10-30
 
 From a second Claude Code session stuck asking its owner to "check" a Hostinger and a Cloudflare key:

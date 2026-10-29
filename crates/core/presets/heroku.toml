@@ -1,0 +1,34 @@
+id = "heroku"
+display = "Heroku"
+category = "hosting"
+upstreams = ["api.heroku.com"]
+auth = { kind = "bearer" }
+docs = "https://dashboard.heroku.com/account/applications"
+base_path = ""
+key_prefixes = ["HRKU-"]
+env_names = []
+
+[env]
+api_key = "HEROKU_API_KEY"
+
+[verify]
+method = "GET"
+path = "/account"
+headers = { "Accept" = "application/vnd.heroku+json; version=3" }
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "* /account/**", "PATCH /account", "DELETE /account", "* /teams/*/members/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

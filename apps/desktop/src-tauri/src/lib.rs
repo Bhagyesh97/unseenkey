@@ -151,6 +151,7 @@ fn presets() -> Vec<Value> {
             json!({
                 "id": p.id, "display": p.display, "upstreams": p.upstreams, "docs": p.docs,
                 "camouflage": !p.handle_formats.is_empty(),
+                "category": p.category, "testable": p.verify.is_some(),
                 "policies": p.policies.iter().map(|pp| json!({
                     "id": pp.id, "display": pp.display, "recommended": pp.recommended,
                     "explanation": p.policy(&pp.id).map(|pol| unseenkey_core::policy::explain(&pol)).unwrap_or_default(),

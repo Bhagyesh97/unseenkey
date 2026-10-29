@@ -1,0 +1,33 @@
+id = "supabase-management"
+display = "Supabase (Management API)"
+category = "backend"
+upstreams = ["api.supabase.com"]
+auth = { kind = "bearer" }
+docs = "https://supabase.com/dashboard/account/tokens"
+base_path = "/v1"
+key_prefixes = ["sbp_"]
+env_names = []
+
+[env]
+api_key = "SUPABASE_ACCESS_TOKEN"
+
+[verify]
+method = "GET"
+path = "/v1/projects"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "DELETE /v1/projects/*", "DELETE /v1/projects/*/**", "POST /v1/projects", "POST /v1/projects/**", "* /v1/projects/*/database/query", "* /v1/projects/*/database/query/**", "GET /v1/projects/*/api-keys", "GET /v1/projects/*/api-keys/**", "* /v1/projects/*/secrets", "* /v1/projects/*/secrets/**", "* /v1/organizations/*/members", "* /v1/organizations/*/members/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

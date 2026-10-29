@@ -4,6 +4,8 @@ upstreams = ["api.anthropic.com"]
 auth = { kind = "header", name = "x-api-key" }
 docs = "https://console.anthropic.com/settings/keys"
 base_path = ""
+category = "ai"
+key_prefixes = ["sk-ant-"]
 
 [env]
 base_url = "ANTHROPIC_BASE_URL"
@@ -11,6 +13,12 @@ api_key = "ANTHROPIC_API_KEY"
 # Used instead of api_key when the stored secret is an OAuth bearer token
 # (Claude Code: `claude setup-token`).
 oauth_token = "CLAUDE_CODE_OAUTH_TOKEN"
+
+
+[verify]
+method = "GET"
+path = "/v1/models"
+headers = { "anthropic-version" = "2023-06-01" }
 
 [[policies]]
 id = "chat"

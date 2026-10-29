@@ -73,6 +73,9 @@ enum Command {
         /// Read the value from stdin (after the password line when not a terminal).
         #[arg(long)]
         stdin: bool,
+        /// Do not send the one read-only request that checks the key works.
+        #[arg(long)]
+        no_test: bool,
     },
     /// List secrets (never values).
     Ls,
@@ -306,8 +309,17 @@ pub fn run() -> Result<(), CliError> {
             tags,
             notes,
             stdin,
+            no_test,
         } => add(
-            &paths, name, r#type, provider, upstreams, tags, notes, stdin,
+            &paths,
+            name,
+            r#type,
+            provider,
+            upstreams,
+            tags,
+            notes,
+            stdin,
+            !no_test,
         ),
         Command::Ls => ls(&paths, cli.json),
         Command::Show { name } => show(&paths, &name, cli.json),
@@ -356,6 +368,7 @@ pub fn run() -> Result<(), CliError> {
         },
         Command::Secret { action } => match action {
             SecretAction::Replace { name, stdin } => secret_replace(&paths, &name, stdin),
+            SecretAction::Test { name } => secret_test(&paths, &name, cli.json),
             SecretAction::Set {
                 name,
                 allow_injection,
@@ -566,6 +579,7 @@ fn add(
     tags: Vec<String>,
     notes: Option<String>,
     stdin: bool,
+    test: bool,
 ) -> Result<(), CliError> {
     let c = unlocked(paths)?;
     // An OAuth client is four values; ask for each. (Piped with --stdin, the
@@ -669,7 +683,14 @@ fn add(
         } else {
             format!(" ({note})")
         };
-        println!("Detected: {}{suffix}", d["display"].as_str().unwrap_or("?"));
+        if d["how"].as_str() == Some("name") {
+            println!(
+                "Provider: {} (from the name; pass --provider to choose another)",
+                d["display"].as_str().unwrap_or("?")
+            );
+        } else {
+            println!("Detected: {}{suffix}", d["display"].as_str().unwrap_or("?"));
+        }
     }
     let ups: Vec<&str> = created["upstreams"]
         .as_array()
@@ -687,6 +708,45 @@ fn add(
         created["name"].as_str().unwrap_or(""),
         created["id"].as_str().unwrap_or("")
     );
+    // USK_NO_KEY_TEST: scripts and test suites that store made-up keys.
+    let test = test && std::env::var_os("USK_NO_KEY_TEST").is_none();
+    if test && created["provider"].is_string() {
+        let id = created["id"].as_str().unwrap_or("");
+        print_test(&c.post(&format!("/v1/secrets/{id}/test"), json!({}))?);
+    } else if created["provider"].is_null() {
+        println!("No provider: choose one with `usk secret set {} --provider <id>` (`usk presets` lists them) so the broker knows how to send it.", created["name"].as_str().unwrap_or(""));
+    }
+    Ok(())
+}
+
+/// One line for a key test result.
+fn print_test(t: &Value) {
+    let msg = t["message"].as_str().unwrap_or("");
+    match (t["tested"].as_bool(), t["ok"].as_bool()) {
+        (Some(true), Some(true)) => println!("Tested: works. {msg}"),
+        (Some(true), Some(false)) => {
+            println!("Tested: REFUSED. {msg} Replace it with `usk secret replace <name>`.")
+        }
+        (Some(true), None) => println!("Tested: unclear. {msg}"),
+        _ => println!("Not tested: {msg}"),
+    }
+}
+
+fn secret_test(paths: &VaultPaths, name: &str, json_out: bool) -> Result<(), CliError> {
+    let c = unlocked(paths)?;
+    let t = c.post(&format!("/v1/secrets/{name}/test"), json!({}))?;
+    if json_out {
+        println!("{}", serde_json::to_string_pretty(&t).unwrap_or_default());
+    } else {
+        print_test(&t);
+    }
+    if t["ok"].as_bool() == Some(false) {
+        return Err(CliError::with_code(
+            1,
+            "refused",
+            "the provider refused the key",
+        ));
+    }
     Ok(())
 }
 
@@ -1694,6 +1754,11 @@ enum GuardAction {
 
 #[derive(Subcommand)]
 enum SecretAction {
+    /// Check a stored key works: one read-only request to its provider.
+    Test {
+        /// Secret name.
+        name: String,
+    },
     /// Replace a secret's value (a new or rotated key). Handles keep working.
     Replace {
         /// Secret name.
@@ -1761,6 +1826,11 @@ fn secret_replace(paths: &VaultPaths, name: &str, stdin: bool) -> Result<(), Cli
         m["name"].as_str().unwrap_or(name),
         m["value_version"].as_u64().unwrap_or(0)
     );
+    if m["provider"].is_string() && std::env::var_os("USK_NO_KEY_TEST").is_none() {
+        if let Ok(t) = c.post(&format!("/v1/secrets/{name}/test"), json!({})) {
+            print_test(&t);
+        }
+    }
     Ok(())
 }
 
@@ -1838,8 +1908,18 @@ fn presets(json: bool) -> Result<(), CliError> {
             .iter()
             .map(|p| {
                 json!({
-                    "id": p.id, "display": p.display, "upstreams": p.upstreams, "docs": p.docs,
-                    "policies": p.policies.iter().map(|pp| json!({"id": pp.id, "display": pp.display, "recommended": pp.recommended})).collect::<Vec<_>>(),
+                    "id": p.id, "display": p.display, "category": p.category, "upstreams": p.upstreams, "docs": p.docs,
+                    "testable": p.verify.is_some(),
+                    "policies": p.policies.iter().map(|pp| json!({
+                        "id": pp.id, "display": pp.display, "recommended": pp.recommended,
+                        "lines": p.policy(&pp.id).map(|pol| unseenkey_core::policy::explain(&pol).lines().map(str::to_string).collect::<Vec<_>>()).unwrap_or_default(),
+                        "allow": pp.allow.iter().map(|r| r.to_string()).collect::<Vec<_>>(),
+                        "deny": pp.deny.iter().map(|r| r.to_string()).collect::<Vec<_>>(),
+                        "limits": p.policy(&pp.id).and_then(|pol| serde_json::to_value(&pol.limits).ok()).map(|v| match v {
+                            Value::Object(m) => Value::Object(m.into_iter().filter(|(_, v)| !v.is_null()).collect()),
+                            other => other,
+                        }).unwrap_or_else(|| json!({})),
+                    })).collect::<Vec<_>>(),
                 })
             })
             .collect();

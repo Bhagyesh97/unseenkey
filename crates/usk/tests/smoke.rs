@@ -14,6 +14,8 @@ fn usk(vault: &Path, args: &[&str], stdin: &str) -> Output {
         .args(args)
         .env("USK_LISTEN", "127.0.0.1:0")
         .env("USK_IDLE_LOCK_MINUTES", "0")
+        // Made-up keys must never reach a real provider.
+        .env("USK_NO_KEY_TEST", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -915,4 +917,41 @@ fn replacing_a_value_keeps_the_handles() {
     let o = usk(&vault, &["secret", "replace", "deploy", "--stdin"], "   ");
     assert!(!o.status.success());
     assert!(err(&o).contains("empty value"), "{}", err(&o));
+}
+
+#[test]
+fn a_name_fills_in_the_provider() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    let _stop = StopDaemon(&vault);
+    assert!(usk(&vault, &["init", "--profile", "light"], PW)
+        .status
+        .success());
+    // An opaque token named after its provider.
+    let o = usk(
+        &vault,
+        &["add", "Hostinger", "--stdin"],
+        &format!("{PW}qwertyuiopasdfghjklzxcvbnm1234567890ABCD"),
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(
+        out(&o).contains("Provider: Hostinger (from the name"),
+        "{}",
+        out(&o)
+    );
+    assert!(out(&o).contains("developers.hostinger.com"), "{}", out(&o));
+    // A shape only one preset claims.
+    let o = usk(
+        &vault,
+        &["add", "mail", "--stdin"],
+        "xkeysib-0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab-AbCdEfGh",
+    );
+    assert!(out(&o).contains("Detected: Brevo"), "{}", out(&o));
+    // Neither: say what to do.
+    let o = usk(
+        &vault,
+        &["add", "thing", "--stdin"],
+        "qwertyuiopasdfghjklzxcvbnm1234567890ZZZZ",
+    );
+    assert!(out(&o).contains("No provider: choose one"), "{}", out(&o));
 }

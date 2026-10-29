@@ -4,6 +4,7 @@ upstreams = ["api.resend.com"]
 auth = { kind = "bearer" }
 docs = "https://resend.com/api-keys"
 base_path = ""
+category = "email"
 
 [env]
 api_key = "RESEND_API_KEY"

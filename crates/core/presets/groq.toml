@@ -4,10 +4,17 @@ upstreams = ["api.groq.com"]
 auth = { kind = "bearer" }
 docs = "https://console.groq.com/keys"
 base_path = "/openai/v1"
+category = "ai"
+key_prefixes = ["gsk_"]
 
 [env]
 base_url = "GROQ_BASE_URL"
 api_key = "GROQ_API_KEY"
+
+
+[verify]
+method = "GET"
+path = "/openai/v1/models"
 
 [[policies]]
 id = "chat"

@@ -25,6 +25,12 @@ pub enum Auth {
         /// Header name.
         name: String,
     },
+    /// `Authorization: <scheme> <secret>` for providers that do not say
+    /// `Bearer` (`Token` for Deepgram, `Bot` for Discord, `Key` for fal).
+    Scheme {
+        /// The word before the secret.
+        scheme: String,
+    },
     /// `Authorization: Basic base64(username:password)` from the secret's fields.
     Basic,
     /// `?<param>=<secret>` on the URL.
@@ -105,6 +111,42 @@ pub struct Preset {
     /// when a handle is created with camouflage asked for.
     #[serde(default)]
     pub handle_formats: Vec<HandleFormat>,
+    /// Grouping for pickers: `ai`, `payments`, `hosting`, `email`, …
+    #[serde(default)]
+    pub category: String,
+    /// Prefixes only this provider's keys start with. Used to recognise a
+    /// pasted key; a prefix another preset also claims is ignored
+    /// ([`detect_by_prefix`]).
+    #[serde(default)]
+    pub key_prefixes: Vec<String>,
+    /// Variable or name words that point at this provider when the key has
+    /// no recognisable shape (`CLOUDFLARE_API_TOKEN`, `cloudflare`).
+    #[serde(default)]
+    pub env_names: Vec<String>,
+    /// One read-only request that tells a working key from a refused one.
+    #[serde(default)]
+    pub verify: Option<Verify>,
+}
+
+/// A harmless request that tests a key: 2xx means accepted, 401/403 refused.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Verify {
+    /// Always a read: `GET` unless the provider only reads through `POST`.
+    #[serde(default = "get_method")]
+    pub method: String,
+    /// Path and query, without the key.
+    pub path: String,
+    /// Host when not the first of `upstreams`.
+    #[serde(default)]
+    pub host: Option<String>,
+    /// Extra non-secret headers the provider requires (API versions).
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
+}
+
+fn get_method() -> String {
+    "GET".to_string()
 }
 
 impl Preset {
@@ -158,6 +200,53 @@ pub const EMBEDDED: &[(&str, &str)] = embedded![
     "notion",
     "cloudflare",
     "hostinger",
+    "assemblyai",
+    "cohere",
+    "deepseek",
+    "elevenlabs",
+    "replicate",
+    "clerk",
+    "supabase-management",
+    "hubspot",
+    "figma",
+    "beehiiv",
+    "loops",
+    "digitalocean",
+    "linode",
+    "netlify",
+    "render",
+    "mapbox",
+    "vapi",
+    "alpha-vantage",
+    "openweathermap",
+    "mercado-pago",
+    "mollie",
+    "paddle",
+    "paystack",
+    "polar",
+    "airtable",
+    "calendly",
+    "clickup",
+    "coda",
+    "tally",
+    "youtube-data",
+    "xai",
+    "together",
+    "fireworks",
+    "deepgram",
+    "perplexity",
+    "cerebras",
+    "postmark",
+    "brevo",
+    "lemon-squeezy",
+    "square",
+    "heroku",
+    "neon",
+    "vultr",
+    "hetzner-cloud",
+    "circleci",
+    "discord",
+    "telnyx",
     "aws",
     "generic",
 ];
@@ -319,6 +408,76 @@ pub fn is_handle(s: &str) -> bool {
     crate::handles::is_handle_shaped(s) || is_camouflage_handle(s)
 }
 
+/// Prefixes shorter than this, or claimed by more than one preset, never
+/// decide a provider on their own (`sk-`, `AIza` and `pk_` are shared).
+const MIN_PREFIX: usize = 4;
+
+/// The preset whose distinctive key prefix `value` starts with. A prefix that
+/// overlaps another preset's (one is a prefix of the other) is ambiguous and
+/// skipped; the longest matching unambiguous prefix wins.
+pub fn detect_by_prefix(value: &str) -> Option<&'static Preset> {
+    let v = value.trim();
+    let presets: Vec<&'static Preset> = all().collect();
+    let mut best: Option<(&'static Preset, usize)> = None;
+    for p in &presets {
+        for pre in &p.key_prefixes {
+            if pre.len() < MIN_PREFIX || !v.starts_with(pre.as_str()) || v.len() <= pre.len() {
+                continue;
+            }
+            let shared = presets.iter().any(|q| {
+                q.id != p.id
+                    && q.key_prefixes
+                        .iter()
+                        .any(|o| o.starts_with(pre.as_str()) || pre.starts_with(o.as_str()))
+            });
+            if !shared && best.is_none_or(|(_, n)| pre.len() > n) {
+                best = Some((p, pre.len()));
+            }
+        }
+    }
+    best.map(|(p, _)| p)
+}
+
+/// The preset a secret's name points at: an exact variable name
+/// (`OPENAI_API_KEY`), or a word of the name equal to a preset id, a word of
+/// its display name, or one of its `env_names` (`my-cloudflare-token`).
+/// `None` when nothing or more than one preset matches.
+pub fn guess_by_name(name: &str) -> Option<&'static Preset> {
+    let upper = name.trim().to_ascii_uppercase();
+    let words: Vec<String> = name
+        .to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| w.len() >= 3)
+        .map(str::to_string)
+        .collect();
+    let joined = words.join("");
+    let mut hits: Vec<&'static Preset> = Vec::new();
+    for p in all().filter(|p| p.id != "generic") {
+        let vars = p.env.values().chain(p.env_names.iter());
+        let exact = vars.clone().any(|e| e.eq_ignore_ascii_case(&upper));
+        let id_flat = p.id.replace('-', "");
+        let display_flat: String = p
+            .display
+            .to_ascii_lowercase()
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .collect();
+        let word = words.iter().any(|w| *w == id_flat || *w == display_flat)
+            || (!joined.is_empty() && (joined == id_flat || joined == display_flat))
+            || p.env_names.iter().any(|e| {
+                let e = e.to_ascii_lowercase();
+                !e.contains('_') && words.contains(&e)
+            });
+        if exact {
+            return Some(p);
+        }
+        if word && !hits.iter().any(|h| h.id == p.id) {
+            hits.push(p);
+        }
+    }
+    (hits.len() == 1).then(|| hits[0])
+}
+
 /// Every preset, user-loaded ones first, then the built-in ones they did not
 /// override, each group by id.
 pub fn all() -> impl Iterator<Item = &'static Preset> {
@@ -364,9 +523,90 @@ mod tests {
     use crate::policy::{evaluate, explain, Decision, Request, Usage};
 
     #[test]
+    fn a_pasted_key_is_recognised_only_by_a_prefix_it_owns() {
+        let id = |v: &str| detect_by_prefix(v).map(|p| p.id.as_str());
+        assert_eq!(
+            id("cfut_0123456789abcdefghijklmnopqrstuvwxyzABCD"),
+            Some("cloudflare")
+        );
+        assert_eq!(
+            id("xkeysib-0123456789abcdef0123456789abcdef-xyz"),
+            Some("brevo")
+        );
+        assert_eq!(
+            id("pdl_live_apikey_01abcdefghijklmnopqrstuvwx"),
+            Some("paddle")
+        );
+        assert_eq!(
+            id("napi_abcdefghijklmnopqrstuvwxyz0123456789"),
+            Some("neon")
+        );
+        // Shared by Stripe, Clerk and Paystack, or too common: the prefix alone
+        // never decides (Stripe's own shape check in `providers::detect` does).
+        assert_eq!(id("sk_live_abcdefghijklmnop"), None);
+        assert_eq!(id("sk-0123456789abcdefghijklmnopqrstuvwxyz"), None);
+        assert_eq!(id("live_abcdefghijklmnopqrstuvwxyz012345"), None);
+        // A bare prefix is not a key.
+        assert_eq!(id("cfut_"), None);
+        // No preset may claim a prefix of fewer than four characters for detection.
+        for p in all() {
+            for pre in &p.key_prefixes {
+                assert!(!pre.is_empty(), "{} has an empty prefix", p.id);
+            }
+        }
+    }
+
+    #[test]
+    fn a_name_points_at_its_provider() {
+        let id = |n: &str| guess_by_name(n).map(|p| p.id.as_str());
+        assert_eq!(id("CLOUDFLARE_API_TOKEN"), Some("cloudflare"));
+        assert_eq!(id("cloudflare"), Some("cloudflare"));
+        assert_eq!(id("Hostinger"), Some("hostinger"));
+        assert_eq!(id("my-deepgram-key"), Some("deepgram"));
+        assert_eq!(id("LEMONSQUEEZY_API_KEY"), Some("lemon-squeezy"));
+        assert_eq!(id("lemon squeezy"), Some("lemon-squeezy"));
+        assert_eq!(id("SENDINBLUE_API_KEY"), Some("brevo"));
+        assert_eq!(id("db-password"), None);
+        assert_eq!(id("api"), None);
+        assert_eq!(id("generic"), None);
+    }
+
+    #[test]
+    fn every_test_call_is_a_read_on_one_of_the_presets_hosts() {
+        for p in all() {
+            let Some(v) = &p.verify else { continue };
+            assert!(
+                v.method == "GET" || v.method == "POST",
+                "{}: {}",
+                p.id,
+                v.method
+            );
+            assert!(v.path.starts_with('/'), "{}: {}", p.id, v.path);
+            let host = v.host.clone().unwrap_or_else(|| p.upstreams[0].clone());
+            assert!(
+                !host.contains('*'),
+                "{}: test host {host} must be concrete",
+                p.id
+            );
+            assert!(
+                crate::policy::eval::host_allowed(&p.upstreams, &host),
+                "{}: {host}",
+                p.id
+            );
+            if let Auth::Query { param } = &p.auth {
+                assert!(
+                    !v.path.contains(&format!("{param}=")),
+                    "{}: the broker adds the key",
+                    p.id
+                );
+            }
+        }
+    }
+
+    #[test]
     fn every_embedded_preset_parses_and_explains() {
         let ids: Vec<&str> = EMBEDDED.iter().map(|(id, _)| *id).collect();
-        assert_eq!(ids.len(), 19);
+        assert_eq!(ids.len(), 66);
         for id in ids {
             let p = get(id).unwrap_or_else(|| panic!("missing {id}"));
             assert!(!p.policies.is_empty(), "{id} has no policies");

@@ -215,6 +215,14 @@ The standing (`status`: `normal`, `throttled` with `until`, `approval_required`,
 
 What this does not do yet: baselines ("5× the usual volume for this hour"), first-seen endpoints or models, spend in currency, and binding a handle to the process that may use it. Those are the next slices; this one makes the simplest claims true: a leaked handle cannot run up a bill past its cap, a planted canary tells you the moment someone has your files, and a tool that probes gets slowed, stopped or asked.
 
+## Recognising and testing a pasted key
+
+Order of evidence, strongest first: the value's shape (`providers::detect`), a `key_prefixes` entry only one preset claims (`presets::detect_by_prefix`; prefixes under four characters or shared by two presets never decide), then the secret's name (`presets::guess_by_name`: an exact variable from `[env]`/`env_names`, or a word equal to a preset id or display name). Recognition sends nothing anywhere.
+
+A preset's `[verify]` names one read-only request (`method`, `path`, optional `host` and non-secret `headers`). The test sends the key only there, only when that host is within the secret's locked upstreams, with the preset's auth style; 2xx reads as accepted, 401/403 as refused, anything else as unclear. A key is never tried against several providers to find out whose it is: that would hand the key to companies it does not belong to.
+
+Auth styles: `bearer`, `header`, `scheme` (`Authorization: <scheme> <key>`), `basic`, `query`, `template`, `aws_sigv4`.
+
 ## Projects
 
 A project names the code folders of one app and the secrets it uses; a secret can be in several. It is an encrypted `project` record (name, normalised folders, secret ids, `cap_per_day`, notes). Two things follow from it:

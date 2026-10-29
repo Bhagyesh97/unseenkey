@@ -1,0 +1,33 @@
+id = "telnyx"
+display = "Telnyx"
+category = "messaging"
+upstreams = ["api.telnyx.com"]
+auth = { kind = "bearer" }
+docs = "https://portal.telnyx.com/#/app/api-keys"
+base_path = "/v2"
+key_prefixes = []
+env_names = []
+
+[env]
+api_key = "TELNYX_API_KEY"
+
+[verify]
+method = "GET"
+path = "/v2/balance"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "POST /v2/calls", "POST /v2/calls/**", "* /v2/number_orders/**", "* /v2/phone_numbers/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

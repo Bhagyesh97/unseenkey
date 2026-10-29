@@ -1,1 +1,4210 @@
-[{"id":"anthropic","display":"Anthropic","upstreams":["api.anthropic.com"],"policies":[{"id":"chat","display":"Chat, responses and embeddings only","recommended":true,"lines":["Can create or send at /v1/messages, create or send at /v1/messages/count_tokens, read at /v1/models, and read anything under /v1/models.","Only to api.anthropic.com.","Never expires."],"allow":["POST /v1/messages","POST /v1/messages/count_tokens","GET /v1/models","GET /v1/models/*"],"deny":[],"limits":{}},{"id":"no-admin","display":"Everything except organisation, billing and fine-tuning","recommended":false,"lines":["Can do anything.","Cannot do anything under /v1/organizations, do anything under /v1/messages/batches, and do anything under /v1/files.","Only to api.anthropic.com.","Never expires."],"allow":["* /**"],"deny":["* /v1/organizations/**","* /v1/messages/batches/**","* /v1/files/**"],"limits":{}},{"id":"full","display":"Full access (not recommended for delegation)","recommended":false,"lines":["Can do anything.","Only to api.anthropic.com.","Never expires."],"allow":["* /**"],"deny":[],"limits":{}}]},{"id":"aws","display":"Amazon Web Services","upstreams":["*.amazonaws.com"],"policies":[{"id":"s3-read-only","display":"S3: download and list objects only","recommended":true,"lines":["Can read anything and check anything.","Only to s3.amazonaws.com, s3.*.amazonaws.com, *.s3.amazonaws.com, and *.s3.*.amazonaws.com.","Never expires."],"allow":["GET /**","HEAD /**"],"deny":[],"limits":{}},{"id":"s3","display":"S3: read, upload and delete objects","recommended":false,"lines":["Can do anything.","Only to s3.amazonaws.com, s3.*.amazonaws.com, *.s3.amazonaws.com, and *.s3.*.amazonaws.com.","Never expires."],"allow":["* /**"],"deny":[],"limits":{}},{"id":"full","display":"Every AWS service the key itself is allowed to use","recommended":false,"lines":["Can do anything.","Only to *.amazonaws.com.","Never expires."],"allow":["* /**"],"deny":[],"limits":{}}]},{"id":"cloudflare","display":"Cloudflare","upstreams":["api.cloudflare.com"],"policies":[{"id":"read-only","display":"Read only","recommended":true,"lines":["Can read anything under /client/v4.","Only to api.cloudflare.com.","Never expires."],"allow":["GET /client/v4/**"],"deny":[],"limits":{}},{"id":"write","display":"Read and write; no deletes or account settings","recommended":true,"lines":["Can read anything under /client/v4, create or send anything under /client/v4/zones, replace anything under /client/v4/zones, update anything under /client/v4/zones, create or send anything under /client/v4/zones, replace anything under /client/v4/accounts, and create or send anything under /client/v4/accounts.","Cannot delete anything, do anything under /client/v4/user/tokens, do anything under /client/v4/accounts, do anything under /client/v4/accounts, and do anything under /client/v4/zones.","Only to api.cloudflare.com.","Never expires."],"allow":["GET /client/v4/**","POST /client/v4/zones/*/dns_records","PUT /client/v4/zones/*/dns_records/*","PATCH /client/v4/zones/*/dns_records/*","POST /client/v4/zones/*/purge_cache","PUT /client/v4/accounts/*/workers/scripts/*","POST /client/v4/accounts/*/pages/projects/*/deployments"],"deny":["DELETE /**","* /client/v4/user/tokens/**","* /client/v4/accounts/*/tokens/**","* /client/v4/accounts/*/members/**","* /client/v4/zones/*/settings/**"],"limits":{}},{"id":"full","display":"Full access (not recommended for delegation)","recommended":false,"lines":["Can do anything.","Only to api.cloudflare.com.","Never expires."],"allow":["* /**"],"deny":[],"limits":{}}]},{"id":"generic","display":"Generic HTTP API","upstreams":[],"policies":[{"id":"read-only","display":"GET requests only","recommended":true,"lines":["Can read anything and check anything.","Never expires."],"allow":["GET /**","HEAD /**"],"deny":[],"limits":{}},{"id":"full","display":"Any request to the locked host","recommended":false,"lines":["Can do anything.","Never expires."],"allow":["* /**"],"deny":[],"limits":{}}]},{"id":"github","display":"GitHub","upstreams":["api.github.com"],"policies":[{"id":"read-only","display":"Read repositories, issues and pull requests","recommended":true,"lines":["Can read anything.","Cannot read at /user/keys, read at /user/emails, read anything under /orgs, and read anything under /repos.","Only to api.github.com.","Never expires."],"allow":["GET /**"],"deny":["GET /user/keys","GET /user/emails","GET /orgs/*/actions/secrets/**","GET /repos/*/*/actions/secrets/**"],"limits":{}},{"id":"contribute","display":"Read, open issues and pull requests, push via API; no deletes or settings","recommended":true,"lines":["Can read anything, create or send anything under /repos, update anything under /repos, create or send anything under /repos, create or send anything under /repos, update anything under /repos, create or send anything under /repos, create or send anything under /repos, create or send anything under /repos, replace anything under /repos, create or send anything under /repos, create or send anything under /repos, and update anything under /repos.","Cannot delete anything, do anything under /repos, do anything under /orgs, do anything under /repos, do anything under /user/keys, do anything under /repos, do anything under /orgs, do anything under /orgs, do anything under /repos, and update anything under /repos.","Only to api.github.com.","Never expires."],"allow":["GET /**","POST /repos/*/*/issues","PATCH /repos/*/*/issues/*","POST /repos/*/*/issues/*/comments","POST /repos/*/*/pulls","PATCH /repos/*/*/pulls/*","POST /repos/*/*/pulls/*/reviews","POST /repos/*/*/pulls/*/comments","POST /repos/*/*/git/**","PUT /repos/*/*/contents/**","POST /repos/*/*/statuses/*","POST /repos/*/*/check-runs","PATCH /repos/*/*/check-runs/*"],"deny":["DELETE /**","* /repos/*/*/actions/secrets/**","* /orgs/*/actions/secrets/**","* /repos/*/*/keys/**","* /user/keys/**","* /repos/*/*/hooks/**","* /orgs/*/hooks/**","* /orgs/*/members/**","* /repos/*/*/collaborators/**","PATCH /repos/*/*"],"limits":{}},{"id":"full","display":"Full access (not recommended for delegation)","recommended":false,"lines":["Can do anything.","Only to api.github.com.","Never expires."],"allow":["* /**"],"deny":[],"limits":{}}]},{"id":"google-ai","display":"Google AI","upstreams":["generativelanguage.googleapis.com"],"policies":[{"id":"generate","display":"Generate content and embeddings only","recommended":true,"lines":["Can create or send anything under /v1beta/models, read at /v1beta/models, read anything under /v1beta/models, create or send anything under /v1/models, and read at /v1/models.","Cannot do anything under /v1beta/tunedModels and do anything under /v1beta/files.","Only to generativelanguage.googleapis.com.","Never expires."],"allow":["POST /v1beta/models/**","GET /v1beta/models","GET /v1beta/models/*","POST /v1/models/**","GET /v1/models"],"deny":["* /v1beta/tunedModels/**","* /v1beta/files/**"],"limits":{}},{"id":"full","display":"Full access (not recommended for delegation)","recommended":false,"lines":["Can do anything.","Only to generativelanguage.googleapis.com.","Never expires."],"allow":["* /**"],"deny":[],"limits":{}}]},{"id":"groq","display":"Groq","upstreams":["api.groq.com"],"policies":[{"id":"chat","display":"Chat, responses and embeddings only","recommended":true,"lines":["Can create or send at /openai/v1/chat/completions, create or send at /openai/v1/responses, read at /openai/v1/models, and create or send at /openai/v1/audio/transcriptions.","Only to api.groq.com.","Never expires."],"allow":["POST /openai/v1/chat/completions","POST /openai/v1/responses","GET /openai/v1/models","POST /openai/v1/audio/transcriptions"],"deny":[],"limits":{}},{"id":"no-admin","display":"Everything except organisation, billing and fine-tuning","recommended":false,"lines":["Can do anything.","Cannot do anything under /openai/v1/files and do anything under /openai/v1/batches.","Only to api.groq.com.","Never expires."],"allow":["* /**"],"deny":["* /openai/v1/files/**","* /openai/v1/batches/**"],"limits":{}},{"id":"full","display":"Full access (not recommended for delegation)","recommended":false,"lines":["Can do anything.","Only to api.groq.com.","Never expires."],"allow":["* /**"],"deny":[],"limits":{}}]},{"id":"mistral","display":"Mistral","upstreams":["api.mistral.ai"],"policies":[{"id":"chat","display":"Chat, responses and embeddings only","recommended":true,"lines":["Can create or send at /v1/chat/completions, create or send at /v1/embeddings, and read at /v1/models.","Only to api.mistral.ai.","Never expires."],"allow":["POST /v1/chat/completions","POST /v1/embeddings","GET /v1/models"],"deny":[],"limits":{}},{"id":"no-admin","display":"Everything except organisation, billing and fine-tuning","recommended":false,"lines":["Can do anything.","Cannot do anything under /v1/fine_tuning and do anything under /v1/files.","Only to api.mistral.ai.","Never expires."],"allow":["* /**"],"deny":["* /v1/fine_tuning/**","* /v1/files/**"],"limits":{}},{"id":"full","display":"Full access (not recommended for delegation)","recommended":false,"lines":["Can do anything.","Only to api.mistral.ai.","Never expires."],"allow":["* /**"],"deny":[],"limits":{}}]},{"id":"notion","display":"Notion","upstreams":["api.notion.com"],"policies":[{"id":"read-only","display":"Read only","recommended":true,"lines":["Can read anything under /v1, create or send at /v1/search, and create or send anything under /v1/databases.","Only to api.notion.com.","Never expires."],"allow":["GET /v1/**","POST /v1/search","POST /v1/databases/*/query"],"deny":[],"limits":{}},{"id":"write","display":"Read and write; no deletes or account settings","recommended":true,"lines":["Can read anything under /v1, create or send at /v1/search, create or send anything under /v1/databases, create or send at /v1/pages, update anything under /v1/pages, update anything under /v1/blocks, update anything under /v1/blocks, create or send at /v1/comments, create or send at /v1/databases, and update anything under /v1/databases.","Cannot delete anything and do anything under /v1/users.","Only to api.notion.com.","Never expires."],"allow":["GET /v1/**","POST /v1/search","POST /v1/databases/*/query","POST /v1/pages","PATCH /v1/pages/*","PATCH /v1/blocks/*","PATCH /v1/blocks/*/children","POST /v1/comments","POST /v1/databases","PATCH /v1/databases/*"],"deny":["DELETE /**","* /v1/users/**"],"limits":{}},{"id":"full","display":"Full access (not recommended for delegation)","recommended":false,"lines":["Can do anything.","Only to api.notion.com.","Never expires."],"allow":["* /**"],"deny":[],"limits":{}}]},{"id":"openai","display":"OpenAI","upstreams":["api.openai.com"],"policies":[{"id":"chat","display":"Chat, responses and embeddings only","recommended":true,"lines":["Can create or send at /v1/chat/completions, create or send at /v1/responses, create or send at /v1/embeddings, read at /v1/models, read anything under /v1/models, and create or send at /v1/moderations.","Only to api.openai.com.","Never expires."],"allow":["POST /v1/chat/completions","POST /v1/responses","POST /v1/embeddings","GET /v1/models","GET /v1/models/*","POST /v1/moderations"],"deny":[],"limits":{}},{"id":"no-admin","display":"Everything except organisation, billing and fine-tuning","recommended":false,"lines":["Can do anything.","Cannot do anything under /v1/organization, do anything under /v1/fine_tuning, do anything under /v1/files, and do anything under /v1/batches.","Only to api.openai.com.","Never expires."],"allow":["* /**"],"deny":["* /v1/organization/**","* /v1/fine_tuning/**","* /v1/files/**","* /v1/batches/**"],"limits":{}},{"id":"full","display":"Full access (not recommended for delegation)","recommended":false,"lines":["Can do anything.","Only to api.openai.com.","Never expires."],"allow":["* /**"],"deny":[],"limits":{}}]},{"id":"openrouter","display":"OpenRouter","upstreams":["openrouter.ai"],"policies":[{"id":"chat","display":"Chat, responses and embeddings only","recommended":true,"lines":["Can create or send at /api/v1/chat/completions, create or send at /api/v1/completions, read at /api/v1/models, and read anything under /api/v1/models.","Only to openrouter.ai.","Never expires."],"allow":["POST /api/v1/chat/completions","POST /api/v1/completions","GET /api/v1/models","GET /api/v1/models/**"],"deny":[],"limits":{}},{"id":"no-admin","display":"Everything except organisation, billing and fine-tuning","recommended":false,"lines":["Can do anything.","Cannot do anything under /api/v1/keys and do anything under /api/v1/credits.","Only to openrouter.ai.","Never expires."],"allow":["* /**"],"deny":["* /api/v1/keys/**","* /api/v1/credits/**"],"limits":{}},{"id":"full","display":"Full access (not recommended for delegation)","recommended":false,"lines":["Can do anything.","Only to openrouter.ai.","Never expires."],"allow":["* /**"],"deny":[],"limits":{}}]},{"id":"resend","display":"Resend","upstreams":["api.resend.com"],"policies":[{"id":"read-only","display":"Read only","recommended":true,"lines":["Can read anything.","Only to api.resend.com.","Never expires."],"allow":["GET /**"],"deny":[],"limits":{}},{"id":"write","display":"Read and write; no deletes or account settings","recommended":true,"lines":["Can read anything, create or send at /emails, create or send at /emails/batch, create or send at /contacts, update anything under /contacts, and create or send anything under /audiences.","Cannot delete anything, do anything under /api-keys, and do anything under /domains.","Only to api.resend.com.","Never expires."],"allow":["GET /**","POST /emails","POST /emails/batch","POST /contacts","PATCH /contacts/*","POST /audiences/*/contacts"],"deny":["DELETE /**","* /api-keys/**","* /domains/**"],"limits":{}},{"id":"full","display":"Full access (not recommended for delegation)","recommended":false,"lines":["Can do anything.","Only to api.resend.com.","Never expires."],"allow":["* /**"],"deny":[],"limits":{}}]},{"id":"sendgrid","display":"SendGrid","upstreams":["api.sendgrid.com"],"policies":[{"id":"read-only","display":"Read only","recommended":true,"lines":["Can read anything.","Only to api.sendgrid.com.","Never expires."],"allow":["GET /**"],"deny":[],"limits":{}},{"id":"write","display":"Read and write; no deletes or account settings","recommended":true,"lines":["Can read anything, create or send at /v3/mail/send, create or send at /v3/marketing/contacts, and replace at /v3/marketing/contacts.","Cannot delete anything, do anything under /v3/api_keys, do anything under /v3/user, do anything under /v3/teammates, and do anything under /v3/whitelabel.","Only to api.sendgrid.com.","Never expires."],"allow":["GET /**","POST /v3/mail/send","POST /v3/marketing/contacts","PUT /v3/marketing/contacts"],"deny":["DELETE /**","* /v3/api_keys/**","* /v3/user/**","* /v3/teammates/**","* /v3/whitelabel/**"],"limits":{}},{"id":"full","display":"Full access (not recommended for delegation)","recommended":false,"lines":["Can do anything.","Only to api.sendgrid.com.","Never expires."],"allow":["* /**"],"deny":[],"limits":{}}]},{"id":"slack","display":"Slack","upstreams":["slack.com"],"policies":[{"id":"read-only","display":"Read only","recommended":true,"lines":["Can read at /api/conversations.*, read at /api/users.*, create or send at /api/conversations.history, create or send at /api/conversations.list, create or send at /api/users.list, create or send at /api/users.info, and create or send at /api/auth.test.","Only to slack.com.","Never expires."],"allow":["GET /api/conversations.*","GET /api/users.*","POST /api/conversations.history","POST /api/conversations.list","POST /api/users.list","POST /api/users.info","POST /api/auth.test"],"deny":[],"limits":{}},{"id":"write","display":"Read and write; no deletes or account settings","recommended":true,"lines":["Can do anything at /api/chat.postMessage, do anything at /api/chat.update, do anything at /api/chat.postEphemeral, do anything at /api/reactions.add, do anything at /api/files.upload, do anything at /api/files.getUploadURLExternal, do anything at /api/files.completeUploadExternal, do anything at /api/conversations.*, do anything at /api/users.*, do anything at /api/auth.test, and do anything at /api/views.*.","Cannot do anything at /api/chat.delete, do anything at /api/admin.*, do anything at /api/conversations.kick, do anything at /api/conversations.archive, do anything at /api/users.admin.*, and do anything at /api/apps.*.","Only to slack.com.","Never expires."],"allow":["* /api/chat.postMessage","* /api/chat.update","* /api/chat.postEphemeral","* /api/reactions.add","* /api/files.upload","* /api/files.getUploadURLExternal","* /api/files.completeUploadExternal","* /api/conversations.*","* /api/users.*","* /api/auth.test","* /api/views.*"],"deny":["* /api/chat.delete","* /api/admin.*","* /api/conversations.kick","* /api/conversations.archive","* /api/users.admin.*","* /api/apps.*"],"limits":{}},{"id":"full","display":"Full access (not recommended for delegation)","recommended":false,"lines":["Can do anything.","Only to slack.com.","Never expires."],"allow":["* /**"],"deny":[],"limits":{}}]},{"id":"stripe","display":"Stripe","upstreams":["api.stripe.com"],"policies":[{"id":"read-only","display":"Read everything, change nothing","recommended":true,"lines":["Can read anything under /v1.","Only to api.stripe.com.","Never expires."],"allow":["GET /v1/**"],"deny":[],"limits":{}},{"id":"payments","display":"Take payments; no refunds, payouts or transfers","recommended":true,"lines":["Can read anything under /v1, create or send at /v1/customers, create or send anything under /v1/customers, create or send at /v1/payment_intents, create or send anything under /v1/payment_intents, create or send anything under /v1/payment_intents, create or send anything under /v1/payment_intents, create or send anything under /v1/payment_intents, create or send at /v1/checkout/sessions, create or send anything under /v1/checkout/sessions, create or send at /v1/setup_intents, create or send anything under /v1/setup_intents, create or send at /v1/payment_methods, create or send anything under /v1/payment_methods, create or send anything under /v1/payment_methods, create or send at /v1/subscriptions, create or send anything under /v1/subscriptions, create or send at /v1/invoices, create or send anything under /v1/invoices, create or send at /v1/products, create or send anything under /v1/products, create or send at /v1/prices, create or send anything under /v1/prices, and create or send at /v1/webhook_endpoints.","Cannot do anything under /v1/refunds, do anything under /v1/payouts, do anything under /v1/transfers, do anything under /v1/topups, do anything under /v1/balance, do anything under /v1/accounts, do anything under /v1/account_links, and delete anything.","Only to api.stripe.com.","Never expires."],"allow":["GET /v1/**","POST /v1/customers","POST /v1/customers/*","POST /v1/payment_intents","POST /v1/payment_intents/*","POST /v1/payment_intents/*/confirm","POST /v1/payment_intents/*/capture","POST /v1/payment_intents/*/cancel","POST /v1/checkout/sessions","POST /v1/checkout/sessions/*/expire","POST /v1/setup_intents","POST /v1/setup_intents/*","POST /v1/payment_methods","POST /v1/payment_methods/*","POST /v1/payment_methods/*/attach","POST /v1/subscriptions","POST /v1/subscriptions/*","POST /v1/invoices","POST /v1/invoices/*","POST /v1/products","POST /v1/products/*","POST /v1/prices","POST /v1/prices/*","POST /v1/webhook_endpoints"],"deny":["* /v1/refunds/**","* /v1/payouts/**","* /v1/transfers/**","* /v1/topups/**","* /v1/balance/**","* /v1/accounts/**","* /v1/account_links/**","DELETE /**"],"limits":{}},{"id":"full","display":"Full access (not recommended for delegation)","recommended":false,"lines":["Can do anything.","Only to api.stripe.com.","Never expires."],"allow":["* /**"],"deny":[],"limits":{}}]},{"id":"supabase","display":"Supabase","upstreams":["*.supabase.co"],"policies":[{"id":"read-only","display":"Read data only","recommended":true,"lines":["Can read anything under /rest/v1, read anything under /storage/v1, and check anything under /rest/v1.","Only to *.supabase.co.","Never expires."],"allow":["GET /rest/v1/**","GET /storage/v1/**","HEAD /rest/v1/**"],"deny":[],"limits":{}},{"id":"data","display":"Read and write data and storage; no auth admin","recommended":true,"lines":["Can do anything under /rest/v1, do anything under /storage/v1, and create or send anything under /functions/v1.","Cannot do anything under /auth/v1/admin and delete anything under /storage/v1/bucket.","Only to *.supabase.co.","Never expires."],"allow":["* /rest/v1/**","* /storage/v1/**","POST /functions/v1/**"],"deny":["* /auth/v1/admin/**","DELETE /storage/v1/bucket/**"],"limits":{}},{"id":"full","display":"Full access (not recommended for delegation)","recommended":false,"lines":["Can do anything.","Only to *.supabase.co.","Never expires."],"allow":["* /**"],"deny":[],"limits":{}}]},{"id":"twilio","display":"Twilio","upstreams":["api.twilio.com"],"policies":[{"id":"read-only","display":"Read logs and resources only","recommended":true,"lines":["Can read anything.","Only to api.twilio.com.","Never expires."],"allow":["GET /**"],"deny":[],"limits":{}},{"id":"messaging","display":"Send SMS and read logs; no calls, numbers or account changes","recommended":true,"lines":["Can read anything, create or send anything under /2010-04-01/Accounts, and create or send anything under /2010-04-01/Accounts.","Cannot do anything under /2010-04-01/Accounts, do anything under /2010-04-01/Accounts, do anything under /2010-04-01/Accounts, create or send at /2010-04-01/Accounts/*.json, and delete anything.","Only to api.twilio.com.","Never expires."],"allow":["GET /**","POST /2010-04-01/Accounts/*/Messages.json","POST /2010-04-01/Accounts/*/Messages/*.json"],"deny":["* /2010-04-01/Accounts/*/Calls/**","* /2010-04-01/Accounts/*/IncomingPhoneNumbers/**","* /2010-04-01/Accounts/*/Keys/**","POST /2010-04-01/Accounts/*.json","DELETE /**"],"limits":{}},{"id":"full","display":"Full access (not recommended for delegation)","recommended":false,"lines":["Can do anything.","Only to api.twilio.com.","Never expires."],"allow":["* /**"],"deny":[],"limits":{}}]},{"id":"vercel","display":"Vercel","upstreams":["api.vercel.com"],"policies":[{"id":"read-only","display":"Read only","recommended":true,"lines":["Can read anything.","Only to api.vercel.com.","Never expires."],"allow":["GET /**"],"deny":[],"limits":{}},{"id":"write","display":"Read and write; no deletes or account settings","recommended":true,"lines":["Can read anything, create or send at /v13/deployments, create or send at /v*/deployments, update anything under /v*/projects, create or send anything under /v*/projects, and update anything under /v*/projects.","Cannot delete anything, do anything under /v*/teams, do anything under /v*/user, and do anything under /v*/projects.","Only to api.vercel.com.","Never expires."],"allow":["GET /**","POST /v13/deployments","POST /v*/deployments","PATCH /v*/projects/*","POST /v*/projects/*/env","PATCH /v*/projects/*/env/*"],"deny":["DELETE /**","* /v*/teams/**","* /v*/user/**","* /v*/projects/*/domains/**"],"limits":{}},{"id":"full","display":"Full access (not recommended for delegation)","recommended":false,"lines":["Can do anything.","Only to api.vercel.com.","Never expires."],"allow":["* /**"],"deny":[],"limits":{}}]}]
+[
+ {
+  "id": "airtable",
+  "display": "Airtable",
+  "category": "productivity",
+  "upstreams": [
+   "api.airtable.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "DELETE /v0/*",
+     "DELETE /v0/*/**",
+     "* /v0/meta/bases/*/tables",
+     "* /v0/meta/bases/*/tables/**",
+     "PATCH /v0/meta/*",
+     "PATCH /v0/meta/*/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, delete anything under /v0, delete anything under /v0, do anything under /v0/meta/bases, do anything under /v0/meta/bases, update anything under /v0/meta, and update anything under /v0/meta.",
+     "Only to api.airtable.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.airtable.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.airtable.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "alpha-vantage",
+  "display": "Alpha Vantage",
+  "category": "other",
+  "upstreams": [
+   "www.alphavantage.co"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything.",
+     "Only to www.alphavantage.co.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to www.alphavantage.co.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to www.alphavantage.co.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "aws",
+  "display": "Amazon Web Services",
+  "category": "hosting",
+  "upstreams": [
+   "*.amazonaws.com"
+  ],
+  "policies": [
+   {
+    "id": "s3-read-only",
+    "display": "S3: download and list objects only",
+    "recommended": true,
+    "allow": [
+     "GET /**",
+     "HEAD /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything and check anything.",
+     "Only to s3.amazonaws.com, s3.*.amazonaws.com, *.s3.amazonaws.com, and *.s3.*.amazonaws.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "s3",
+    "display": "S3: read, upload and delete objects",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to s3.amazonaws.com, s3.*.amazonaws.com, *.s3.amazonaws.com, and *.s3.*.amazonaws.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Every AWS service the key itself is allowed to use",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to *.amazonaws.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "anthropic",
+  "display": "Anthropic",
+  "category": "ai",
+  "upstreams": [
+   "api.anthropic.com"
+  ],
+  "policies": [
+   {
+    "id": "chat",
+    "display": "Chat, responses and embeddings only",
+    "recommended": true,
+    "allow": [
+     "POST /v1/messages",
+     "POST /v1/messages/count_tokens",
+     "GET /v1/models",
+     "GET /v1/models/*"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can create or send at /v1/messages, create or send at /v1/messages/count_tokens, read at /v1/models, and read anything under /v1/models.",
+     "Only to api.anthropic.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "no-admin",
+    "display": "Everything except organisation, billing and fine-tuning",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "* /v1/organizations/**",
+     "* /v1/messages/batches/**",
+     "* /v1/files/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot do anything under /v1/organizations, do anything under /v1/messages/batches, and do anything under /v1/files.",
+     "Only to api.anthropic.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.anthropic.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "assemblyai",
+  "display": "AssemblyAI",
+  "category": "ai",
+  "upstreams": [
+   "api.assemblyai.com",
+   "api.eu.assemblyai.com",
+   "streaming.assemblyai.com",
+   "streaming.eu.assemblyai.com",
+   "llm-gateway.assemblyai.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "DELETE /v2/transcript/*",
+     "DELETE /v2/transcript/*/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, delete anything under /v2/transcript, and delete anything under /v2/transcript.",
+     "Only to api.assemblyai.com, api.eu.assemblyai.com, streaming.assemblyai.com, streaming.eu.assemblyai.com, and llm-gateway.assemblyai.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.assemblyai.com, api.eu.assemblyai.com, streaming.assemblyai.com, streaming.eu.assemblyai.com, and llm-gateway.assemblyai.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.assemblyai.com, api.eu.assemblyai.com, streaming.assemblyai.com, streaming.eu.assemblyai.com, and llm-gateway.assemblyai.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "beehiiv",
+  "display": "beehiiv",
+  "category": "email",
+  "upstreams": [
+   "api.beehiiv.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /v2/publications/*/posts",
+     "* /v2/publications/*/posts/**",
+     "* /v2/publications/*/webhooks",
+     "* /v2/publications/*/webhooks/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, do anything under /v2/publications, do anything under /v2/publications, do anything under /v2/publications, and do anything under /v2/publications.",
+     "Only to api.beehiiv.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.beehiiv.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.beehiiv.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "brevo",
+  "display": "Brevo",
+  "category": "email",
+  "upstreams": [
+   "api.brevo.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /v3/senders/**",
+     "* /v3/organization/**",
+     "* /v3/corporate/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, do anything under /v3/senders, do anything under /v3/organization, and do anything under /v3/corporate.",
+     "Only to api.brevo.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.brevo.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.brevo.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "calendly",
+  "display": "Calendly",
+  "category": "productivity",
+  "upstreams": [
+   "api.calendly.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "POST /scheduled_events/*/cancellation",
+     "POST /scheduled_events/*/cancellation/**",
+     "* /organizations/*/invitations*",
+     "* /organizations/*/invitations*/**",
+     "* /webhook_subscriptions*",
+     "* /webhook_subscriptions*/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, create or send anything under /scheduled_events, create or send anything under /scheduled_events, do anything under /organizations, do anything under /organizations, do anything at /webhook_subscriptions*, and do anything under /webhook_subscriptions*.",
+     "Only to api.calendly.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.calendly.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.calendly.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "cerebras",
+  "display": "Cerebras",
+  "category": "ai",
+  "upstreams": [
+   "api.cerebras.ai"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything.",
+     "Only to api.cerebras.ai.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.cerebras.ai.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.cerebras.ai.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "circleci",
+  "display": "CircleCI",
+  "category": "devtools",
+  "upstreams": [
+   "circleci.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /api/v2/context/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything and do anything under /api/v2/context.",
+     "Only to circleci.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to circleci.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to circleci.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "clerk",
+  "display": "Clerk",
+  "category": "auth",
+  "upstreams": [
+   "api.clerk.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "DELETE /v1/users/*",
+     "DELETE /v1/users/*/**",
+     "POST /v1/users/*/ban",
+     "POST /v1/users/*/ban/**",
+     "* /v1/users/*/metadata",
+     "* /v1/users/*/metadata/**",
+     "POST /v1/sign_in_tokens",
+     "POST /v1/sign_in_tokens/**",
+     "* /v1/actor_tokens",
+     "* /v1/actor_tokens/**",
+     "* /v1/instance",
+     "* /v1/instance/**",
+     "* /v1/jwt_templates",
+     "* /v1/jwt_templates/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, delete anything under /v1/users, delete anything under /v1/users, create or send anything under /v1/users, create or send anything under /v1/users, do anything under /v1/users, do anything under /v1/users, create or send at /v1/sign_in_tokens, create or send anything under /v1/sign_in_tokens, do anything at /v1/actor_tokens, do anything under /v1/actor_tokens, do anything at /v1/instance, do anything under /v1/instance, do anything at /v1/jwt_templates, and do anything under /v1/jwt_templates.",
+     "Only to api.clerk.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.clerk.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.clerk.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "clickup",
+  "display": "ClickUp",
+  "category": "productivity",
+  "upstreams": [
+   "api.clickup.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /api/v2/team/*/user*",
+     "* /api/v2/team/*/user*/**",
+     "* /api/v2/team/*/guest*",
+     "* /api/v2/team/*/guest*/**",
+     "* /api/v2/team/*/webhook",
+     "* /api/v2/team/*/webhook/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, do anything under /api/v2/team, do anything under /api/v2/team, do anything under /api/v2/team, do anything under /api/v2/team, do anything under /api/v2/team, and do anything under /api/v2/team.",
+     "Only to api.clickup.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.clickup.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.clickup.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "cloudflare",
+  "display": "Cloudflare",
+  "category": "hosting",
+  "upstreams": [
+   "api.cloudflare.com"
+  ],
+  "policies": [
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": true,
+    "allow": [
+     "GET /client/v4/**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything under /client/v4.",
+     "Only to api.cloudflare.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "write",
+    "display": "Read and write; no deletes or account settings",
+    "recommended": true,
+    "allow": [
+     "GET /client/v4/**",
+     "POST /client/v4/zones/*/dns_records",
+     "PUT /client/v4/zones/*/dns_records/*",
+     "PATCH /client/v4/zones/*/dns_records/*",
+     "POST /client/v4/zones/*/purge_cache",
+     "PUT /client/v4/accounts/*/workers/scripts/*",
+     "POST /client/v4/accounts/*/pages/projects/*/deployments"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /client/v4/user/tokens/**",
+     "* /client/v4/accounts/*/tokens/**",
+     "* /client/v4/accounts/*/members/**",
+     "* /client/v4/zones/*/settings/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can read anything under /client/v4, create or send anything under /client/v4/zones, replace anything under /client/v4/zones, update anything under /client/v4/zones, create or send anything under /client/v4/zones, replace anything under /client/v4/accounts, and create or send anything under /client/v4/accounts.",
+     "Cannot delete anything, do anything under /client/v4/user/tokens, do anything under /client/v4/accounts, do anything under /client/v4/accounts, and do anything under /client/v4/zones.",
+     "Only to api.cloudflare.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.cloudflare.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "coda",
+  "display": "Coda",
+  "category": "productivity",
+  "upstreams": [
+   "coda.io"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /apis/v1/docs/*/acl*",
+     "* /apis/v1/docs/*/acl*/**",
+     "* /apis/v1/docs/*/publish",
+     "* /apis/v1/docs/*/publish/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, do anything under /apis/v1/docs, do anything under /apis/v1/docs, do anything under /apis/v1/docs, and do anything under /apis/v1/docs.",
+     "Only to coda.io.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to coda.io.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to coda.io.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "cohere",
+  "display": "Cohere",
+  "category": "ai",
+  "upstreams": [
+   "api.cohere.com",
+   "api.cohere.ai"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /v2/v1/finetuning/*",
+     "* /v2/v1/finetuning/*/**",
+     "* /v2/v1/datasets",
+     "* /v2/v1/datasets/**",
+     "* /v2/v1/connectors",
+     "* /v2/v1/connectors/**",
+     "* /v2/v1/embed-jobs",
+     "* /v2/v1/embed-jobs/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, do anything under /v2/v1/finetuning, do anything under /v2/v1/finetuning, do anything at /v2/v1/datasets, do anything under /v2/v1/datasets, do anything at /v2/v1/connectors, do anything under /v2/v1/connectors, do anything at /v2/v1/embed-jobs, and do anything under /v2/v1/embed-jobs.",
+     "Only to api.cohere.com and api.cohere.ai.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.cohere.com and api.cohere.ai.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.cohere.com and api.cohere.ai.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "deepgram",
+  "display": "Deepgram",
+  "category": "ai",
+  "upstreams": [
+   "api.deepgram.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /v1/projects/*/keys/**",
+     "* /v1/projects/*/members/**",
+     "* /v1/projects/*/invites/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, do anything under /v1/projects, do anything under /v1/projects, and do anything under /v1/projects.",
+     "Only to api.deepgram.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.deepgram.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.deepgram.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "deepseek",
+  "display": "DeepSeek",
+  "category": "ai",
+  "upstreams": [
+   "api.deepseek.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything.",
+     "Only to api.deepseek.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.deepseek.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.deepseek.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "digitalocean",
+  "display": "DigitalOcean",
+  "category": "hosting",
+  "upstreams": [
+   "api.digitalocean.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "POST /v2/droplets",
+     "POST /v2/droplets/**",
+     "* /v2/apps/*",
+     "* /v2/apps/*/**",
+     "* /v2/account/keys",
+     "* /v2/account/keys/**",
+     "* /v2/firewalls",
+     "* /v2/firewalls/**",
+     "* /v2/domains/*/records",
+     "* /v2/domains/*/records/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, create or send at /v2/droplets, create or send anything under /v2/droplets, do anything under /v2/apps, do anything under /v2/apps, do anything at /v2/account/keys, do anything under /v2/account/keys, do anything at /v2/firewalls, do anything under /v2/firewalls, do anything under /v2/domains, and do anything under /v2/domains.",
+     "Only to api.digitalocean.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.digitalocean.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.digitalocean.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "discord",
+  "display": "Discord (bot)",
+  "category": "messaging",
+  "upstreams": [
+   "discord.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /api/v10/guilds/*/bans/**",
+     "* /api/v10/guilds/*/members/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, do anything under /api/v10/guilds, and do anything under /api/v10/guilds.",
+     "Only to discord.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to discord.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to discord.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "elevenlabs",
+  "display": "ElevenLabs",
+  "category": "ai",
+  "upstreams": [
+   "api.elevenlabs.io",
+   "api.us.elevenlabs.io",
+   "api.eu.residency.elevenlabs.io",
+   "api.in.residency.elevenlabs.io"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /v1/voices/add",
+     "* /v1/voices/add/**",
+     "* /v1/convai/twilio/outbound-call",
+     "* /v1/convai/twilio/outbound-call/**",
+     "* /v1/workspace/*",
+     "* /v1/workspace/*/**",
+     "* /v1/dubbing",
+     "* /v1/dubbing/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, do anything at /v1/voices/add, do anything under /v1/voices/add, do anything at /v1/convai/twilio/outbound-call, do anything under /v1/convai/twilio/outbound-call, do anything under /v1/workspace, do anything under /v1/workspace, do anything at /v1/dubbing, and do anything under /v1/dubbing.",
+     "Only to api.elevenlabs.io, api.us.elevenlabs.io, api.eu.residency.elevenlabs.io, and api.in.residency.elevenlabs.io.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.elevenlabs.io, api.us.elevenlabs.io, api.eu.residency.elevenlabs.io, and api.in.residency.elevenlabs.io.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.elevenlabs.io, api.us.elevenlabs.io, api.eu.residency.elevenlabs.io, and api.in.residency.elevenlabs.io.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "figma",
+  "display": "Figma",
+  "category": "devtools",
+  "upstreams": [
+   "api.figma.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "DELETE /v1/comments/*",
+     "DELETE /v1/comments/*/**",
+     "* /v1/webhooks*",
+     "* /v1/webhooks*/**",
+     "POST /v1/files/*/variables",
+     "POST /v1/files/*/variables/**",
+     "* /v1/files/*/dev_resources",
+     "* /v1/files/*/dev_resources/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, delete anything under /v1/comments, delete anything under /v1/comments, do anything at /v1/webhooks*, do anything under /v1/webhooks*, create or send anything under /v1/files, create or send anything under /v1/files, do anything under /v1/files, and do anything under /v1/files.",
+     "Only to api.figma.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.figma.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.figma.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "fireworks",
+  "display": "Fireworks AI",
+  "category": "ai",
+  "upstreams": [
+   "api.fireworks.ai"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /v1/accounts/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything and do anything under /v1/accounts.",
+     "Only to api.fireworks.ai.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.fireworks.ai.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.fireworks.ai.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "github",
+  "display": "GitHub",
+  "category": "devtools",
+  "upstreams": [
+   "api.github.com"
+  ],
+  "policies": [
+   {
+    "id": "read-only",
+    "display": "Read repositories, issues and pull requests",
+    "recommended": true,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [
+     "GET /user/keys",
+     "GET /user/emails",
+     "GET /orgs/*/actions/secrets/**",
+     "GET /repos/*/*/actions/secrets/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Cannot read at /user/keys, read at /user/emails, read anything under /orgs, and read anything under /repos.",
+     "Only to api.github.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "contribute",
+    "display": "Read, open issues and pull requests, push via API; no deletes or settings",
+    "recommended": true,
+    "allow": [
+     "GET /**",
+     "POST /repos/*/*/issues",
+     "PATCH /repos/*/*/issues/*",
+     "POST /repos/*/*/issues/*/comments",
+     "POST /repos/*/*/pulls",
+     "PATCH /repos/*/*/pulls/*",
+     "POST /repos/*/*/pulls/*/reviews",
+     "POST /repos/*/*/pulls/*/comments",
+     "POST /repos/*/*/git/**",
+     "PUT /repos/*/*/contents/**",
+     "POST /repos/*/*/statuses/*",
+     "POST /repos/*/*/check-runs",
+     "PATCH /repos/*/*/check-runs/*"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /repos/*/*/actions/secrets/**",
+     "* /orgs/*/actions/secrets/**",
+     "* /repos/*/*/keys/**",
+     "* /user/keys/**",
+     "* /repos/*/*/hooks/**",
+     "* /orgs/*/hooks/**",
+     "* /orgs/*/members/**",
+     "* /repos/*/*/collaborators/**",
+     "PATCH /repos/*/*"
+    ],
+    "limits": {},
+    "lines": [
+     "Can read anything, create or send anything under /repos, update anything under /repos, create or send anything under /repos, create or send anything under /repos, update anything under /repos, create or send anything under /repos, create or send anything under /repos, create or send anything under /repos, replace anything under /repos, create or send anything under /repos, create or send anything under /repos, and update anything under /repos.",
+     "Cannot delete anything, do anything under /repos, do anything under /orgs, do anything under /repos, do anything under /user/keys, do anything under /repos, do anything under /orgs, do anything under /orgs, do anything under /repos, and update anything under /repos.",
+     "Only to api.github.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.github.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "google-ai",
+  "display": "Google AI",
+  "category": "ai",
+  "upstreams": [
+   "generativelanguage.googleapis.com"
+  ],
+  "policies": [
+   {
+    "id": "generate",
+    "display": "Generate content and embeddings only",
+    "recommended": true,
+    "allow": [
+     "POST /v1beta/models/**",
+     "GET /v1beta/models",
+     "GET /v1beta/models/*",
+     "POST /v1/models/**",
+     "GET /v1/models"
+    ],
+    "deny": [
+     "* /v1beta/tunedModels/**",
+     "* /v1beta/files/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can create or send anything under /v1beta/models, read at /v1beta/models, read anything under /v1beta/models, create or send anything under /v1/models, and read at /v1/models.",
+     "Cannot do anything under /v1beta/tunedModels and do anything under /v1beta/files.",
+     "Only to generativelanguage.googleapis.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to generativelanguage.googleapis.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "groq",
+  "display": "Groq",
+  "category": "ai",
+  "upstreams": [
+   "api.groq.com"
+  ],
+  "policies": [
+   {
+    "id": "chat",
+    "display": "Chat, responses and embeddings only",
+    "recommended": true,
+    "allow": [
+     "POST /openai/v1/chat/completions",
+     "POST /openai/v1/responses",
+     "GET /openai/v1/models",
+     "POST /openai/v1/audio/transcriptions"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can create or send at /openai/v1/chat/completions, create or send at /openai/v1/responses, read at /openai/v1/models, and create or send at /openai/v1/audio/transcriptions.",
+     "Only to api.groq.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "no-admin",
+    "display": "Everything except organisation, billing and fine-tuning",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "* /openai/v1/files/**",
+     "* /openai/v1/batches/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot do anything under /openai/v1/files and do anything under /openai/v1/batches.",
+     "Only to api.groq.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.groq.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "heroku",
+  "display": "Heroku",
+  "category": "hosting",
+  "upstreams": [
+   "api.heroku.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /account/**",
+     "PATCH /account",
+     "DELETE /account",
+     "* /teams/*/members/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, do anything under /account, update at /account, delete at /account, and do anything under /teams.",
+     "Only to api.heroku.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.heroku.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.heroku.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "hetzner-cloud",
+  "display": "Hetzner Cloud",
+  "category": "hosting",
+  "upstreams": [
+   "api.hetzner.cloud"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything.",
+     "Only to api.hetzner.cloud.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.hetzner.cloud.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.hetzner.cloud.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "hostinger",
+  "display": "Hostinger",
+  "category": "hosting",
+  "upstreams": [
+   "developers.hostinger.com"
+  ],
+  "policies": [
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": true,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to developers.hostinger.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "deploy",
+    "display": "Read, start builds, restart apps and set environment variables; no deletes, DNS, domains or billing",
+    "recommended": true,
+    "allow": [
+     "GET /**",
+     "POST /api/hosting/*/accounts/*/websites/*/nodejs/builds",
+     "POST /api/hosting/*/accounts/*/websites/*/nodejs/server/restart",
+     "PUT /api/hosting/*/accounts/*/websites/*/nodejs/builds/settings/env"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /api/dns/**",
+     "* /api/domains/**",
+     "* /api/billing/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can read anything, create or send anything under /api/hosting, create or send anything under /api/hosting, and replace anything under /api/hosting.",
+     "Cannot delete anything, do anything under /api/dns, do anything under /api/domains, and do anything under /api/billing.",
+     "Only to developers.hostinger.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to developers.hostinger.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "hubspot",
+  "display": "HubSpot",
+  "category": "crm",
+  "upstreams": [
+   "api.hubapi.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /crm/v3/objects/*/batch/archive",
+     "* /crm/v3/objects/*/batch/archive/**",
+     "* /settings/v3/users*",
+     "* /settings/v3/users*/**",
+     "* /marketing/v3/transactional/single-email/send",
+     "* /marketing/v3/transactional/single-email/send/**",
+     "* /communication-preferences*",
+     "* /communication-preferences*/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, do anything under /crm/v3/objects, do anything under /crm/v3/objects, do anything at /settings/v3/users*, do anything under /settings/v3/users*, do anything at /marketing/v3/transactional/single-email/send, do anything under /marketing/v3/transactional/single-email/send, do anything at /communication-preferences*, and do anything under /communication-preferences*.",
+     "Only to api.hubapi.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.hubapi.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.hubapi.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "lemon-squeezy",
+  "display": "Lemon Squeezy",
+  "category": "payments",
+  "upstreams": [
+   "api.lemonsqueezy.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /v1/orders/*/refund",
+     "* /v1/subscriptions/*/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, do anything under /v1/orders, and do anything under /v1/subscriptions.",
+     "Only to api.lemonsqueezy.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.lemonsqueezy.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.lemonsqueezy.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "linode",
+  "display": "Linode (Akamai Cloud)",
+  "category": "hosting",
+  "upstreams": [
+   "api.linode.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "POST /v4/linode/instances",
+     "POST /v4/linode/instances/**",
+     "* /v4/account/users",
+     "* /v4/account/users/**",
+     "* /v4/profile/tokens",
+     "* /v4/profile/tokens/**",
+     "* /v4/account/payments",
+     "* /v4/account/payments/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, create or send at /v4/linode/instances, create or send anything under /v4/linode/instances, do anything at /v4/account/users, do anything under /v4/account/users, do anything at /v4/profile/tokens, do anything under /v4/profile/tokens, do anything at /v4/account/payments, and do anything under /v4/account/payments.",
+     "Only to api.linode.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.linode.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.linode.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "loops",
+  "display": "Loops",
+  "category": "email",
+  "upstreams": [
+   "app.loops.so"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "POST /api/v1/contacts/delete",
+     "POST /api/v1/contacts/delete/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, create or send at /api/v1/contacts/delete, and create or send anything under /api/v1/contacts/delete.",
+     "Only to app.loops.so.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to app.loops.so.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to app.loops.so.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "mapbox",
+  "display": "Mapbox",
+  "category": "maps",
+  "upstreams": [
+   "api.mapbox.com",
+   "events.mapbox.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /tokens/v2/*",
+     "* /tokens/v2/*/**",
+     "* /uploads/v1*",
+     "* /uploads/v1*/**",
+     "DELETE /styles/v1/*",
+     "DELETE /styles/v1/*/**",
+     "DELETE /datasets/v1/*",
+     "DELETE /datasets/v1/*/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, do anything under /tokens/v2, do anything under /tokens/v2, do anything at /uploads/v1*, do anything under /uploads/v1*, delete anything under /styles/v1, delete anything under /styles/v1, delete anything under /datasets/v1, and delete anything under /datasets/v1.",
+     "Only to api.mapbox.com and events.mapbox.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.mapbox.com and events.mapbox.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.mapbox.com and events.mapbox.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "mercado-pago",
+  "display": "Mercado Pago",
+  "category": "payments",
+  "upstreams": [
+   "api.mercadopago.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "POST /v1/payments/*/refunds",
+     "POST /v1/payments/*/refunds/**",
+     "PUT /v1/payments/*",
+     "PUT /v1/payments/*/**",
+     "* /v1/advanced_payments/*",
+     "* /v1/advanced_payments/*/**",
+     "* /preapproval/*",
+     "* /preapproval/*/**",
+     "* /v1/customers/*/cards",
+     "* /v1/customers/*/cards/**",
+     "* /v1/money_requests",
+     "* /v1/money_requests/**",
+     "* /mpmobile/instore/*",
+     "* /mpmobile/instore/*/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, create or send anything under /v1/payments, create or send anything under /v1/payments, replace anything under /v1/payments, replace anything under /v1/payments, do anything under /v1/advanced_payments, do anything under /v1/advanced_payments, do anything under /preapproval, do anything under /preapproval, do anything under /v1/customers, do anything under /v1/customers, do anything at /v1/money_requests, do anything under /v1/money_requests, do anything under /mpmobile/instore, and do anything under /mpmobile/instore.",
+     "Only to api.mercadopago.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.mercadopago.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.mercadopago.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "mistral",
+  "display": "Mistral",
+  "category": "ai",
+  "upstreams": [
+   "api.mistral.ai"
+  ],
+  "policies": [
+   {
+    "id": "chat",
+    "display": "Chat, responses and embeddings only",
+    "recommended": true,
+    "allow": [
+     "POST /v1/chat/completions",
+     "POST /v1/embeddings",
+     "GET /v1/models"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can create or send at /v1/chat/completions, create or send at /v1/embeddings, and read at /v1/models.",
+     "Only to api.mistral.ai.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "no-admin",
+    "display": "Everything except organisation, billing and fine-tuning",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "* /v1/fine_tuning/**",
+     "* /v1/files/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot do anything under /v1/fine_tuning and do anything under /v1/files.",
+     "Only to api.mistral.ai.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.mistral.ai.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "mollie",
+  "display": "Mollie",
+  "category": "payments",
+  "upstreams": [
+   "api.mollie.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "POST /v2/payments/*/refunds",
+     "POST /v2/payments/*/refunds/**",
+     "POST /v2/orders/*/refunds",
+     "POST /v2/orders/*/refunds/**",
+     "DELETE /v2/payments/*",
+     "DELETE /v2/payments/*/**",
+     "* /v2/customers/*/mandates",
+     "* /v2/customers/*/mandates/**",
+     "* /v2/customers/*/subscriptions",
+     "* /v2/customers/*/subscriptions/**",
+     "* /v2/connect/balance-transfers",
+     "* /v2/connect/balance-transfers/**",
+     "* /v2/profiles",
+     "* /v2/profiles/**",
+     "* /v2/payment-links",
+     "* /v2/payment-links/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, create or send anything under /v2/payments, create or send anything under /v2/payments, create or send anything under /v2/orders, create or send anything under /v2/orders, delete anything under /v2/payments, delete anything under /v2/payments, do anything under /v2/customers, do anything under /v2/customers, do anything under /v2/customers, do anything under /v2/customers, do anything at /v2/connect/balance-transfers, do anything under /v2/connect/balance-transfers, do anything at /v2/profiles, do anything under /v2/profiles, do anything at /v2/payment-links, and do anything under /v2/payment-links.",
+     "Only to api.mollie.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.mollie.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.mollie.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "neon",
+  "display": "Neon",
+  "category": "database",
+  "upstreams": [
+   "console.neon.tech"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /api/v2/api_keys/**",
+     "* /api/v2/organizations/*/members/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, do anything under /api/v2/api_keys, and do anything under /api/v2/organizations.",
+     "Only to console.neon.tech.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to console.neon.tech.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to console.neon.tech.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "netlify",
+  "display": "Netlify",
+  "category": "hosting",
+  "upstreams": [
+   "api.netlify.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /api/v1/accounts/*/env",
+     "* /api/v1/accounts/*/env/**",
+     "* /api/v1/accounts/*/members",
+     "* /api/v1/accounts/*/members/**",
+     "* /api/v1/hooks",
+     "* /api/v1/hooks/**",
+     "* /api/v1/dns_zones",
+     "* /api/v1/dns_zones/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, do anything under /api/v1/accounts, do anything under /api/v1/accounts, do anything under /api/v1/accounts, do anything under /api/v1/accounts, do anything at /api/v1/hooks, do anything under /api/v1/hooks, do anything at /api/v1/dns_zones, and do anything under /api/v1/dns_zones.",
+     "Only to api.netlify.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.netlify.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.netlify.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "notion",
+  "display": "Notion",
+  "category": "productivity",
+  "upstreams": [
+   "api.notion.com"
+  ],
+  "policies": [
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": true,
+    "allow": [
+     "GET /v1/**",
+     "POST /v1/search",
+     "POST /v1/databases/*/query"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything under /v1, create or send at /v1/search, and create or send anything under /v1/databases.",
+     "Only to api.notion.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "write",
+    "display": "Read and write; no deletes or account settings",
+    "recommended": true,
+    "allow": [
+     "GET /v1/**",
+     "POST /v1/search",
+     "POST /v1/databases/*/query",
+     "POST /v1/pages",
+     "PATCH /v1/pages/*",
+     "PATCH /v1/blocks/*",
+     "PATCH /v1/blocks/*/children",
+     "POST /v1/comments",
+     "POST /v1/databases",
+     "PATCH /v1/databases/*"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /v1/users/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can read anything under /v1, create or send at /v1/search, create or send anything under /v1/databases, create or send at /v1/pages, update anything under /v1/pages, update anything under /v1/blocks, update anything under /v1/blocks, create or send at /v1/comments, create or send at /v1/databases, and update anything under /v1/databases.",
+     "Cannot delete anything and do anything under /v1/users.",
+     "Only to api.notion.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.notion.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "openai",
+  "display": "OpenAI",
+  "category": "ai",
+  "upstreams": [
+   "api.openai.com"
+  ],
+  "policies": [
+   {
+    "id": "chat",
+    "display": "Chat, responses and embeddings only",
+    "recommended": true,
+    "allow": [
+     "POST /v1/chat/completions",
+     "POST /v1/responses",
+     "POST /v1/embeddings",
+     "GET /v1/models",
+     "GET /v1/models/*",
+     "POST /v1/moderations"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can create or send at /v1/chat/completions, create or send at /v1/responses, create or send at /v1/embeddings, read at /v1/models, read anything under /v1/models, and create or send at /v1/moderations.",
+     "Only to api.openai.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "no-admin",
+    "display": "Everything except organisation, billing and fine-tuning",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "* /v1/organization/**",
+     "* /v1/fine_tuning/**",
+     "* /v1/files/**",
+     "* /v1/batches/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot do anything under /v1/organization, do anything under /v1/fine_tuning, do anything under /v1/files, and do anything under /v1/batches.",
+     "Only to api.openai.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.openai.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "openrouter",
+  "display": "OpenRouter",
+  "category": "ai",
+  "upstreams": [
+   "openrouter.ai"
+  ],
+  "policies": [
+   {
+    "id": "chat",
+    "display": "Chat, responses and embeddings only",
+    "recommended": true,
+    "allow": [
+     "POST /api/v1/chat/completions",
+     "POST /api/v1/completions",
+     "GET /api/v1/models",
+     "GET /api/v1/models/**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can create or send at /api/v1/chat/completions, create or send at /api/v1/completions, read at /api/v1/models, and read anything under /api/v1/models.",
+     "Only to openrouter.ai.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "no-admin",
+    "display": "Everything except organisation, billing and fine-tuning",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "* /api/v1/keys/**",
+     "* /api/v1/credits/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot do anything under /api/v1/keys and do anything under /api/v1/credits.",
+     "Only to openrouter.ai.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to openrouter.ai.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "openweathermap",
+  "display": "OpenWeatherMap",
+  "category": "other",
+  "upstreams": [
+   "api.openweathermap.org",
+   "pro.openweathermap.org"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /data/3.0/onecall*",
+     "* /data/3.0/onecall*/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, do anything at /data/3.0/onecall*, and do anything under /data/3.0/onecall*.",
+     "Only to api.openweathermap.org and pro.openweathermap.org.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.openweathermap.org and pro.openweathermap.org.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.openweathermap.org and pro.openweathermap.org.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "paddle",
+  "display": "Paddle Billing",
+  "category": "payments",
+  "upstreams": [
+   "api.paddle.com",
+   "sandbox-api.paddle.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "POST /adjustments",
+     "POST /adjustments/**",
+     "POST /subscriptions/*/cancel",
+     "POST /subscriptions/*/cancel/**",
+     "PATCH /subscriptions/*",
+     "PATCH /subscriptions/*/**",
+     "POST /subscriptions/*/charge",
+     "POST /subscriptions/*/charge/**",
+     "* /prices",
+     "* /prices/**",
+     "* /discounts",
+     "* /discounts/**",
+     "* /notification-settings",
+     "* /notification-settings/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, create or send at /adjustments, create or send anything under /adjustments, create or send anything under /subscriptions, create or send anything under /subscriptions, update anything under /subscriptions, update anything under /subscriptions, create or send anything under /subscriptions, create or send anything under /subscriptions, do anything at /prices, do anything under /prices, do anything at /discounts, do anything under /discounts, do anything at /notification-settings, and do anything under /notification-settings.",
+     "Only to api.paddle.com and sandbox-api.paddle.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.paddle.com and sandbox-api.paddle.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.paddle.com and sandbox-api.paddle.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "paystack",
+  "display": "Paystack",
+  "category": "payments",
+  "upstreams": [
+   "api.paystack.co"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "POST /refund",
+     "POST /refund/**",
+     "POST /transfer",
+     "POST /transfer/**",
+     "POST /transfer/bulk",
+     "POST /transfer/bulk/**",
+     "POST /transfer/finalize_transfer",
+     "POST /transfer/finalize_transfer/**",
+     "* /transferrecipient",
+     "* /transferrecipient/**",
+     "* /subaccount",
+     "* /subaccount/**",
+     "* /split",
+     "* /split/**",
+     "POST /transaction/charge_authorization",
+     "POST /transaction/charge_authorization/**",
+     "POST /customer/deactivate_authorization",
+     "POST /customer/deactivate_authorization/**",
+     "* /subscription/disable",
+     "* /subscription/disable/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, create or send at /refund, create or send anything under /refund, create or send at /transfer, create or send anything under /transfer, create or send at /transfer/bulk, create or send anything under /transfer/bulk, create or send at /transfer/finalize_transfer, create or send anything under /transfer/finalize_transfer, do anything at /transferrecipient, do anything under /transferrecipient, do anything at /subaccount, do anything under /subaccount, do anything at /split, do anything under /split, create or send at /transaction/charge_authorization, create or send anything under /transaction/charge_authorization, create or send at /customer/deactivate_authorization, create or send anything under /customer/deactivate_authorization, do anything at /subscription/disable, and do anything under /subscription/disable.",
+     "Only to api.paystack.co.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.paystack.co.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.paystack.co.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "perplexity",
+  "display": "Perplexity",
+  "category": "ai",
+  "upstreams": [
+   "api.perplexity.ai"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything.",
+     "Only to api.perplexity.ai.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.perplexity.ai.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.perplexity.ai.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "polar",
+  "display": "Polar",
+  "category": "payments",
+  "upstreams": [
+   "api.polar.sh",
+   "sandbox-api.polar.sh"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "POST /v1/refunds",
+     "POST /v1/refunds/**",
+     "DELETE /v1/subscriptions/*",
+     "DELETE /v1/subscriptions/*/**",
+     "PATCH /v1/subscriptions/*",
+     "PATCH /v1/subscriptions/*/**",
+     "* /v1/benefits",
+     "* /v1/benefits/**",
+     "* /v1/discounts",
+     "* /v1/discounts/**",
+     "* /v1/webhooks",
+     "* /v1/webhooks/**",
+     "* /v1/organizations",
+     "* /v1/organizations/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, create or send at /v1/refunds, create or send anything under /v1/refunds, delete anything under /v1/subscriptions, delete anything under /v1/subscriptions, update anything under /v1/subscriptions, update anything under /v1/subscriptions, do anything at /v1/benefits, do anything under /v1/benefits, do anything at /v1/discounts, do anything under /v1/discounts, do anything at /v1/webhooks, do anything under /v1/webhooks, do anything at /v1/organizations, and do anything under /v1/organizations.",
+     "Only to api.polar.sh and sandbox-api.polar.sh.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.polar.sh and sandbox-api.polar.sh.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.polar.sh and sandbox-api.polar.sh.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "postmark",
+  "display": "Postmark",
+  "category": "email",
+  "upstreams": [
+   "api.postmarkapp.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /server/**",
+     "PUT /server",
+     "* /servers/**",
+     "* /domains/**",
+     "* /senders/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, do anything under /server, replace at /server, do anything under /servers, do anything under /domains, and do anything under /senders.",
+     "Only to api.postmarkapp.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.postmarkapp.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.postmarkapp.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "render",
+  "display": "Render",
+  "category": "hosting",
+  "upstreams": [
+   "api.render.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /v1/services/*/env-vars",
+     "* /v1/services/*/env-vars/**",
+     "* /v1/env-groups",
+     "* /v1/env-groups/**",
+     "* /v1/services/*/suspend",
+     "* /v1/services/*/suspend/**",
+     "POST /v1/services",
+     "POST /v1/services/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, do anything under /v1/services, do anything under /v1/services, do anything at /v1/env-groups, do anything under /v1/env-groups, do anything under /v1/services, do anything under /v1/services, create or send at /v1/services, and create or send anything under /v1/services.",
+     "Only to api.render.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.render.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.render.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "replicate",
+  "display": "Replicate",
+  "category": "ai",
+  "upstreams": [
+   "api.replicate.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "POST /v1/deployments",
+     "POST /v1/deployments/**",
+     "PATCH /v1/deployments/*",
+     "PATCH /v1/deployments/*/**",
+     "POST /v1/models",
+     "POST /v1/models/**",
+     "* /v1/trainings",
+     "* /v1/trainings/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, create or send at /v1/deployments, create or send anything under /v1/deployments, update anything under /v1/deployments, update anything under /v1/deployments, create or send at /v1/models, create or send anything under /v1/models, do anything at /v1/trainings, and do anything under /v1/trainings.",
+     "Only to api.replicate.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.replicate.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.replicate.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "resend",
+  "display": "Resend",
+  "category": "email",
+  "upstreams": [
+   "api.resend.com"
+  ],
+  "policies": [
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": true,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.resend.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "write",
+    "display": "Read and write; no deletes or account settings",
+    "recommended": true,
+    "allow": [
+     "GET /**",
+     "POST /emails",
+     "POST /emails/batch",
+     "POST /contacts",
+     "PATCH /contacts/*",
+     "POST /audiences/*/contacts"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /api-keys/**",
+     "* /domains/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can read anything, create or send at /emails, create or send at /emails/batch, create or send at /contacts, update anything under /contacts, and create or send anything under /audiences.",
+     "Cannot delete anything, do anything under /api-keys, and do anything under /domains.",
+     "Only to api.resend.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.resend.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "sendgrid",
+  "display": "SendGrid",
+  "category": "email",
+  "upstreams": [
+   "api.sendgrid.com"
+  ],
+  "policies": [
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": true,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.sendgrid.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "write",
+    "display": "Read and write; no deletes or account settings",
+    "recommended": true,
+    "allow": [
+     "GET /**",
+     "POST /v3/mail/send",
+     "POST /v3/marketing/contacts",
+     "PUT /v3/marketing/contacts"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /v3/api_keys/**",
+     "* /v3/user/**",
+     "* /v3/teammates/**",
+     "* /v3/whitelabel/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can read anything, create or send at /v3/mail/send, create or send at /v3/marketing/contacts, and replace at /v3/marketing/contacts.",
+     "Cannot delete anything, do anything under /v3/api_keys, do anything under /v3/user, do anything under /v3/teammates, and do anything under /v3/whitelabel.",
+     "Only to api.sendgrid.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.sendgrid.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "slack",
+  "display": "Slack",
+  "category": "messaging",
+  "upstreams": [
+   "slack.com"
+  ],
+  "policies": [
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": true,
+    "allow": [
+     "GET /api/conversations.*",
+     "GET /api/users.*",
+     "POST /api/conversations.history",
+     "POST /api/conversations.list",
+     "POST /api/users.list",
+     "POST /api/users.info",
+     "POST /api/auth.test"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read at /api/conversations.*, read at /api/users.*, create or send at /api/conversations.history, create or send at /api/conversations.list, create or send at /api/users.list, create or send at /api/users.info, and create or send at /api/auth.test.",
+     "Only to slack.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "write",
+    "display": "Read and write; no deletes or account settings",
+    "recommended": true,
+    "allow": [
+     "* /api/chat.postMessage",
+     "* /api/chat.update",
+     "* /api/chat.postEphemeral",
+     "* /api/reactions.add",
+     "* /api/files.upload",
+     "* /api/files.getUploadURLExternal",
+     "* /api/files.completeUploadExternal",
+     "* /api/conversations.*",
+     "* /api/users.*",
+     "* /api/auth.test",
+     "* /api/views.*"
+    ],
+    "deny": [
+     "* /api/chat.delete",
+     "* /api/admin.*",
+     "* /api/conversations.kick",
+     "* /api/conversations.archive",
+     "* /api/users.admin.*",
+     "* /api/apps.*"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything at /api/chat.postMessage, do anything at /api/chat.update, do anything at /api/chat.postEphemeral, do anything at /api/reactions.add, do anything at /api/files.upload, do anything at /api/files.getUploadURLExternal, do anything at /api/files.completeUploadExternal, do anything at /api/conversations.*, do anything at /api/users.*, do anything at /api/auth.test, and do anything at /api/views.*.",
+     "Cannot do anything at /api/chat.delete, do anything at /api/admin.*, do anything at /api/conversations.kick, do anything at /api/conversations.archive, do anything at /api/users.admin.*, and do anything at /api/apps.*.",
+     "Only to slack.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to slack.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "square",
+  "display": "Square",
+  "category": "payments",
+  "upstreams": [
+   "connect.squareup.com",
+   "connect.squareupsandbox.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /v2/refunds/**",
+     "* /v2/payouts/**",
+     "* /v2/team-members/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, do anything under /v2/refunds, do anything under /v2/payouts, and do anything under /v2/team-members.",
+     "Only to connect.squareup.com and connect.squareupsandbox.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to connect.squareup.com and connect.squareupsandbox.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to connect.squareup.com and connect.squareupsandbox.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "stripe",
+  "display": "Stripe",
+  "category": "payments",
+  "upstreams": [
+   "api.stripe.com"
+  ],
+  "policies": [
+   {
+    "id": "read-only",
+    "display": "Read everything, change nothing",
+    "recommended": true,
+    "allow": [
+     "GET /v1/**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything under /v1.",
+     "Only to api.stripe.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "payments",
+    "display": "Take payments; no refunds, payouts or transfers",
+    "recommended": true,
+    "allow": [
+     "GET /v1/**",
+     "POST /v1/customers",
+     "POST /v1/customers/*",
+     "POST /v1/payment_intents",
+     "POST /v1/payment_intents/*",
+     "POST /v1/payment_intents/*/confirm",
+     "POST /v1/payment_intents/*/capture",
+     "POST /v1/payment_intents/*/cancel",
+     "POST /v1/checkout/sessions",
+     "POST /v1/checkout/sessions/*/expire",
+     "POST /v1/setup_intents",
+     "POST /v1/setup_intents/*",
+     "POST /v1/payment_methods",
+     "POST /v1/payment_methods/*",
+     "POST /v1/payment_methods/*/attach",
+     "POST /v1/subscriptions",
+     "POST /v1/subscriptions/*",
+     "POST /v1/invoices",
+     "POST /v1/invoices/*",
+     "POST /v1/products",
+     "POST /v1/products/*",
+     "POST /v1/prices",
+     "POST /v1/prices/*",
+     "POST /v1/webhook_endpoints"
+    ],
+    "deny": [
+     "* /v1/refunds/**",
+     "* /v1/payouts/**",
+     "* /v1/transfers/**",
+     "* /v1/topups/**",
+     "* /v1/balance/**",
+     "* /v1/accounts/**",
+     "* /v1/account_links/**",
+     "DELETE /**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can read anything under /v1, create or send at /v1/customers, create or send anything under /v1/customers, create or send at /v1/payment_intents, create or send anything under /v1/payment_intents, create or send anything under /v1/payment_intents, create or send anything under /v1/payment_intents, create or send anything under /v1/payment_intents, create or send at /v1/checkout/sessions, create or send anything under /v1/checkout/sessions, create or send at /v1/setup_intents, create or send anything under /v1/setup_intents, create or send at /v1/payment_methods, create or send anything under /v1/payment_methods, create or send anything under /v1/payment_methods, create or send at /v1/subscriptions, create or send anything under /v1/subscriptions, create or send at /v1/invoices, create or send anything under /v1/invoices, create or send at /v1/products, create or send anything under /v1/products, create or send at /v1/prices, create or send anything under /v1/prices, and create or send at /v1/webhook_endpoints.",
+     "Cannot do anything under /v1/refunds, do anything under /v1/payouts, do anything under /v1/transfers, do anything under /v1/topups, do anything under /v1/balance, do anything under /v1/accounts, do anything under /v1/account_links, and delete anything.",
+     "Only to api.stripe.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.stripe.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "supabase",
+  "display": "Supabase",
+  "category": "database",
+  "upstreams": [
+   "*.supabase.co"
+  ],
+  "policies": [
+   {
+    "id": "read-only",
+    "display": "Read data only",
+    "recommended": true,
+    "allow": [
+     "GET /rest/v1/**",
+     "GET /storage/v1/**",
+     "HEAD /rest/v1/**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything under /rest/v1, read anything under /storage/v1, and check anything under /rest/v1.",
+     "Only to *.supabase.co.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "data",
+    "display": "Read and write data and storage; no auth admin",
+    "recommended": true,
+    "allow": [
+     "* /rest/v1/**",
+     "* /storage/v1/**",
+     "POST /functions/v1/**"
+    ],
+    "deny": [
+     "* /auth/v1/admin/**",
+     "DELETE /storage/v1/bucket/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything under /rest/v1, do anything under /storage/v1, and create or send anything under /functions/v1.",
+     "Cannot do anything under /auth/v1/admin and delete anything under /storage/v1/bucket.",
+     "Only to *.supabase.co.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to *.supabase.co.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "supabase-management",
+  "display": "Supabase (Management API)",
+  "category": "backend",
+  "upstreams": [
+   "api.supabase.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "DELETE /v1/projects/*",
+     "DELETE /v1/projects/*/**",
+     "POST /v1/projects",
+     "POST /v1/projects/**",
+     "* /v1/projects/*/database/query",
+     "* /v1/projects/*/database/query/**",
+     "GET /v1/projects/*/api-keys",
+     "GET /v1/projects/*/api-keys/**",
+     "* /v1/projects/*/secrets",
+     "* /v1/projects/*/secrets/**",
+     "* /v1/organizations/*/members",
+     "* /v1/organizations/*/members/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, delete anything under /v1/projects, delete anything under /v1/projects, create or send at /v1/projects, create or send anything under /v1/projects, do anything under /v1/projects, do anything under /v1/projects, read anything under /v1/projects, read anything under /v1/projects, do anything under /v1/projects, do anything under /v1/projects, do anything under /v1/organizations, and do anything under /v1/organizations.",
+     "Only to api.supabase.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.supabase.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.supabase.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "tally",
+  "display": "Tally",
+  "category": "productivity",
+  "upstreams": [
+   "api.tally.so"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "DELETE /forms/*",
+     "DELETE /forms/*/**",
+     "DELETE /forms/*/submissions/*",
+     "DELETE /forms/*/submissions/*/**",
+     "* /workspaces/*/invites*",
+     "* /workspaces/*/invites*/**",
+     "* /webhooks*",
+     "* /webhooks*/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, delete anything under /forms, delete anything under /forms, delete anything under /forms, delete anything under /forms, do anything under /workspaces, do anything under /workspaces, do anything at /webhooks*, and do anything under /webhooks*.",
+     "Only to api.tally.so.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.tally.so.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.tally.so.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "telnyx",
+  "display": "Telnyx",
+  "category": "messaging",
+  "upstreams": [
+   "api.telnyx.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "POST /v2/calls",
+     "POST /v2/calls/**",
+     "* /v2/number_orders/**",
+     "* /v2/phone_numbers/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, create or send at /v2/calls, create or send anything under /v2/calls, do anything under /v2/number_orders, and do anything under /v2/phone_numbers.",
+     "Only to api.telnyx.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.telnyx.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.telnyx.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "together",
+  "display": "Together AI",
+  "category": "ai",
+  "upstreams": [
+   "api.together.xyz"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /v1/fine-tunes/**",
+     "* /v1/endpoints/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, do anything under /v1/fine-tunes, and do anything under /v1/endpoints.",
+     "Only to api.together.xyz.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.together.xyz.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.together.xyz.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "twilio",
+  "display": "Twilio",
+  "category": "messaging",
+  "upstreams": [
+   "api.twilio.com"
+  ],
+  "policies": [
+   {
+    "id": "read-only",
+    "display": "Read logs and resources only",
+    "recommended": true,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.twilio.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "messaging",
+    "display": "Send SMS and read logs; no calls, numbers or account changes",
+    "recommended": true,
+    "allow": [
+     "GET /**",
+     "POST /2010-04-01/Accounts/*/Messages.json",
+     "POST /2010-04-01/Accounts/*/Messages/*.json"
+    ],
+    "deny": [
+     "* /2010-04-01/Accounts/*/Calls/**",
+     "* /2010-04-01/Accounts/*/IncomingPhoneNumbers/**",
+     "* /2010-04-01/Accounts/*/Keys/**",
+     "POST /2010-04-01/Accounts/*.json",
+     "DELETE /**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can read anything, create or send anything under /2010-04-01/Accounts, and create or send anything under /2010-04-01/Accounts.",
+     "Cannot do anything under /2010-04-01/Accounts, do anything under /2010-04-01/Accounts, do anything under /2010-04-01/Accounts, create or send at /2010-04-01/Accounts/*.json, and delete anything.",
+     "Only to api.twilio.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.twilio.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "vapi",
+  "display": "Vapi (voice AI agents)",
+  "category": "messaging",
+  "upstreams": [
+   "api.vapi.ai"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "POST /call",
+     "POST /call/**",
+     "POST /phone-number",
+     "POST /phone-number/**",
+     "* /campaign",
+     "* /campaign/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, create or send at /call, create or send anything under /call, create or send at /phone-number, create or send anything under /phone-number, do anything at /campaign, and do anything under /campaign.",
+     "Only to api.vapi.ai.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.vapi.ai.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.vapi.ai.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "vercel",
+  "display": "Vercel",
+  "category": "hosting",
+  "upstreams": [
+   "api.vercel.com"
+  ],
+  "policies": [
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": true,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.vercel.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "write",
+    "display": "Read and write; no deletes or account settings",
+    "recommended": true,
+    "allow": [
+     "GET /**",
+     "POST /v13/deployments",
+     "POST /v*/deployments",
+     "PATCH /v*/projects/*",
+     "POST /v*/projects/*/env",
+     "PATCH /v*/projects/*/env/*"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /v*/teams/**",
+     "* /v*/user/**",
+     "* /v*/projects/*/domains/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can read anything, create or send at /v13/deployments, create or send at /v*/deployments, update anything under /v*/projects, create or send anything under /v*/projects, and update anything under /v*/projects.",
+     "Cannot delete anything, do anything under /v*/teams, do anything under /v*/user, and do anything under /v*/projects.",
+     "Only to api.vercel.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.vercel.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "vultr",
+  "display": "Vultr",
+  "category": "hosting",
+  "upstreams": [
+   "api.vultr.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /v2/users/**",
+     "* /v2/billing/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, do anything under /v2/users, and do anything under /v2/billing.",
+     "Only to api.vultr.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.vultr.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.vultr.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "xai",
+  "display": "xAI (Grok)",
+  "category": "ai",
+  "upstreams": [
+   "api.x.ai"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "* /v1/api-key/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything and do anything under /v1/api-key.",
+     "Only to api.x.ai.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to api.x.ai.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to api.x.ai.",
+     "Never expires."
+    ]
+   }
+  ]
+ },
+ {
+  "id": "youtube-data",
+  "display": "YouTube Data API v3",
+  "category": "social",
+  "upstreams": [
+   "www.googleapis.com",
+   "youtube.googleapis.com"
+  ],
+  "policies": [
+   {
+    "id": "standard",
+    "display": "Everything except deletes and account, key and billing changes",
+    "recommended": true,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [
+     "DELETE /**",
+     "POST /youtube/v3/videos",
+     "POST /youtube/v3/videos/**",
+     "* /youtube/v3/search",
+     "* /youtube/v3/search/**",
+     "* /youtube/v3/upload/youtube/v3/*",
+     "* /youtube/v3/upload/youtube/v3/*/**"
+    ],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Cannot delete anything, create or send at /youtube/v3/videos, create or send anything under /youtube/v3/videos, do anything at /youtube/v3/search, do anything under /youtube/v3/search, do anything under /youtube/v3/upload/youtube/v3, and do anything under /youtube/v3/upload/youtube/v3.",
+     "Only to www.googleapis.com and youtube.googleapis.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "read-only",
+    "display": "Read only",
+    "recommended": false,
+    "allow": [
+     "GET /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can read anything.",
+     "Only to www.googleapis.com and youtube.googleapis.com.",
+     "Never expires."
+    ]
+   },
+   {
+    "id": "full",
+    "display": "Full access (not recommended for delegation)",
+    "recommended": false,
+    "allow": [
+     "* /**"
+    ],
+    "deny": [],
+    "limits": {},
+    "lines": [
+     "Can do anything.",
+     "Only to www.googleapis.com and youtube.googleapis.com.",
+     "Never expires."
+    ]
+   }
+  ]
+ }
+]

@@ -1,0 +1,33 @@
+id = "circleci"
+display = "CircleCI"
+category = "devtools"
+upstreams = ["circleci.com"]
+auth = { kind = "header", name = "Circle-Token" }
+docs = "https://app.circleci.com/settings/user/tokens"
+base_path = "/api/v2"
+key_prefixes = ["CCIPAT_"]
+env_names = ["CIRCLE_TOKEN"]
+
+[env]
+api_key = "CIRCLECI_TOKEN"
+
+[verify]
+method = "GET"
+path = "/api/v2/me"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "* /api/v2/context/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

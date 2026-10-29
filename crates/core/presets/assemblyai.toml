@@ -1,0 +1,33 @@
+id = "assemblyai"
+display = "AssemblyAI"
+category = "ai"
+upstreams = ["api.assemblyai.com", "api.eu.assemblyai.com", "streaming.assemblyai.com", "streaming.eu.assemblyai.com", "llm-gateway.assemblyai.com"]
+auth = { kind = "header", name = "Authorization" }
+docs = "https://www.assemblyai.com/app/api-keys"
+base_path = "/v2"
+key_prefixes = []
+env_names = []
+
+[env]
+api_key = "ASSEMBLYAI_API_KEY"
+
+[verify]
+method = "GET"
+path = "/v2/transcript?limit=1"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "DELETE /v2/transcript/*", "DELETE /v2/transcript/*/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

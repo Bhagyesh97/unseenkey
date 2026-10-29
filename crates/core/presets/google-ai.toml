@@ -4,10 +4,17 @@ upstreams = ["generativelanguage.googleapis.com"]
 auth = { kind = "query", param = "key" }
 docs = "https://aistudio.google.com/app/apikey"
 base_path = "/v1beta"
+category = "ai"
+key_prefixes = ["AIza"]
 
 [env]
 base_url = "GOOGLE_GEMINI_BASE_URL"
 api_key = "GEMINI_API_KEY"
+
+
+[verify]
+method = "GET"
+path = "/v1beta/models"
 
 [[policies]]
 id = "generate"

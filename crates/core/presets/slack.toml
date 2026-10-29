@@ -4,6 +4,8 @@ upstreams = ["slack.com"]
 auth = { kind = "bearer" }
 docs = "https://api.slack.com/apps"
 base_path = "/api"
+category = "messaging"
+key_prefixes = ["xoxb-", "xoxp-", "xoxa-", "xoxr-"]
 
 [env]
 api_key = "SLACK_BOT_TOKEN"

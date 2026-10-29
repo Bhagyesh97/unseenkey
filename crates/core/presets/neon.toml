@@ -1,0 +1,33 @@
+id = "neon"
+display = "Neon"
+category = "database"
+upstreams = ["console.neon.tech"]
+auth = { kind = "bearer" }
+docs = "https://console.neon.tech/app/settings/api-keys"
+base_path = "/api/v2"
+key_prefixes = ["napi_"]
+env_names = []
+
+[env]
+api_key = "NEON_API_KEY"
+
+[verify]
+method = "GET"
+path = "/api/v2/users/me"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "* /api/v2/api_keys/**", "* /api/v2/organizations/*/members/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

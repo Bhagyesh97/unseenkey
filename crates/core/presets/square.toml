@@ -1,0 +1,33 @@
+id = "square"
+display = "Square"
+category = "payments"
+upstreams = ["connect.squareup.com", "connect.squareupsandbox.com"]
+auth = { kind = "bearer" }
+docs = "https://developer.squareup.com/apps"
+base_path = "/v2"
+key_prefixes = ["EAAA"]
+env_names = []
+
+[env]
+api_key = "SQUARE_ACCESS_TOKEN"
+
+[verify]
+method = "GET"
+path = "/v2/locations"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "* /v2/refunds/**", "* /v2/payouts/**", "* /v2/team-members/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

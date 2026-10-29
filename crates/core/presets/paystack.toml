@@ -1,0 +1,33 @@
+id = "paystack"
+display = "Paystack"
+category = "payments"
+upstreams = ["api.paystack.co"]
+auth = { kind = "bearer" }
+docs = "https://dashboard.paystack.com/#/settings/developers"
+base_path = ""
+key_prefixes = ["sk_live_", "sk_test_"]
+env_names = ["PAYSTACK_PUBLIC_KEY", "NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY"]
+
+[env]
+api_key = "PAYSTACK_SECRET_KEY"
+
+[verify]
+method = "GET"
+path = "/balance"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "POST /refund", "POST /refund/**", "POST /transfer", "POST /transfer/**", "POST /transfer/bulk", "POST /transfer/bulk/**", "POST /transfer/finalize_transfer", "POST /transfer/finalize_transfer/**", "* /transferrecipient", "* /transferrecipient/**", "* /subaccount", "* /subaccount/**", "* /split", "* /split/**", "POST /transaction/charge_authorization", "POST /transaction/charge_authorization/**", "POST /customer/deactivate_authorization", "POST /customer/deactivate_authorization/**", "* /subscription/disable", "* /subscription/disable/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

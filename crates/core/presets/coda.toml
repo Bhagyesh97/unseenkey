@@ -1,0 +1,33 @@
+id = "coda"
+display = "Coda"
+category = "productivity"
+upstreams = ["coda.io"]
+auth = { kind = "bearer" }
+docs = "https://coda.io/account"
+base_path = "/apis/v1"
+key_prefixes = []
+env_names = ["CODA_API_KEY"]
+
+[env]
+api_key = "CODA_API_TOKEN"
+
+[verify]
+method = "GET"
+path = "/apis/v1/whoami"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "* /apis/v1/docs/*/acl*", "* /apis/v1/docs/*/acl*/**", "* /apis/v1/docs/*/publish", "* /apis/v1/docs/*/publish/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

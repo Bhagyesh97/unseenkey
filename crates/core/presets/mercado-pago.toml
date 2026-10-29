@@ -1,0 +1,33 @@
+id = "mercado-pago"
+display = "Mercado Pago"
+category = "payments"
+upstreams = ["api.mercadopago.com"]
+auth = { kind = "bearer" }
+docs = "https://www.mercadopago.com/developers/panel/app"
+base_path = ""
+key_prefixes = ["APP_USR-"]
+env_names = ["MP_ACCESS_TOKEN", "MERCADO_PAGO_ACCESS_TOKEN"]
+
+[env]
+api_key = "MERCADOPAGO_ACCESS_TOKEN"
+
+[verify]
+method = "GET"
+path = "/users/me"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "POST /v1/payments/*/refunds", "POST /v1/payments/*/refunds/**", "PUT /v1/payments/*", "PUT /v1/payments/*/**", "* /v1/advanced_payments/*", "* /v1/advanced_payments/*/**", "* /preapproval/*", "* /preapproval/*/**", "* /v1/customers/*/cards", "* /v1/customers/*/cards/**", "* /v1/money_requests", "* /v1/money_requests/**", "* /mpmobile/instore/*", "* /mpmobile/instore/*/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

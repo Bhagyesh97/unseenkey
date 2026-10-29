@@ -4,9 +4,16 @@ upstreams = ["api.cloudflare.com"]
 auth = { kind = "bearer" }
 docs = "https://dash.cloudflare.com/profile/api-tokens"
 base_path = "/client/v4"
+category = "hosting"
+key_prefixes = ["cfut_", "cfat_", "cfk_"]
 
 [env]
 api_key = "CLOUDFLARE_API_TOKEN"
+
+
+[verify]
+method = "GET"
+path = "/client/v4/user/tokens/verify"
 
 [[policies]]
 id = "read-only"

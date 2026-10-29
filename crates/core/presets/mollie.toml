@@ -1,0 +1,33 @@
+id = "mollie"
+display = "Mollie"
+category = "payments"
+upstreams = ["api.mollie.com"]
+auth = { kind = "bearer" }
+docs = "https://my.mollie.com/dashboard/developers/api-keys"
+base_path = "/v2"
+key_prefixes = []
+env_names = ["MOLLIE_ACCESS_TOKEN"]
+
+[env]
+api_key = "MOLLIE_API_KEY"
+
+[verify]
+method = "GET"
+path = "/v2/methods"
+
+[[policies]]
+id = "standard"
+display = "Everything except deletes and account, key and billing changes"
+recommended = true
+allow = ["* /**"]
+deny = ["DELETE /**", "POST /v2/payments/*/refunds", "POST /v2/payments/*/refunds/**", "POST /v2/orders/*/refunds", "POST /v2/orders/*/refunds/**", "DELETE /v2/payments/*", "DELETE /v2/payments/*/**", "* /v2/customers/*/mandates", "* /v2/customers/*/mandates/**", "* /v2/customers/*/subscriptions", "* /v2/customers/*/subscriptions/**", "* /v2/connect/balance-transfers", "* /v2/connect/balance-transfers/**", "* /v2/profiles", "* /v2/profiles/**", "* /v2/payment-links", "* /v2/payment-links/**"]
+
+[[policies]]
+id = "read-only"
+display = "Read only"
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]
