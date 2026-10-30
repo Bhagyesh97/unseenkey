@@ -5,13 +5,23 @@ its own security as the most important input we get.
 
 ## Reporting a vulnerability
 
-- Email: security@unseenkey.com (PGP key will be published here before the first public release).
-- Or use GitHub's private vulnerability reporting on this repository.
+- Preferred: GitHub's [private vulnerability reporting](https://github.com/Bhagyesh97/unseenkey/security/advisories/new)
+  on this repository. The report stays private between you and the maintainer
+  until a fix is released and an advisory is published.
+- Or email security@unseenkey.com. Do not put working credentials or exploit
+  details that expose other people's keys in an email; describe the issue and
+  we will move the details to a private advisory.
 - Please do not open a public issue for anything that could expose a secret.
 
 We commit to a first response within **72 hours** and to keeping you informed
 until the issue is resolved. We will credit you in the release notes unless you
 prefer otherwise.
+
+## Supported versions
+
+Unseenkey is alpha software. Security fixes go into the latest release only;
+please reproduce on it before reporting. Updating is `scoop update usk`,
+`brew upgrade usk`, or the desktop app's built-in updater.
 
 ## Scope
 
