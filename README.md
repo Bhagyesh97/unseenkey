@@ -12,6 +12,7 @@
   <a href="https://github.com/Bhagyesh97/unseenkey/actions/workflows/ci.yml"><img src="https://github.com/Bhagyesh97/unseenkey/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/Bhagyesh97/unseenkey/releases/latest"><img src="https://img.shields.io/github/v/release/Bhagyesh97/unseenkey?label=release&color=0969da" alt="Release"></a>
   <a href="LICENSE-APACHE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
+  <a href="https://github.com/sponsors/Bhagyesh97"><img src="https://img.shields.io/badge/sponsor-%E2%9D%A4-db61a2" alt="Sponsor"></a>
   <img src="https://img.shields.io/badge/platforms-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-555" alt="Windows, macOS, Linux">
   <img src="https://img.shields.io/badge/built%20with-Rust-dea584" alt="Rust">
 </p>
@@ -131,3 +132,5 @@ cd apps/desktop && npm install && npm run tauri dev
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Apache-2.0 for the core, CLI, daemon and desktop app; cloud services, when added, will be AGPL-3.0.
+
+Unseenkey is built by one maintainer. [Sponsoring it](https://github.com/sponsors/Bhagyesh97) pays for a first external security audit, code-signed installers and the time to keep fixing security issues quickly.
