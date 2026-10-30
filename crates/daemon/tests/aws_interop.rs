@@ -99,14 +99,25 @@ async fn boto3_through_the_broker_verifies_with_botocore() {
         .max_idle_connections(0)
         .timeout(Duration::from_secs(20))
         .build();
+    // The owner token from the unlock, as the CLI and app send it: naming a
+    // policy for a handle is owner-only.
+    let owner = std::cell::RefCell::new(None::<String>);
     let mgmt = |path: &str, body: Value| -> Value {
-        agent
+        let mut req = agent
             .post(&format!("{base}{path}"))
-            .set("Authorization", &format!("Bearer {token}"))
+            .set("Authorization", &format!("Bearer {token}"));
+        if let Some(o) = owner.borrow().as_ref() {
+            req = req.set("X-Usk-Owner", o);
+        }
+        let v: Value = req
             .send_json(body)
             .unwrap_or_else(|e| panic!("{path}: {e}"))
             .into_json()
-            .unwrap()
+            .unwrap();
+        if path == "/v1/unlock" {
+            *owner.borrow_mut() = v["owner_token"].as_str().map(str::to_string);
+        }
+        v
     };
     mgmt("/v1/unlock", json!({ "password": PW }));
     mgmt(
