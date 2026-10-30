@@ -2,6 +2,12 @@
 
 The top section of this file becomes the release notes when a `v*` tag is pushed.
 
+## 0.1.6 — 2026-10-31
+
+A security fix; no new features.
+
+- **An AI tool's identity can no longer be taken over with the session token.** Registering an MCP client under a name that already existed silently replaced its token, and the new token kept everything approved for that name; any program that could read `daemon.token` could become "claude-code" that way. An existing name now answers 409 `caller_exists`; replacing it needs the owner (`usk mcp install` asks for the password, the app uses the confirmation it already holds). Registering needs an unlocked vault, and registrations, replacements and removals are audited (`caller_registered`, `caller_replaced`, `caller_removed`). The app says "New AI tool connected" when one appears, and the activity page shows all three in plain words.
+
 ## 0.1.5 — 2026-10-30
 
 Security fixes from a full review of the code; no new features.
