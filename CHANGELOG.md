@@ -2,7 +2,9 @@
 
 The top section of this file becomes the release notes when a `v*` tag is pushed.
 
-## Unreleased — fixes from the 2026-10-30 security review
+## 0.1.5 — 2026-10-30
+
+Security fixes from a full review of the code; no new features.
 
 - **The session token is no longer enough to reveal, approve or widen access.** `daemon.token` is readable by every program running as you, an AI tool with a shell included, and it used to open every management route. Revealing a value, `usk run` injection, approving or denying a request, enrolling a device unlock, changing the care level or idle lock, naming a policy for a new handle, replacing a policy and resuming a handle now need an **owner token** as well: `POST /v1/unlock` returns one, `POST /v1/confirm` (password or Windows Hello) issues one on an unlocked vault, it travels in `X-Usk-Owner`, lives only in memory and dies with every lock. The CLI asks for the password once per such command ("Vault password (to confirm it is you)"); the app confirms through Windows Hello when it is set up and otherwise asks for the password in a dialog. Adding keys, listing, and care-level handles (`usk guard fix`, AI tools' first use) still need only the session token. Error: 403 `owner_required`.
 - **`usk approve` with several requests waiting asks for the id.** `latest` could approve a request a tool slipped in just before you answered; it now refuses (409 `ambiguous`) unless exactly one request is pending.
