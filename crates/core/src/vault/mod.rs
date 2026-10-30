@@ -295,6 +295,48 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         self.finish_unlock(vk)
     }
 
+    /// Check the password against the open vault without changing anything:
+    /// the owner confirming an action that an unlocked vault alone must not
+    /// allow (revealing a value, approving a request). Requires an unlocked
+    /// vault; a locked one needs an unlock, which proves the same thing.
+    pub fn verify_password(&self, password: &SecretBytes) -> Result<(), VaultError> {
+        let held = self.vk()?;
+        let kek = kdf::derive_password_key(password, &self.header.salt_pw, self.header.argon2)?;
+        let vk = header::unwrap_vk(
+            &kek,
+            &self.header.wrapped_vk_pw,
+            header::KekKind::Password,
+            &self.header.vault_id,
+        )?;
+        if vk == *held {
+            Ok(())
+        } else {
+            Err(VaultError::WrongCredential)
+        }
+    }
+
+    /// [`Vault::verify_password`] for a device unlock method's KEK.
+    pub fn verify_kek(&self, wrap_id: &Id, kek: &SecretBytes) -> Result<(), VaultError> {
+        let held = self.vk()?;
+        let wrap = self
+            .header
+            .wraps
+            .iter()
+            .find(|w| &w.id == wrap_id)
+            .ok_or(VaultError::UnlockMethodNotFound)?;
+        let vk = header::unwrap_vk(
+            kek,
+            &wrap.wrapped_vk,
+            header::KekKind::Device(wrap.id),
+            &self.header.vault_id,
+        )?;
+        if vk == *held {
+            Ok(())
+        } else {
+            Err(VaultError::WrongCredential)
+        }
+    }
+
     /// Device unlock methods on this vault (readable while locked; nothing in
     /// them is secret).
     pub fn key_wraps(&self) -> &[KeyWrap] {
@@ -358,7 +400,9 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         let status = self.audit_verify()?.head;
         if matches!(
             status,
-            crate::audit::HeadStatus::Forged | crate::audit::HeadStatus::Mismatch { .. }
+            crate::audit::HeadStatus::Forged
+                | crate::audit::HeadStatus::Removed
+                | crate::audit::HeadStatus::Mismatch { .. }
         ) {
             self.head_problem = Some(status);
             let (head_seq, last_seq) = match status {
@@ -369,6 +413,7 @@ impl<S: Storage, C: Clock> Vault<S, C> {
             };
             let state = match status {
                 crate::audit::HeadStatus::Forged => "forged",
+                crate::audit::HeadStatus::Removed => "removed",
                 _ => "mismatch",
             };
             self.audit(
@@ -549,6 +594,8 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         updated.value_version = next;
         updated.updated_at = now;
         self.write_meta(&vk, updated)?;
+        // The replaced value is gone for good, not merely superseded.
+        self.storage.prune_versions(id, next)?;
         Ok(next)
     }
 
@@ -596,13 +643,15 @@ impl<S: Storage, C: Clock> Vault<S, C> {
             meta.updated_at,
         )?;
         self.storage.insert_record(&rec)?;
+        self.storage.prune_versions(&rid, version)?;
         self.index.insert(meta.secret_id, meta);
         Ok(())
     }
 
-    /// Delete a secret: revoke every active handle that points at it, then
-    /// tombstone both records and drop it from the index. Returns the ids of
-    /// the handles revoked so the caller can audit each one.
+    /// Delete a secret: revoke every active handle that points at it, erase
+    /// every version of its value, leave a tombstone where its metadata was
+    /// and drop it from the index. Returns the ids of the handles revoked so
+    /// the caller can audit each one.
     pub fn delete(&mut self, id: &Id) -> Result<Vec<Id>, VaultError> {
         self.vk()?;
         if !self.index.contains_key(id) {
@@ -612,27 +661,26 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         let revoked = self.revoke_handles_of(id)?;
         self.forget_secret_in_projects(id)?;
         let now = self.clock.now_unix_ms();
-        for rid in [*id, records::meta_record_id(id)] {
-            let version = self
-                .storage
-                .latest_record(&rid)?
-                .map(|r| r.version + 1)
-                .unwrap_or(1);
-            let kind = if rid == *id {
-                RecordKind::Secret
-            } else {
-                RecordKind::SecretMeta
-            };
-            self.storage.insert_record(&StoredRecord {
-                record_id: rid,
-                kind,
-                version,
-                nonce: [0; 24],
-                ciphertext: Vec::new(),
-                updated_at: now,
-                deleted: true,
-            })?;
-        }
+        // The value: nothing of it stays in the file, whatever the version.
+        self.storage.purge_record(id)?;
+        // The metadata holds no secret; a tombstone marks the deletion and
+        // the older versions go.
+        let rid = records::meta_record_id(id);
+        let version = self
+            .storage
+            .latest_record(&rid)?
+            .map(|r| r.version + 1)
+            .unwrap_or(1);
+        self.storage.insert_record(&StoredRecord {
+            record_id: rid,
+            kind: RecordKind::SecretMeta,
+            version,
+            nonce: [0; 24],
+            ciphertext: Vec::new(),
+            updated_at: now,
+            deleted: true,
+        })?;
+        self.storage.prune_versions(&rid, version)?;
         self.index.remove(id);
         Ok(revoked)
     }

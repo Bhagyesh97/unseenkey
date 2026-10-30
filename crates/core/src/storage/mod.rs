@@ -126,6 +126,10 @@ pub struct HeaderRow {
     /// Device-credential wraps (Windows Hello and friends). Empty on vaults
     /// created before format 1 grew this field; readers treat absence as empty.
     pub wraps: Vec<KeyWrap>,
+    /// Set the first time a keyed audit head is written. From then on a
+    /// missing head means the log was cut or the head deleted, not that the
+    /// log predates keyed heads. False on vaults whose log has never had one.
+    pub audit_head_required: bool,
 }
 
 /// Backend failures. Messages never contain record contents.
@@ -178,6 +182,13 @@ pub trait Storage {
         kind: Option<RecordKind>,
         include_deleted: bool,
     ) -> Result<Vec<StoredRecord>, StorageError>;
+    /// Remove every version of a record below `keep_from`. Superseded
+    /// versions hold old values and old policies that nothing reads any more;
+    /// left in the file they can be decrypted with the password later, and
+    /// deleting the newest row would quietly bring them back.
+    fn prune_versions(&mut self, record_id: &Id, keep_from: u64) -> Result<(), StorageError>;
+    /// Remove every version of a record, tombstones included.
+    fn purge_record(&mut self, record_id: &Id) -> Result<(), StorageError>;
 
     /// Append an audit row and replace the keyed head, atomically. `row.seq`
     /// must be exactly one more than the last stored row (or 1 for an empty

@@ -79,6 +79,18 @@ impl Storage for MemoryStorage {
             .collect())
     }
 
+    fn prune_versions(&mut self, record_id: &Id, keep_from: u64) -> Result<(), StorageError> {
+        if let Some(versions) = self.records.get_mut(record_id) {
+            versions.retain(|v, _| *v >= keep_from);
+        }
+        Ok(())
+    }
+
+    fn purge_record(&mut self, record_id: &Id) -> Result<(), StorageError> {
+        self.records.remove(record_id);
+        Ok(())
+    }
+
     fn append_audit(&mut self, row: &AuditRow, head: &AuditHead) -> Result<(), StorageError> {
         let expected = self.audit.last().map(|r| r.seq + 1).unwrap_or(1);
         if row.seq != expected {
@@ -143,6 +155,27 @@ mod tests {
         ));
         assert_eq!(s.latest_record(&id).unwrap().unwrap().version, 2);
         assert_eq!(s.record_version(&id, 1).unwrap().unwrap().version, 1);
+    }
+
+    #[test]
+    fn pruning_and_purging_remove_old_versions() {
+        let mut s = MemoryStorage::new();
+        let id = Id::new_v7(1);
+        for v in 1..=3 {
+            s.insert_record(&rec(id, v, false)).unwrap();
+        }
+        s.prune_versions(&id, 3).unwrap();
+        assert_eq!(s.record_version(&id, 1).unwrap(), None);
+        assert_eq!(s.record_version(&id, 2).unwrap(), None);
+        assert_eq!(s.latest_record(&id).unwrap().unwrap().version, 3);
+        // A pruned record still refuses a version it has already seen.
+        assert!(matches!(
+            s.insert_record(&rec(id, 2, false)),
+            Err(StorageError::Conflict { .. })
+        ));
+        s.purge_record(&id).unwrap();
+        assert_eq!(s.latest_record(&id).unwrap(), None);
+        assert!(s.prune_versions(&Id::new_v7(9), 1).is_ok());
     }
 
     #[test]

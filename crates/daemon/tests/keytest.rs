@@ -49,6 +49,7 @@ async fn provider(req: Request) -> axum::response::Response {
 struct C {
     base: String,
     token: String,
+    owner: std::sync::Mutex<Option<String>>,
     agent: ureq::Agent,
 }
 
@@ -64,12 +65,18 @@ impl C {
         }
     }
     fn post(&self, path: &str, body: Value) -> (u16, Value) {
-        Self::call(
-            self.agent
-                .post(&format!("{}{}", self.base, path))
-                .set("Authorization", &format!("Bearer {}", self.token))
-                .send_json(body),
-        )
+        let mut req = self
+            .agent
+            .post(&format!("{}{}", self.base, path))
+            .set("Authorization", &format!("Bearer {}", self.token));
+        if let Some(o) = self.owner.lock().unwrap().as_ref() {
+            req = req.set("X-Usk-Owner", o);
+        }
+        let (code, v) = Self::call(req.send_json(body));
+        if code == 200 && path == "/v1/unlock" {
+            *self.owner.lock().unwrap() = v["owner_token"].as_str().map(str::to_string);
+        }
+        (code, v)
     }
     fn get(&self, path: &str) -> (u16, Value) {
         Self::call(
@@ -118,6 +125,7 @@ async fn setup() -> (tempfile::TempDir, Running, C) {
     let c = C {
         base: format!("http://{}", r.addr),
         token: r.token().to_string(),
+        owner: std::sync::Mutex::new(None),
         agent: ureq::AgentBuilder::new()
             .max_idle_connections(0)
             .timeout(Duration::from_secs(20))

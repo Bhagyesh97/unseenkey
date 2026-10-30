@@ -2,6 +2,20 @@
 
 The top section of this file becomes the release notes when a `v*` tag is pushed.
 
+## Unreleased — fixes from the 2026-10-30 security review
+
+- **The session token is no longer enough to reveal, approve or widen access.** `daemon.token` is readable by every program running as you, an AI tool with a shell included, and it used to open every management route. Revealing a value, `usk run` injection, approving or denying a request, enrolling a device unlock, changing the care level or idle lock, naming a policy for a new handle, replacing a policy and resuming a handle now need an **owner token** as well: `POST /v1/unlock` returns one, `POST /v1/confirm` (password or Windows Hello) issues one on an unlocked vault, it travels in `X-Usk-Owner`, lives only in memory and dies with every lock. The CLI asks for the password once per such command ("Vault password (to confirm it is you)"); the app confirms through Windows Hello when it is set up and otherwise asks for the password in a dialog. Adding keys, listing, and care-level handles (`usk guard fix`, AI tools' first use) still need only the session token. Error: 403 `owner_required`.
+- **`usk approve` with several requests waiting asks for the id.** `latest` could approve a request a tool slipped in just before you answered; it now refuses (409 `ambiguous`) unless exactly one request is pending.
+- **Compressed replies are unpacked before scrubbing.** The caller's `Accept-Encoding` was forwarded and the provider's compressed reply passed through unread, so a key echoed inside it reached the caller. The broker now strips that header, negotiates gzip, brotli and deflate itself and unpacks before scrubbing; a reply in an encoding it cannot unpack is refused (502 `undecodable_response`) and audited.
+- **A deleted audit head is tampering, not an old log.** The vault header records that the log has had a keyed head; from then on a missing one is reported as `audit_tampered` (state `removed`) instead of being tolerated as a pre-0.1.1 log. Logs that truly predate heads are still accepted.
+- **Replaced and deleted values are erased.** Superseded versions of a secret's value, its metadata, a handle (its policy, its pre-revocation state) and a project are deleted on every write (`secure_delete` is on), and deleting a secret purges every version of the value. Old keys can no longer be decrypted out of the file with the password, and removing the newest row cannot revive a revoked handle or an older, wider policy.
+- **A handle never reaches the provider.** When an SDK put the handle in a header the preset does not use (`x-api-key` on a bearer provider) or in `?key=`, it travelled on to the provider; the broker now empties the place it found the handle in.
+- **The CLI and app refuse a `daemon.addr` that is not loopback.** A tampered file naming another machine would have received the session token, the password and the values a command sends.
+- **A value that starts with `hex:` is stored as typed.** It was decoded as hex on the way back.
+- **Desktop updater: zip 9.1.3.** `tauri-plugin-updater` 2.14.1 drops zip 4.6.1 (RUSTSEC-2026-0367/0368/0369). CI now audits the desktop lockfile too.
+- **Release and CI workflows pin every action to a commit.** A moved tag can no longer change what runs in the job that holds the signing keys.
+- Threat model and API reference updated to say exactly what the session token, the owner token and a handle each allow.
+
 ## 0.1.4 — 2026-10-30
 
 - **How careful: relaxed, balanced (new default) or strict.** On your own machine the risk is not you but what touches your keys: an AI tool talked into misusing them, a package you never read, a loop that runs up a bill. The access Unseenkey hands out by itself (an AI tool's first use of a key, a handle created without a policy) now follows one setting in Settings or `usk care`:

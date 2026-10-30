@@ -24,6 +24,7 @@ const STRIPE_KEY: &str = "sk_live_51Habcdefghijklmnop";
 struct C {
     base: String,
     token: String,
+    owner: std::sync::Mutex<Option<String>>,
     agent: ureq::Agent,
 }
 
@@ -32,6 +33,7 @@ impl C {
         Arc::new(Self {
             base: format!("http://{}", r.addr),
             token: r.token().to_string(),
+            owner: std::sync::Mutex::new(None),
             agent: ureq::AgentBuilder::new()
                 .max_idle_connections(0)
                 .timeout(Duration::from_secs(20))
@@ -40,22 +42,29 @@ impl C {
         })
     }
     fn mgmt(&self, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
-        let req = self
+        let mut req = self
             .agent
             .request(method, &format!("{}{}", self.base, path))
             .set("Authorization", &format!("Bearer {}", self.token));
+        if let Some(o) = self.owner.lock().unwrap().as_ref() {
+            req = req.set("X-Usk-Owner", o);
+        }
         let r = match body {
             Some(b) => req.send_json(b),
             None => req.call(),
         };
-        match r {
+        let (code, v) = match r {
             Ok(resp) => {
                 let code = resp.status();
                 (code, resp.into_json().unwrap_or(Value::Null))
             }
             Err(ureq::Error::Status(code, resp)) => (code, resp.into_json().unwrap_or(Value::Null)),
             Err(e) => panic!("transport: {e}"),
+        };
+        if code == 200 && path == "/v1/unlock" {
+            *self.owner.lock().unwrap() = v["owner_token"].as_str().map(str::to_string);
         }
+        (code, v)
     }
     fn brokered(&self, handle: &str, method: &str, path: &str) -> (u16, Value) {
         let r = self

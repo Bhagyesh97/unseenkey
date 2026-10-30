@@ -26,6 +26,25 @@ struct AppData {
     paths: VaultPaths,
     /// Serialises daemon start-ups so two commands do not spawn two daemons.
     connect_lock: Mutex<()>,
+    /// The owner token from this app's unlock or confirmation. It stays in
+    /// this process: it is what lets the app reveal, approve and change
+    /// policies while a program that merely reads `daemon.token` cannot.
+    owner: Mutex<Option<String>>,
+}
+
+impl AppData {
+    fn owner(&self) -> Option<String> {
+        self.owner.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+    fn set_owner(&self, token: Option<String>) {
+        *self.owner.lock().unwrap_or_else(|e| e.into_inner()) = token;
+    }
+    /// Keep the owner token an unlock or confirmation reply carries.
+    fn remember_owner(&self, reply: &Value) {
+        if let Some(t) = reply["owner_token"].as_str() {
+            self.set_owner(Some(t.to_string()));
+        }
+    }
 }
 
 fn paths() -> Result<VaultPaths, String> {
@@ -36,11 +55,57 @@ fn paths() -> Result<VaultPaths, String> {
 
 fn client(data: &AppData) -> Result<Client, String> {
     let _g = data.connect_lock.lock().unwrap_or_else(|e| e.into_inner());
-    Client::connect(&data.paths, true).map_err(|e| format!("{}: {}", e.kind, e.message))
+    let c = Client::connect(&data.paths, true).map_err(|e| format!("{}: {}", e.kind, e.message))?;
+    c.set_owner(data.owner());
+    Ok(c)
 }
 
 fn err_string(e: usk::io::CliError) -> String {
     format!("{}: {}", e.kind, e.message)
+}
+
+/// Confirm the owner through Windows Hello, when it is enrolled: the daemon
+/// gets the KEK Hello derives and answers with an owner token. `Ok(false)`
+/// when Hello is not available for this vault; the UI then asks for the
+/// password instead.
+fn confirm_with_hello(data: &AppData, c: &Client) -> Result<bool, String> {
+    if !hello::available() {
+        return Ok(false);
+    }
+    let status = c.get("/v1/status").map_err(err_string)?;
+    let vault_id = status["vault_id"].as_str().unwrap_or_default().to_string();
+    let methods = c.get("/v1/unlock-methods").map_err(err_string)?;
+    let Some(m) = methods
+        .as_array()
+        .into_iter()
+        .flatten()
+        .rev()
+        .find(|m| m["kind"] == hello::KIND)
+        .cloned()
+    else {
+        return Ok(false);
+    };
+    let salt = unb64_32(m["salt"].as_str().unwrap_or_default())?;
+    let kek = hello::derive_kek(&vault_id, &salt)?;
+    let r = c
+        .post(
+            "/v1/confirm",
+            json!({ "wrap_id": m["id"], "kek": b64(kek.expose()) }),
+        )
+        .map_err(err_string)?;
+    data.remember_owner(&r);
+    c.set_owner(data.owner());
+    Ok(true)
+}
+
+/// Confirm the owner with the vault password (the UI's fallback when Windows
+/// Hello is not enrolled or was dismissed).
+#[tauri::command(async)]
+fn confirm_owner(state: tauri::State<'_, AppData>, password: String) -> Result<(), String> {
+    let c = client(&state)?;
+    c.confirm_with_password(&password).map_err(err_string)?;
+    state.set_owner(c.owner());
+    Ok(())
 }
 
 #[tauri::command(async)]
@@ -80,17 +145,21 @@ fn create_vault(state: tauri::State<'_, AppData>, password: String) -> Result<Va
     // Start the daemon and unlock it with the same password so the first screen
     // after the recovery phrase is the secrets list, not another prompt.
     let c = client(&state)?;
-    c.post("/v1/unlock", json!({ "password": password }))
+    let r = c
+        .post("/v1/unlock", json!({ "password": password }))
         .map_err(err_string)?;
+    state.remember_owner(&r);
     Ok(json!({ "vault_id": vault_id, "words": words }))
 }
 
 #[tauri::command(async)]
 fn unlock(state: tauri::State<'_, AppData>, password: String) -> Result<(), String> {
     let c = client(&state)?;
-    c.post("/v1/unlock", json!({ "password": password }))
-        .map(|_| ())
-        .map_err(err_string)
+    let r = c
+        .post("/v1/unlock", json!({ "password": password }))
+        .map_err(err_string)?;
+    state.remember_owner(&r);
+    Ok(())
 }
 
 /// Stop whatever daemon serves the vault and start this app's own. Used when
@@ -115,6 +184,7 @@ fn restart_daemon(state: tauri::State<'_, AppData>) -> Result<(), String> {
 
 #[tauri::command(async)]
 fn lock(state: tauri::State<'_, AppData>) -> Result<(), String> {
+    state.set_owner(None);
     if let Some(c) = Client::try_connect(&state.paths) {
         c.post("/v1/lock", json!({})).map_err(err_string)?;
     }
@@ -122,7 +192,10 @@ fn lock(state: tauri::State<'_, AppData>) -> Result<(), String> {
 }
 
 /// Generic management call: the UI is our own code, so it may use the same
-/// routes the CLI uses. Only `/v1/…` paths are allowed.
+/// routes the CLI uses. Only `/v1/…` paths are allowed. A route that needs the
+/// owner is retried once after confirming through Windows Hello; without
+/// Hello the `owner_required` error reaches the UI, which asks for the
+/// password and calls `confirm_owner`.
 #[tauri::command(async)]
 fn api(
     state: tauri::State<'_, AppData>,
@@ -134,14 +207,26 @@ fn api(
         return Err("invalid: only /v1 routes".into());
     }
     let c = client(&state)?;
-    let r = match method.as_str() {
+    let call = |c: &Client| match method.as_str() {
         "GET" => c.get(&path),
-        "POST" => c.post(&path, body.unwrap_or(json!({}))),
-        "PATCH" => c.patch(&path, body.unwrap_or(json!({}))),
+        "POST" => c.post(&path, body.clone().unwrap_or(json!({}))),
+        "PATCH" => c.patch(&path, body.clone().unwrap_or(json!({}))),
         "DELETE" => c.delete(&path),
-        _ => return Err("invalid: method".into()),
+        _ => Err(usk::io::CliError::general("invalid: method")),
     };
-    r.map_err(err_string)
+    if !matches!(method.as_str(), "GET" | "POST" | "PATCH" | "DELETE") {
+        return Err("invalid: method".into());
+    }
+    match call(&c) {
+        Err(e) if e.kind == "owner_required" => {
+            if confirm_with_hello(&state, &c)? {
+                call(&c).map_err(err_string)
+            } else {
+                Err(err_string(e))
+            }
+        }
+        r => r.map_err(err_string),
+    }
 }
 
 #[tauri::command(async)]
@@ -330,12 +415,14 @@ fn device_unlock(state: tauri::State<'_, AppData>) -> Result<(), String> {
         .ok_or_else(|| "not_found: Windows Hello is not enabled for this vault".to_string())?;
     let salt = unb64_32(m["salt"].as_str().unwrap_or_default())?;
     let kek = hello::derive_kek(&vault_id, &salt)?;
-    c.post(
-        "/v1/unlock",
-        json!({ "wrap_id": m["id"], "kek": b64(kek.expose()) }),
-    )
-    .map(|_| ())
-    .map_err(err_string)
+    let r = c
+        .post(
+            "/v1/unlock",
+            json!({ "wrap_id": m["id"], "kek": b64(kek.expose()) }),
+        )
+        .map_err(err_string)?;
+    state.remember_owner(&r);
+    Ok(())
 }
 
 /// Remove the Windows Hello enrollment (vault must be unlocked).
@@ -394,6 +481,10 @@ fn event_pump(app: AppHandle, paths: VaultPaths) {
             let Ok(v) = serde_json::from_str::<Value>(data.trim()) else {
                 continue;
             };
+            if v["event"] == "locked" {
+                // Every owner token died with the lock.
+                app.state::<AppData>().set_owner(None);
+            }
             if v["event"] == "approval_requested" {
                 let title = format!(
                     "{} wants to use {}",
@@ -437,6 +528,7 @@ pub fn run() {
         .manage(AppData {
             paths: paths.clone(),
             connect_lock: Mutex::new(()),
+            owner: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             status,
@@ -444,6 +536,7 @@ pub fn run() {
             unlock,
             lock,
             api,
+            confirm_owner,
             presets,
             install_mcp,
             guard_scan,

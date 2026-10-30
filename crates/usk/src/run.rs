@@ -92,6 +92,9 @@ pub fn run(paths: &VaultPaths, with: Vec<String>, command: Vec<String>) -> Resul
     }
     let c = Client::connect(paths, true)?;
     c.ensure_unlocked()?;
+    // Plaintext leaves the vault here: the owner, not a program with the
+    // session token, has to be behind it.
+    c.ensure_owner()?;
 
     let cmdline = command.join(" ");
     let mut values: Vec<(String, String, Zeroizing<String>)> = Vec::new();

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactElement } from "react";
-import { api, onDaemonEvent, type Approval, type DaemonEvent, type Status } from "./api";
+import { api, onDaemonEvent, setOwnerPrompt, type Approval, type DaemonEvent, type Status } from "./api";
 import { Gate } from "./pages/Gate";
 import { Projects } from "./pages/Projects";
 import { Secrets } from "./pages/Secrets";
@@ -45,6 +45,22 @@ export function App() {
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [updating, setUpdating] = useState(false);
   const [restarting, setRestarting] = useState(false);
+  // A pending "it is you?" question from an action that needs the owner.
+  const [ownerAsk, setOwnerAsk] = useState<{ resolve: (password: string | null) => void } | null>(null);
+  const [ownerPassword, setOwnerPassword] = useState("");
+
+  // Actions that need the owner (reveal, approve, change access) ask for the
+  // password here when Windows Hello cannot confirm it.
+  useEffect(() => {
+    setOwnerPrompt(() => new Promise<string | null>((resolve) => setOwnerAsk({ resolve })));
+    return () => setOwnerPrompt(null);
+  }, []);
+
+  const answerOwner = (password: string | null) => {
+    ownerAsk?.resolve(password);
+    setOwnerAsk(null);
+    setOwnerPassword("");
+  };
 
   // One silent check at startup; failures (offline, private repo) are ignored.
   useEffect(() => {
@@ -120,6 +136,34 @@ export function App() {
 
   return (
     <div className="app">
+      {ownerAsk && (
+        <div className="modal-backdrop" onClick={() => answerOwner(null)}>
+          <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+            <h3>Confirm it is you</h3>
+            <p className="muted small">
+              This changes what your keys can do or shows one. Any program on this computer can talk to Unseenkey; only you know
+              the password.
+            </p>
+            <input
+              type="password"
+              placeholder="Vault password"
+              autoFocus
+              value={ownerPassword}
+              onChange={(e) => setOwnerPassword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && ownerPassword) answerOwner(ownerPassword);
+                if (e.key === "Escape") answerOwner(null);
+              }}
+            />
+            <div className="actions">
+              <button className="primary" disabled={!ownerPassword} onClick={() => answerOwner(ownerPassword)}>
+                Confirm
+              </button>
+              <button onClick={() => answerOwner(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
       <aside className="sidebar">
         <div className="brand">
           <img src={icon} alt="" />

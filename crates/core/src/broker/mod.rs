@@ -65,6 +65,10 @@ pub const STRIP_REQUEST_HEADERS: &[&str] = &[
     "upgrade",
     "content-length",
     "expect",
+    // The broker negotiates compression itself and unpacks what comes back,
+    // so the scrubber sees plaintext. A caller's own choice would let the
+    // provider answer in a form the scrubber cannot read.
+    "accept-encoding",
     "x-usk-upstream",
     "x-usk-handle",
     "x-usk-caller",

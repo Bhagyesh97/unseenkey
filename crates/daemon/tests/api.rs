@@ -41,6 +41,8 @@ async fn start(dir: &std::path::Path, write_files: bool) -> Running {
 struct C {
     base: String,
     token: String,
+    /// The owner token from the last unlock; sent as the CLI and app do.
+    owner: std::sync::Mutex<Option<String>>,
     agent: ureq::Agent,
 }
 
@@ -49,13 +51,19 @@ impl C {
         Self {
             base: format!("http://{}", r.addr),
             token: r.token().to_string(),
+            owner: std::sync::Mutex::new(None),
             agent: ureq::AgentBuilder::new().max_idle_connections(0).build(),
         }
     }
     fn req(&self, method: &str, path: &str) -> ureq::Request {
-        self.agent
+        let mut r = self
+            .agent
             .request(method, &format!("{}{}", self.base, path))
-            .set("Authorization", &format!("Bearer {}", self.token))
+            .set("Authorization", &format!("Bearer {}", self.token));
+        if let Some(o) = self.owner.lock().unwrap().as_ref() {
+            r = r.set("X-Usk-Owner", o);
+        }
+        r
     }
     fn status_of(r: Result<ureq::Response, ureq::Error>) -> (u16, Value) {
         match r {
@@ -71,7 +79,15 @@ impl C {
         Self::status_of(self.req("GET", path).call())
     }
     fn post(&self, path: &str, body: Value) -> (u16, Value) {
-        Self::status_of(self.req("POST", path).send_json(body))
+        let (code, v) = Self::status_of(self.req("POST", path).send_json(body));
+        if code == 200 && (path == "/v1/unlock" || path == "/v1/confirm") {
+            *self.owner.lock().unwrap() = v["owner_token"].as_str().map(str::to_string);
+        }
+        (code, v)
+    }
+    /// Act as a program that holds only `daemon.token`.
+    fn forget_owner(&self) {
+        *self.owner.lock().unwrap() = None;
     }
     fn patch(&self, path: &str, body: Value) -> (u16, Value) {
         Self::status_of(self.req("PATCH", path).send_json(body))
@@ -567,5 +583,176 @@ async fn the_idle_lock_can_be_changed_and_is_saved() {
     );
     let (code, e) = c.patch("/v1/settings", json!({ "idle_lock_minutes": 100000 }));
     assert_eq!(code, 400, "{e}");
+    r.shutdown().await;
+}
+
+/// The session token in `daemon.token` is readable by every program running
+/// as the user, an AI tool with a shell included. Revealing a value, enrolling
+/// an unlock method, loosening a setting, answering an approval and handing
+/// out or changing a policy need the owner token that only an unlock or
+/// `POST /v1/confirm` (password or device unlock) gives out.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_session_token_alone_cannot_reveal_approve_or_widen() {
+    use base64::Engine as _;
+    let dir = tempfile::tempdir().unwrap();
+    let r = start(dir.path(), false).await;
+    let c = C::new(&r);
+    let (code, u) = c.post("/v1/unlock", json!({ "password": PW }));
+    assert_eq!(code, 200);
+    assert!(u["owner_token"].as_str().unwrap().starts_with("usk_o_"));
+    let (code, _) = c.post(
+        "/v1/secrets",
+        json!({ "name": "stripe", "value": "sk_live_51Habcdefghijklmnop" }),
+    );
+    assert_eq!(code, 201);
+    // With the owner token (the unlocking client has it) everything works.
+    assert_eq!(
+        c.post("/v1/secrets/stripe/reveal", json!({ "confirm": true }))
+            .0,
+        200
+    );
+
+    // A program that only read daemon.token.
+    c.forget_owner();
+    let refused = [
+        (
+            "POST",
+            "/v1/secrets/stripe/reveal",
+            json!({ "confirm": true }),
+        ),
+        ("POST", "/v1/secrets/stripe/inject", json!({ "var": "K" })),
+        (
+            "PATCH",
+            "/v1/secrets/stripe",
+            json!({ "allow_injection": true }),
+        ),
+        ("PATCH", "/v1/secrets/stripe", json!({ "no_scrub": true })),
+        (
+            "PATCH",
+            "/v1/secrets/stripe",
+            json!({ "upstreams": ["evil.example"] }),
+        ),
+        (
+            "PATCH",
+            "/v1/secrets/stripe",
+            json!({ "provider": "generic" }),
+        ),
+        (
+            "POST",
+            "/v1/handles",
+            json!({ "secret": "stripe", "preset_policy": "stripe:full" }),
+        ),
+        (
+            "POST",
+            "/v1/handles",
+            json!({ "secret": "stripe", "policy": { "version": 1, "allow": ["* /**"] } }),
+        ),
+        ("PATCH", "/v1/settings", json!({ "care": "relaxed" })),
+        ("PATCH", "/v1/settings", json!({ "idle_lock_minutes": 0 })),
+        (
+            "POST",
+            "/v1/approvals/latest",
+            json!({ "decision": "allow" }),
+        ),
+        (
+            "POST",
+            "/v1/unlock-methods",
+            json!({ "kind": "hello", "label": "x",
+            "salt": base64::engine::general_purpose::STANDARD.encode([1u8; 32]),
+            "kek": base64::engine::general_purpose::STANDARD.encode([2u8; 32]) }),
+        ),
+    ];
+    for (method, path, body) in refused {
+        let (code, b) = match method {
+            "POST" => c.post(path, body),
+            _ => c.patch(path, body),
+        };
+        assert_eq!(code, 403, "{method} {path}: {b}");
+        assert_eq!(b["error"], "owner_required", "{method} {path}");
+    }
+    // Nothing above took effect.
+    let m = c.get("/v1/secrets/stripe").1;
+    assert_eq!(m["allow_injection"], false);
+    assert_eq!(m["upstreams"][0], "api.stripe.com");
+    assert_eq!(c.get("/v1/status").1["care"], "balanced");
+    assert_eq!(c.get("/v1/handles").1.as_array().unwrap().len(), 0);
+    // What that program may still do: read metadata, add a key, and make a
+    // handle with the care-level default policy (what `usk guard fix` does).
+    let (code, h) = c.post(
+        "/v1/handles",
+        json!({ "secret": "stripe", "label": "default" }),
+    );
+    assert_eq!(code, 201, "{h}");
+    assert_eq!(c.post("/v1/handles/default/resume", json!({})).0, 403);
+    assert_eq!(
+        c.patch(
+            "/v1/handles/default",
+            json!({ "preset_policy": "stripe:full" })
+        )
+        .0,
+        403
+    );
+
+    // A wrong password does not confirm, and attempts are rate limited with unlocks.
+    let (code, b) = c.post("/v1/confirm", json!({ "password": "not it" }));
+    assert_eq!(code, 401, "{b}");
+    assert_eq!(b["error"], "wrong_password");
+    assert!(c.owner.lock().unwrap().is_none());
+    // The right one does, and the token then opens the gated routes.
+    let (code, b) = c.post("/v1/confirm", json!({ "password": PW }));
+    assert_eq!(code, 200, "{b}");
+    assert_eq!(
+        c.post("/v1/secrets/stripe/reveal", json!({ "confirm": true }))
+            .1["value"],
+        "sk_live_51Habcdefghijklmnop"
+    );
+    // Locking forgets every owner token; the next unlock issues a new one.
+    let stale = c.owner.lock().unwrap().clone().unwrap();
+    assert_eq!(c.post("/v1/lock", json!({})).0, 200);
+    assert_eq!(c.post("/v1/unlock", json!({ "password": PW })).0, 200);
+    *c.owner.lock().unwrap() = Some(stale);
+    let (code, b) = c.post("/v1/secrets/stripe/reveal", json!({ "confirm": true }));
+    assert_eq!(code, 403, "{b}");
+    // Confirming needs an unlocked vault: unlocking is the confirmation then.
+    assert_eq!(c.post("/v1/lock", json!({})).0, 200);
+    assert_eq!(c.post("/v1/confirm", json!({ "password": PW })).0, 401);
+    r.shutdown().await;
+}
+
+/// With several requests waiting, "latest" is ambiguous and refused: a tool
+/// could slip its own request in just before the owner answers.
+#[tokio::test(flavor = "multi_thread")]
+async fn approving_latest_with_several_pending_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = start(dir.path(), false).await;
+    let c = C::new(&r);
+    assert_eq!(c.post("/v1/unlock", json!({ "password": PW })).0, 200);
+    let (code, b) = c.post("/v1/approvals/latest", json!({ "decision": "allow" }));
+    assert_eq!(code, 404, "{b}");
+    // Two parked requests: deciding "latest" must name one by id instead.
+    let state = r.state_for_tests();
+    for n in 0..2 {
+        let _rx = state
+            .approval_create(unseenkey_daemon::state::PendingApproval {
+                id: unseenkey_core::ids::Id::new_v7(1_000 + n),
+                kind: "request".into(),
+                handle_id: unseenkey_core::ids::Id::new_v7(1),
+                label: format!("h{n}"),
+                secret: "s".into(),
+                caller: "mcp:x".into(),
+                method: "POST".into(),
+                host: "api.stripe.com".into(),
+                path: "/v1/refunds".into(),
+                scope: "this request".into(),
+                remember_key: None,
+                created_at: 1_000 + n,
+                expires_at: i64::MAX,
+            })
+            .await;
+    }
+    let (code, b) = c.post("/v1/approvals/latest", json!({ "decision": "allow" }));
+    assert_eq!(code, 409, "{b}");
+    assert_eq!(b["error"], "ambiguous");
+    assert_eq!(c.get("/v1/approvals").1.as_array().unwrap().len(), 2);
     r.shutdown().await;
 }

@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS header (
   vk_pw_ct       BLOB    NOT NULL,
   vk_rec_nonce   BLOB,
   vk_rec_ct      BLOB,
-  created_at     INTEGER NOT NULL
+  created_at     INTEGER NOT NULL,
+  audit_head_required INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS key_wraps (
   wrap_id    BLOB    PRIMARY KEY,
@@ -109,6 +110,7 @@ impl SqliteStorage {
         }
         let conn = Connection::open(path).map_err(backend)?;
         conn.execute_batch(SCHEMA).map_err(backend)?;
+        migrate(&conn)?;
         restrict_permissions(path);
         Ok(Self { conn })
     }
@@ -156,6 +158,7 @@ impl SqliteStorage {
     pub fn open_in_memory() -> Result<Self, StorageError> {
         let conn = Connection::open_in_memory().map_err(backend)?;
         conn.execute_batch(SCHEMA).map_err(backend)?;
+        migrate(&conn)?;
         Ok(Self { conn })
     }
 
@@ -191,6 +194,28 @@ impl SqliteStorage {
     }
 }
 
+/// Columns added after the first vaults were written. `CREATE TABLE IF NOT
+/// EXISTS` leaves an existing table alone, so they are added here.
+fn migrate(conn: &Connection) -> Result<(), StorageError> {
+    let has_column = {
+        let mut stmt = conn.prepare("PRAGMA table_info(header)").map_err(backend)?;
+        let cols = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(backend)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(backend)?;
+        cols.iter().any(|c| c == "audit_head_required")
+    };
+    if !has_column {
+        conn.execute(
+            "ALTER TABLE header ADD COLUMN audit_head_required INTEGER NOT NULL DEFAULT 0",
+            [],
+        )
+        .map_err(backend)?;
+    }
+    Ok(())
+}
+
 /// Owner-only permissions on Unix. On Windows the file inherits the user
 /// profile's ACL, which is owner-only for `%APPDATA%`; explicit ACLs are a
 /// later hardening step.
@@ -212,7 +237,8 @@ impl Storage for SqliteStorage {
             .conn
             .query_row(
                 "SELECT vault_id, format_version, argon2_m, argon2_t, argon2_p, salt_pw,
-                        vk_pw_nonce, vk_pw_ct, vk_rec_nonce, vk_rec_ct, created_at
+                        vk_pw_nonce, vk_pw_ct, vk_rec_nonce, vk_rec_ct, created_at,
+                        audit_head_required
                  FROM header WHERE id = 1",
                 [],
                 |r| {
@@ -228,12 +254,14 @@ impl Storage for SqliteStorage {
                         r.get::<_, Option<Vec<u8>>>(8)?,
                         r.get::<_, Option<Vec<u8>>>(9)?,
                         r.get::<_, i64>(10)?,
+                        r.get::<_, i64>(11)?,
                     ))
                 },
             )
             .optional()
             .map_err(backend)?;
-        let Some((vid, fv, m, t, p, salt, pwn, pwc, recn, recc, created)) = row else {
+        let Some((vid, fv, m, t, p, salt, pwn, pwc, recn, recc, created, head_required)) = row
+        else {
             return Ok(None);
         };
         let wrapped_vk_rec = match (recn, recc) {
@@ -261,6 +289,7 @@ impl Storage for SqliteStorage {
             wrapped_vk_rec,
             created_at: created,
             wraps,
+            audit_head_required: head_required != 0,
         }))
     }
 
@@ -269,8 +298,9 @@ impl Storage for SqliteStorage {
         tx.execute(
             "INSERT OR REPLACE INTO header
                  (id, vault_id, format_version, argon2_m, argon2_t, argon2_p, salt_pw,
-                  vk_pw_nonce, vk_pw_ct, vk_rec_nonce, vk_rec_ct, created_at)
-                 VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                  vk_pw_nonce, vk_pw_ct, vk_rec_nonce, vk_rec_ct, created_at,
+                  audit_head_required)
+                 VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 h.vault_id.as_bytes().as_slice(),
                 h.format_version as i64,
@@ -283,6 +313,7 @@ impl Storage for SqliteStorage {
                 h.wrapped_vk_rec.as_ref().map(|s| s.nonce.to_vec()),
                 h.wrapped_vk_rec.as_ref().map(|s| s.ciphertext.clone()),
                 h.created_at,
+                h.audit_head_required as i64,
             ],
         )
         .map_err(backend)?;
@@ -392,6 +423,27 @@ impl Storage for SqliteStorage {
             )
             .map_err(backend)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(backend)
+    }
+
+    fn prune_versions(&mut self, record_id: &Id, keep_from: u64) -> Result<(), StorageError> {
+        // `secure_delete` is on, so the freed pages are overwritten, not just unlinked.
+        self.conn
+            .execute(
+                "DELETE FROM records WHERE record_id = ?1 AND version < ?2",
+                params![record_id.as_bytes().as_slice(), keep_from as i64],
+            )
+            .map(|_| ())
+            .map_err(backend)
+    }
+
+    fn purge_record(&mut self, record_id: &Id) -> Result<(), StorageError> {
+        self.conn
+            .execute(
+                "DELETE FROM records WHERE record_id = ?1",
+                params![record_id.as_bytes().as_slice()],
+            )
+            .map(|_| ())
+            .map_err(backend)
     }
 
     fn append_audit(&mut self, row: &AuditRow, head: &AuditHead) -> Result<(), StorageError> {
@@ -556,9 +608,16 @@ mod tests {
             }),
             created_at: 99,
             wraps: vec![],
+            audit_head_required: false,
         };
         s.save_header(&h).unwrap();
         assert_eq!(s.load_header().unwrap(), Some(h.clone()));
+        let flagged = HeaderRow {
+            audit_head_required: true,
+            ..h.clone()
+        };
+        s.save_header(&flagged).unwrap();
+        assert_eq!(s.load_header().unwrap(), Some(flagged));
         let h2 = HeaderRow {
             wrapped_vk_rec: None,
             wraps: vec![
@@ -626,6 +685,45 @@ mod tests {
             s.list_latest(Some(RecordKind::Policy), true).unwrap().len(),
             0
         );
+    }
+
+    #[test]
+    fn a_vault_from_before_the_head_flag_gains_the_column() {
+        let s = SqliteStorage::open_in_memory().unwrap();
+        s.conn
+            .execute("ALTER TABLE header DROP COLUMN audit_head_required", [])
+            .unwrap();
+        migrate(&s.conn).unwrap();
+        migrate(&s.conn).unwrap();
+        let n: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('header') WHERE name = 'audit_head_required'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn old_versions_can_be_pruned_and_records_purged() {
+        let mut s = SqliteStorage::open_in_memory().unwrap();
+        let id = Id::new_v7(1);
+        for v in 1..=3 {
+            s.insert_record(&rec(id, v, false)).unwrap();
+        }
+        s.prune_versions(&id, 3).unwrap();
+        assert_eq!(s.record_version(&id, 1).unwrap(), None);
+        assert_eq!(s.record_version(&id, 2).unwrap(), None);
+        assert_eq!(s.latest_record(&id).unwrap().unwrap().version, 3);
+        assert!(matches!(
+            s.insert_record(&rec(id, 2, false)),
+            Err(StorageError::Conflict { .. })
+        ));
+        s.purge_record(&id).unwrap();
+        assert_eq!(s.latest_record(&id).unwrap(), None);
+        assert_eq!(s.list_latest(None, true).unwrap().len(), 0);
     }
 
     #[test]

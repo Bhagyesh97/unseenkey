@@ -107,15 +107,21 @@ struct Env {
     daemon: Running,
     base: String,
     token: String,
+    owner: std::sync::Mutex<Option<String>>,
     agent: ureq::Agent,
     mock: SocketAddr,
 }
 
 impl Env {
     fn mgmt(&self, method: &str, path: &str) -> ureq::Request {
-        self.agent
+        let mut r = self
+            .agent
             .request(method, &format!("{}{}", self.base, path))
-            .set("Authorization", &format!("Bearer {}", self.token))
+            .set("Authorization", &format!("Bearer {}", self.token));
+        if let Some(o) = self.owner.lock().unwrap().as_ref() {
+            r = r.set("X-Usk-Owner", o);
+        }
+        r
     }
     fn call(r: Result<ureq::Response, ureq::Error>) -> (u16, Value, Vec<(String, String)>) {
         match r {
@@ -146,6 +152,9 @@ impl Env {
     }
     fn post(&self, path: &str, body: Value) -> (u16, Value) {
         let (c, b, _) = Self::call(self.mgmt("POST", path).send_json(body));
+        if c == 200 && path == "/v1/unlock" {
+            *self.owner.lock().unwrap() = b["owner_token"].as_str().map(str::to_string);
+        }
         (c, b)
     }
     fn get(&self, path: &str) -> (u16, Value) {
@@ -205,6 +214,7 @@ async fn setup() -> Env {
     let env = Env {
         base: format!("http://{}", daemon.addr),
         token: daemon.token().to_string(),
+        owner: std::sync::Mutex::new(None),
         // No client-side redirects: the broker must return upstream 3xx untouched.
         agent: ureq::AgentBuilder::new()
             .max_idle_connections(0)
@@ -791,5 +801,223 @@ async fn template_mode_fills_a_bearer_authorization_header_and_refuses_unfillabl
             .contains("usk secret set hosted --upstream elsewhere.example"),
         "{body}"
     );
+    env.daemon.shutdown().await;
+}
+
+/// CRC-32 (IEEE), for a well-formed gzip container.
+fn crc32(data: &[u8]) -> u32 {
+    let mut c = 0xFFFF_FFFFu32;
+    for &b in data {
+        c ^= b as u32;
+        for _ in 0..8 {
+            c = if c & 1 != 0 {
+                0xEDB8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
+        }
+    }
+    !c
+}
+
+/// A gzip stream holding `data` in one stored (uncompressed) deflate block:
+/// valid gzip to any decoder, with no compression library in the test.
+fn gzip_stored(data: &[u8]) -> Vec<u8> {
+    let mut out = vec![0x1f, 0x8b, 0x08, 0x00, 0, 0, 0, 0, 0x00, 0xff];
+    out.push(0x01); // BFINAL=1, BTYPE=00 (stored)
+    let len = data.len() as u16;
+    out.extend_from_slice(&len.to_le_bytes());
+    out.extend_from_slice(&(!len).to_le_bytes());
+    out.extend_from_slice(data);
+    out.extend_from_slice(&crc32(data).to_le_bytes());
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out
+}
+
+/// A provider that answers compressed when allowed, echoing the key it was
+/// sent, and one that uses an encoding nobody asked for.
+async fn compressing_echo(req: Request) -> axum::response::Response {
+    let path = req.uri().path().to_string();
+    let accept = req
+        .headers()
+        .get("accept-encoding")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let auth = req
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let text = json!({ "echo": auth, "accept_encoding": accept }).to_string();
+    if path == "/surprise" {
+        return (
+            axum::http::StatusCode::OK,
+            [
+                ("content-encoding", "x-made-up"),
+                ("content-type", "application/json"),
+            ],
+            text.into_bytes(),
+        )
+            .into_response();
+    }
+    if accept.contains("gzip") {
+        return (
+            axum::http::StatusCode::OK,
+            [
+                ("content-encoding", "gzip"),
+                ("content-type", "application/json"),
+            ],
+            gzip_stored(text.as_bytes()),
+        )
+            .into_response();
+    }
+    (
+        axum::http::StatusCode::OK,
+        [("content-type", "application/json")],
+        text.into_bytes(),
+    )
+        .into_response()
+}
+
+/// A compressed reply used to go through unread: the caller's Accept-Encoding
+/// was forwarded, the provider compressed, reqwest passed the bytes on, and
+/// the scrubber saw nothing. Now the broker negotiates compression itself,
+/// unpacks before scrubbing, and refuses what it cannot unpack.
+#[tokio::test(flavor = "multi_thread")]
+async fn compressed_responses_are_unpacked_and_scrubbed() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mock = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, Router::new().fallback(any(compressing_echo)))
+            .await
+            .unwrap();
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vault.db");
+    drop(
+        Vault::create(
+            SqliteStorage::open(&path).unwrap(),
+            SystemClock,
+            &SecretBytes::from(PW),
+            Argon2Profile::MINIMUM,
+        )
+        .unwrap(),
+    );
+    let daemon = serve(ServeOptions {
+        vault_path: path,
+        listen: "127.0.0.1:0".into(),
+        idle_lock_minutes: 0,
+        write_runtime_files: false,
+        upstream_overrides: vec![("api.openai.com".into(), format!("http://{mock}"))],
+        mcp_allow_store: false,
+        lock_on_sleep: false,
+        lock_on_session_lock: false,
+    })
+    .await
+    .unwrap();
+    let env = Env {
+        base: format!("http://{}", daemon.addr),
+        token: daemon.token().to_string(),
+        owner: std::sync::Mutex::new(None),
+        agent: ureq::AgentBuilder::new()
+            .max_idle_connections(0)
+            .timeout(Duration::from_secs(10))
+            .redirects(0)
+            .build(),
+        daemon,
+        mock,
+    };
+    assert_eq!(env.post("/v1/unlock", json!({ "password": PW })).0, 200);
+    assert_eq!(
+        env.post(
+            "/v1/secrets",
+            json!({ "name": "openai", "value": OPENAI_KEY })
+        )
+        .0,
+        201
+    );
+    let (handle, _) = create_handle(&env, "openai", "sdk", None);
+
+    // An SDK that accepts gzip (Node's fetch and Python requests always do).
+    let r = env
+        .agent
+        .get(&format!("{}/p/openai/v1/models", env.base))
+        .set("Authorization", &format!("Bearer {handle}"))
+        .set("Accept-Encoding", "gzip, deflate, br")
+        .call()
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert!(
+        r.header("content-encoding").is_none(),
+        "the caller gets plain bytes, not a compressed stream it has to trust"
+    );
+    let mut body = Vec::new();
+    std::io::Read::read_to_end(&mut r.into_reader(), &mut body).unwrap();
+    let text = String::from_utf8(body).unwrap();
+    assert!(
+        !text.contains(OPENAI_KEY),
+        "the key came back unscrubbed: {text}"
+    );
+    assert!(text.contains("[REDACTED:usk:openai]"), "{text}");
+    let v: Value = serde_json::from_str(&text).unwrap();
+    assert!(
+        !v["accept_encoding"].as_str().unwrap().is_empty(),
+        "the broker asked for compression on its own terms"
+    );
+
+    // A reply in a form the broker cannot unpack is refused, not passed through.
+    let (code, body, _) = env.proxy(
+        "GET",
+        "/p/openai/surprise",
+        ("Authorization", &format!("Bearer {handle}")),
+        None,
+    );
+    assert_eq!(code, 502, "{body}");
+    assert_eq!(body["error"], "undecodable_response");
+    assert!(!body.to_string().contains(OPENAI_KEY));
+    let (_, events) = env.get("/v1/audit?kind=use");
+    assert!(events
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["body"]["error"] == "undecodable_response"));
+    env.daemon.shutdown().await;
+}
+
+/// A handle is a capability on this machine; the place an SDK put it is
+/// emptied before the request goes on, whatever that place was.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_handle_never_travels_to_the_provider() {
+    let env = setup().await;
+    let (handle, _) = create_handle(&env, "openai", "sdk", None);
+    // Where the preset expects it.
+    let (code, body, _) = env.proxy(
+        "GET",
+        "/p/openai/v1/models",
+        ("Authorization", &format!("Bearer {handle}")),
+        None,
+    );
+    assert_eq!(code, 200, "{body}");
+    assert!(!body.to_string().contains(&handle), "{body}");
+    // In a header the preset does not use.
+    let (code, body, _) = env.proxy("GET", "/p/openai/v1/models", ("x-api-key", &handle), None);
+    assert_eq!(code, 200, "{body}");
+    assert!(body["headers"].get("x-api-key").is_none(), "{body}");
+    assert!(!body.to_string().contains(&handle), "{body}");
+    // In the query string.
+    let r = env
+        .agent
+        .get(&format!(
+            "{}/p/openai/v1/models?key={handle}&other=1",
+            env.base
+        ))
+        .call()
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let body: Value = r.into_json().unwrap();
+    assert_eq!(body["query"], "other=1", "{body}");
+    assert!(!body.to_string().contains(&handle), "{body}");
     env.daemon.shutdown().await;
 }

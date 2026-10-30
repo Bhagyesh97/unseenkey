@@ -58,8 +58,25 @@ fn broker_err(e: BrokerError) -> Response {
     err(status, e.code(), e.to_string())
 }
 
+/// Where a handle was found, so that place can be emptied before the request
+/// goes on: a handle is only a handle, but it is still a capability on this
+/// machine and has no business in a provider's access log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HandleSlot {
+    /// The `Authorization` header, which is never forwarded anyway.
+    Authorization,
+    /// Some other header, by name.
+    Header(String),
+    /// A query parameter, by name.
+    Query(String),
+}
+
 /// Find the handle in the place the preset's SDK would put its key.
-fn extract_handle(preset: &Preset, headers: &HeaderMap, query: Option<&str>) -> Option<String> {
+fn extract_handle(
+    preset: &Preset,
+    headers: &HeaderMap,
+    query: Option<&str>,
+) -> Option<(String, HandleSlot)> {
     let header = |name: &str| {
         headers
             .get(name)
@@ -72,43 +89,44 @@ fn extract_handle(preset: &Preset, headers: &HeaderMap, query: Option<&str>) -> 
         header("authorization").and_then(|v| {
             let (scheme, rest) = v.split_once(' ')?;
             (scheme.eq_ignore_ascii_case("bearer") || scheme.eq_ignore_ascii_case("basic"))
-                .then(|| rest.trim().to_string())
+                .then(|| (rest.trim().to_string(), HandleSlot::Authorization))
         })
     };
     let from_query = |param: &str| {
         query.and_then(|q| {
             q.split('&').find_map(|kv| {
                 let (k, v) = kv.split_once('=')?;
-                (k == param).then(|| v.to_string())
+                (k == param).then(|| (v.to_string(), HandleSlot::Query(param.to_string())))
             })
         })
     };
-    if let Some(h) = header("x-usk-handle") {
+    let named = |name: &str| header(name).map(|h| (h, HandleSlot::Header(name.to_string())));
+    if let Some(h) = named("x-usk-handle") {
         return Some(h);
     }
     let primary = match &preset.auth {
         Auth::Bearer { .. } | Auth::Basic => bearer(),
-        Auth::Header { name } => header(name),
+        Auth::Header { name } => named(name),
         // `Authorization: Token <handle>`: what follows the scheme.
         Auth::Scheme { scheme } => header("authorization").and_then(|v| {
             let (s, rest) = v.split_once(' ')?;
             s.eq_ignore_ascii_case(scheme)
-                .then(|| rest.trim().to_string())
+                .then(|| (rest.trim().to_string(), HandleSlot::Authorization))
         }),
         Auth::Query { param } => from_query(param),
         // AWS SDKs put their access key id (our handle) inside the SigV4 scope.
         Auth::AwsSigv4 => header("authorization")
             .and_then(|v| sigv4::parse_authorization(&v))
-            .map(|scope| scope.access_key_id),
+            .map(|scope| (scope.access_key_id, HandleSlot::Authorization)),
         Auth::Template => None,
     };
     primary
         .or_else(bearer)
-        .or_else(|| header("x-api-key"))
+        .or_else(|| named("x-api-key"))
         .or_else(|| from_query("key"))
         // A placeholder where a key would go is template mode's instruction,
         // not a handle; the handle itself travels in X-Usk-Handle.
-        .filter(|h| !h.contains("{{usk:"))
+        .filter(|(h, _)| !h.contains("{{usk:"))
 }
 
 /// What an AWS request does, for the audit log: the `X-Amz-Target` header of
@@ -338,10 +356,10 @@ pub struct CallRequest {
 
 /// Handle `/p/{preset}` and `/p/{preset}/{*rest}`.
 pub async fn proxy(State(s): State<Arc<AppState>>, req: Request) -> Response {
-    let (parts, body) = req.into_parts();
+    let (mut parts, body) = req.into_parts();
     let uri: Uri = parts.uri.clone();
     let full_path = uri.path().to_string();
-    let query = uri.query().map(str::to_string);
+    let mut query = uri.query().map(str::to_string);
 
     // /p/<preset>/<rest>
     let mut segs = full_path.trim_start_matches('/').splitn(3, '/');
@@ -371,15 +389,16 @@ pub async fn proxy(State(s): State<Arc<AppState>>, req: Request) -> Response {
         .headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if matches!(preset.auth, Auth::AwsSigv4) && sigv4::is_sigv4a(authz) {
+        .unwrap_or("")
+        .to_string();
+    if matches!(preset.auth, Auth::AwsSigv4) && sigv4::is_sigv4a(&authz) {
         return err(
             StatusCode::BAD_REQUEST,
             "sigv4a_unsupported",
             "multi-region (SigV4A) signing is not supported; use a regional endpoint",
         );
     }
-    let Some(handle_str) = extract_handle(preset, &parts.headers, query.as_deref()) else {
+    let Some((handle_str, slot)) = extract_handle(preset, &parts.headers, query.as_deref()) else {
         let msg = if matches!(preset.auth, Auth::Template) {
             "no handle found: for this provider send the handle in the X-Usk-Handle header and put {{usk:<secret>}} where the secret belongs (for example `Authorization: Bearer {{usk:<secret>}}`)"
         } else {
@@ -387,6 +406,18 @@ pub async fn proxy(State(s): State<Arc<AppState>>, req: Request) -> Response {
         };
         return err(StatusCode::UNAUTHORIZED, "unknown_handle", msg);
     };
+    // Empty the place the handle came from. `Authorization` is stripped later
+    // anyway; a header such as `x-api-key` or a `?key=` parameter would travel
+    // on to the provider with the handle still in it.
+    match &slot {
+        HandleSlot::Header(name) => {
+            parts.headers.remove(name.as_str());
+        }
+        HandleSlot::Query(param) => {
+            query = strip_query_param(query.as_deref(), param);
+        }
+        HandleSlot::Authorization => {}
+    }
     let mut upstream_spec = parts
         .headers
         .get("x-usk-upstream")
@@ -399,7 +430,7 @@ pub async fn proxy(State(s): State<Arc<AppState>>, req: Request) -> Response {
     // for; that picks the endpoint unless one was named explicitly.
     let mut aws_scope = None;
     if matches!(preset.auth, Auth::AwsSigv4) {
-        if let Some(scope) = sigv4::parse_authorization(authz) {
+        if let Some(scope) = sigv4::parse_authorization(&authz) {
             if upstream_spec.is_none() {
                 match sigv4::host_for(&scope.service, &scope.region) {
                     Some(host) => upstream_spec = Some(host),
@@ -1179,6 +1210,31 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
     };
 
     let status = upstream_resp.status();
+    // The broker asked for compression itself (the caller's Accept-Encoding
+    // is stripped) and reqwest unpacked the reply, dropping Content-Encoding
+    // as it did. A reply still marked as encoded is one the scrubber cannot
+    // read: it is refused rather than passed through with whatever the
+    // provider echoed inside it.
+    let still_encoded = upstream_resp
+        .headers()
+        .get(reqwest::header::CONTENT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .is_some_and(|v| !v.is_empty() && !v.eq_ignore_ascii_case("identity"));
+    if still_encoded {
+        let mut vault = s.vault.lock().await;
+        let _ = vault.audit(kinds::USE, json!({
+            "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
+            "caller": call.caller, "host": upstream.host, "method": call.method, "path": call.path,
+            "status": 502, "error": "undecodable_response", "upstream_status": status.as_u16(),
+            "latency_ms": started.elapsed().as_millis() as u64,
+        }));
+        return err(
+            StatusCode::BAD_GATEWAY,
+            "undecodable_response",
+            "the provider answered in a compressed form the broker cannot unpack, so the response could not be checked for the key and was dropped",
+        );
+    }
     let mut resp_headers = HeaderMap::new();
     let scrubber = s.scrubber_snapshot();
     let mut scrubbed_headers = 0usize;

@@ -2,6 +2,8 @@
 
 use crate::io::{self as uio, CliError, EXIT_LOCKED};
 use serde_json::Value;
+use std::net::SocketAddr;
+use std::sync::Mutex;
 use std::time::Duration;
 use unseenkey_daemon::VaultPaths;
 
@@ -9,6 +11,11 @@ use unseenkey_daemon::VaultPaths;
 pub struct Client {
     base: String,
     token: String,
+    /// The owner token from the unlock or confirmation this process made.
+    /// Memory only: it is what tells the daemon a person, not a program
+    /// holding `daemon.token`, is behind a reveal, an approval or a widened
+    /// policy. Never written anywhere.
+    owner: Mutex<Option<String>>,
     agent: ureq::Agent,
 }
 
@@ -16,6 +23,13 @@ impl Client {
     fn from_files(paths: &VaultPaths) -> Option<Self> {
         let addr = std::fs::read_to_string(&paths.addr).ok()?;
         let token = std::fs::read_to_string(&paths.token).ok()?;
+        // The daemon only ever writes a loopback address here. Anything else
+        // means the file was tampered with, and the password and values this
+        // client is about to send must not leave the machine.
+        let addr: SocketAddr = addr.trim().parse().ok()?;
+        if !addr.ip().is_loopback() {
+            return None;
+        }
         // Loopback connects are instant when the daemon is healthy; the connect
         // timeout only bounds the stale-file probe. 500 ms proved too tight on a
         // loaded Windows machine right after a daemon spawn.
@@ -28,8 +42,9 @@ impl Client {
             .timeout(Duration::from_secs(30))
             .build();
         let c = Self {
-            base: format!("http://{}", addr.trim()),
+            base: format!("http://{addr}"),
             token: token.trim().to_string(),
+            owner: Mutex::new(None),
             agent,
         };
         // Stale files from a crashed daemon: probe, and with the token. A new
@@ -72,9 +87,19 @@ impl Client {
     }
 
     fn request(&self, method: &str, path: &str) -> ureq::Request {
-        self.agent
+        let mut r = self
+            .agent
             .request(method, &format!("{}{}", self.base, path))
-            .set("Authorization", &format!("Bearer {}", self.token))
+            .set("Authorization", &format!("Bearer {}", self.token));
+        if let Some(o) = self
+            .owner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            r = r.set(unseenkey_daemon::token::OWNER_HEADER, o);
+        }
+        r
     }
 
     fn handle(r: Result<ureq::Response, ureq::Error>) -> Result<Value, CliError> {
@@ -127,7 +152,35 @@ impl Client {
         Ok(self.get("/v1/status")?["locked"].as_bool().unwrap_or(true))
     }
 
+    /// The owner token held by this client, if an unlock or confirmation
+    /// produced one.
+    pub fn owner(&self) -> Option<String> {
+        self.owner.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Use an owner token obtained earlier (the desktop app keeps the one from
+    /// its unlock for as long as it runs).
+    pub fn set_owner(&self, token: Option<String>) {
+        *self.owner.lock().unwrap_or_else(|e| e.into_inner()) = token;
+    }
+
+    fn remember_owner(&self, reply: &Value) {
+        if let Some(t) = reply["owner_token"].as_str() {
+            self.set_owner(Some(t.to_string()));
+        }
+    }
+
+    /// Prove the owner with the password on an unlocked vault (`POST /v1/confirm`)
+    /// and keep the owner token it returns.
+    pub fn confirm_with_password(&self, password: &str) -> Result<(), CliError> {
+        let r = self.post("/v1/confirm", serde_json::json!({ "password": password }))?;
+        self.remember_owner(&r);
+        Ok(())
+    }
+
     /// Unlock if needed, prompting for the password (up to three tries on a terminal).
+    /// The unlock also yields the owner token, so a command that unlocked
+    /// needs no second prompt for an owner-only action.
     pub fn ensure_unlocked(&self) -> Result<(), CliError> {
         if !self.is_locked()? {
             return Ok(());
@@ -138,7 +191,10 @@ impl Client {
             let pw_str = std::str::from_utf8(pw.expose())
                 .map_err(|_| CliError::general("password is not valid UTF-8"))?;
             match self.post("/v1/unlock", serde_json::json!({ "password": pw_str })) {
-                Ok(_) => return Ok(()),
+                Ok(r) => {
+                    self.remember_owner(&r);
+                    return Ok(());
+                }
                 Err(e) if e.code == EXIT_LOCKED && attempt < tries => {
                     eprintln!("wrong password, try again");
                 }
@@ -149,6 +205,34 @@ impl Client {
             EXIT_LOCKED,
             "wrong_password",
             "vault stays locked",
+        ))
+    }
+
+    /// Make sure this client can act as the owner: an unlock made here already
+    /// did, otherwise ask for the password and confirm it with the daemon.
+    /// Revealing a value, approving a request, replacing a policy and the like
+    /// go through this, so a program that merely holds `daemon.token` cannot.
+    pub fn ensure_owner(&self) -> Result<(), CliError> {
+        if self.owner().is_some() {
+            return Ok(());
+        }
+        let tries = if uio::is_tty() { 3 } else { 1 };
+        for attempt in 1..=tries {
+            let pw = uio::read_secret_line("Vault password (to confirm it is you): ")?;
+            let pw_str = std::str::from_utf8(pw.expose())
+                .map_err(|_| CliError::general("password is not valid UTF-8"))?;
+            match self.confirm_with_password(pw_str) {
+                Ok(()) => return Ok(()),
+                Err(e) if e.kind == "wrong_password" && attempt < tries => {
+                    eprintln!("wrong password, try again");
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(CliError::with_code(
+            EXIT_LOCKED,
+            "wrong_password",
+            "not confirmed",
         ))
     }
 }

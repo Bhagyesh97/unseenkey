@@ -67,15 +67,18 @@ Read this before writing any code that touches a secret. Every mitigation here m
 | T2 asks the agent to `curl` with `{{usk:x}}` to attacker host | Host lock: substitution only for the secret's upstream | Attacker can still call the *legitimate* upstream within policy (power problem) |
 | T2 makes the agent exfiltrate a secret it read from somewhere | Egress guard scans bodies to non-upstream hosts for stored values | Encoded/obfuscated exfil not caught; agent could read `.env` if user still has plaintext elsewhere |
 | T2 uses `usk run` to get plaintext | `allow_injection` off by default; injection audited; output scrubbed | Base64/transforms defeat scrubbing; documented weaker mode |
+| T2 has a shell and reads `daemon.token` | The session token covers reading metadata, adding keys and care-level handles only. Revealing a value, injecting, approving a request, enrolling an unlock method, changing the care level or idle lock, and naming or changing a policy need an **owner token**: issued by `POST /v1/unlock` and `POST /v1/confirm` against the password or a device unlock, held in the CLI's or app's memory, cleared on lock, never on disk | The agent can still do everything the care level allows, and anything the owner confirms; a process that reads the app's memory is T4 |
+| T2 approves its own request | Approvals are owner-only (above); `approve latest` is refused when more than one request is waiting, so a request slipped in at the last moment cannot ride on the owner's answer | None significant |
 | T2 calls `list_secrets` | Returns metadata only | Metadata reveals what the user has (A7); acceptable |
 | T3 fetches localhost broker | Reject requests with `Origin`/`Referer`/`Sec-Fetch-Site`/`Sec-Fetch-Dest`/`Sec-Fetch-User`/`Sec-CH-UA` (not `Sec-Fetch-Mode` alone: Node's `fetch` sends it); strict `Host`; no CORS; management routes need session token | Non-browser local attacker (T4) |
-| T4 connects to loopback | Handles are 160-bit random and only in memory/keychain; management token file 0600; optional per-process peer credential check (SO_PEERCRED / GetExtendedTcpTable) to allow only approved executables | A same-user malicious process is largely game over on desktop OSes; we reduce, not eliminate |
+| T4 connects to loopback | Handles are ~190-bit random and stored only as hashes; the session token file is 0600 on Unix (user-profile ACL on Windows); owner-only routes need the in-memory owner token; the CLI and app refuse a `daemon.addr` that is not loopback | A same-user process can use any handle it finds and every route the session token covers; per-process peer-credential checks are not built. Largely game over on desktop OSes; we reduce, not eliminate |
 | T4 reads daemon memory | `mlock`, zeroize, short-lived decrypts; keep secrets encrypted in memory under a session key, decrypt per request | Root/debugger can still read; out of scope |
 | T8 steals disk | Vault encrypted with Argon2id-derived key; no plaintext ever on disk; SQLite audit log encrypted | Weak password → offline brute force; enforce strength meter and passkey |
 | T8 steals unlocked laptop | Auto-lock on idle/sleep/screen lock; approval prompts for sensitive secrets | Short window before lock |
 | T6 on upstream | TLS 1.2+ with system roots; certificate verification never disabled; optional pinning per preset | None significant |
 | T9 dependency | `cargo deny`, `cargo audit`, vendored lockfile, minimal deps, reproducible builds, Sigstore-signed releases, SBOM published | Zero-day in a trusted crate |
-| T10 echoes secrets back | Response scrubbing | Transformed values |
+| T10 echoes secrets back | Response scrubbing. The broker strips the caller's `Accept-Encoding`, negotiates gzip/brotli/deflate itself and unpacks before scrubbing; a reply in any other encoding is refused (`undecodable_response`) | Transformed values |
+| T8 edits the vault file to restore access | Superseded record versions are erased on every write and a deleted value is purged, so removing the newest row brings nothing back; a log that has had a keyed head reports a missing one as tampering (`audit_tampered`, state `removed`) | Swapping in a complete older copy of the file is not detected: that needs state outside the file |
 
 ### Delegation mode (adds to the above)
 
@@ -104,7 +107,9 @@ Read this before writing any code that touches a secret. Every mitigation here m
 
 - INV-1: Plaintext is never written to disk, logs, crash dumps or error messages.
 - INV-2: Plaintext leaves the daemon only inside an outgoing request to a host on the secret's upstream list, or via an explicitly audited reveal/injection.
-- INV-3: A handle without a valid caller context cannot cause a secret to be used.
+- INV-3: Management routes require the session token. The routes that reveal a value, answer an approval, enroll an unlock method, change settings or name or change a policy additionally require an owner token, issued only against the password or a device unlock, held in memory and cleared on lock. (Handles themselves are capabilities: any local caller holding one may use it within its policy; the `callers` list restricts MCP identities, not processes.)
+- INV-9: A response the scrubber cannot read (an encoding the broker did not ask for) is refused, never passed through.
+- INV-10: A write erases the record versions it supersedes; a delete leaves no version of the value in the file.
 - INV-4: Every use produces exactly one audit event before the response is returned to the caller.
 - INV-5: Policy evaluation defaults to deny; an unknown field or parse error denies.
 - INV-6: Local broker rejects any request that carries browser-origin headers.

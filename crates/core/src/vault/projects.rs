@@ -66,6 +66,7 @@ impl<S: Storage, C: Clock> Vault<S, C> {
             now,
         )?;
         self.storage.insert_record(&rec)?;
+        self.storage.prune_versions(&p.project_id, version)?;
         self.projects.insert(p.project_id, p.clone());
         Ok(p)
     }

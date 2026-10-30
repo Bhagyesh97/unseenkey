@@ -178,6 +178,9 @@ pub enum HeadStatus {
     /// The stored head does not authenticate under the vault key: the header
     /// was rewritten without the key.
     Forged,
+    /// No head is stored although this log has had one: the head was deleted,
+    /// or the file was swapped for an older or empty copy of the log.
+    Removed,
     /// The head authenticates but the log's newest row is not the one it
     /// names: rows were removed after `head_seq`, the newest row was
     /// rewritten, or rows were appended without the key.
@@ -266,9 +269,21 @@ pub fn verify(vault_id: &Id, rows: &[AuditRow]) -> VerifyReport {
 }
 
 /// Check the stored head against the newest row, given the head key.
-pub fn check_head(key: &[u8; 32], head: Option<&AuditHead>, last: Option<&AuditRow>) -> HeadStatus {
+/// `required` says whether this log has had a head before (the vault header
+/// records that): then a missing head is [`HeadStatus::Removed`], not
+/// [`HeadStatus::Missing`].
+pub fn check_head(
+    key: &[u8; 32],
+    head: Option<&AuditHead>,
+    last: Option<&AuditRow>,
+    required: bool,
+) -> HeadStatus {
     let Some(head) = head else {
-        return HeadStatus::Missing;
+        return if required {
+            HeadStatus::Removed
+        } else {
+            HeadStatus::Missing
+        };
     };
     if !digest_eq(&head.mac, &head_mac(key, head.seq, &head.hash)) {
         return HeadStatus::Forged;
@@ -357,21 +372,21 @@ mod tests {
             mac: head_mac(&key, last.seq, &last.this_hash),
         };
         assert_eq!(
-            check_head(&key, Some(&head), Some(last)),
+            check_head(&key, Some(&head), Some(last), true),
             HeadStatus::Verified
         );
 
         // Cut the log short: the chain is fine, the head is not.
         assert!(verify(&vid, &rows[..3]).ok());
         assert_eq!(
-            check_head(&key, Some(&head), rows[..3].last()),
+            check_head(&key, Some(&head), rows[..3].last(), true),
             HeadStatus::Mismatch {
                 head_seq: 5,
                 last_seq: 3
             }
         );
         assert_eq!(
-            check_head(&key, Some(&head), None),
+            check_head(&key, Some(&head), None, true),
             HeadStatus::Mismatch {
                 head_seq: 5,
                 last_seq: 0
@@ -391,7 +406,7 @@ mod tests {
         );
         assert!(verify(&vid, &rewritten).ok());
         assert!(matches!(
-            check_head(&key, Some(&head), rewritten.last()),
+            check_head(&key, Some(&head), rewritten.last(), true),
             HeadStatus::Mismatch {
                 head_seq: 5,
                 last_seq: 5
@@ -402,21 +417,32 @@ mod tests {
         forged.seq = 3;
         forged.hash = rows[2].this_hash;
         assert_eq!(
-            check_head(&key, Some(&forged), rows[..3].last()),
+            check_head(&key, Some(&forged), rows[..3].last(), true),
             HeadStatus::Forged
         );
         assert_eq!(
-            check_head(&[1u8; 32], Some(&head), Some(last)),
+            check_head(&[1u8; 32], Some(&head), Some(last), true),
             HeadStatus::Forged
         );
-        // No head at all is reported, not failed.
-        assert_eq!(check_head(&key, None, Some(last)), HeadStatus::Missing);
+        // No head at all: tolerated on a log that never had one, tampering on
+        // a log that did (deleting the head row must not pass as "old log").
+        assert_eq!(
+            check_head(&key, None, Some(last), false),
+            HeadStatus::Missing
+        );
+        assert_eq!(
+            check_head(&key, None, Some(last), true),
+            HeadStatus::Removed
+        );
+        assert_eq!(check_head(&key, None, None, true), HeadStatus::Removed);
 
         let mut report = verify(&vid, &rows);
         assert!(report.ok() && !report.head_checked());
         report.head = HeadStatus::Verified;
         assert!(report.ok() && report.head_checked());
         report.head = HeadStatus::Forged;
+        assert!(!report.ok());
+        report.head = HeadStatus::Removed;
         assert!(!report.ok());
     }
 }

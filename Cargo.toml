@@ -31,7 +31,10 @@ bip39 = { version = "3", default-features = false, features = ["alloc"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 
 # daemon
-reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "stream"] }
+# gzip/brotli/deflate: the broker asks providers for compressed replies itself and
+# unpacks them before scrubbing; without these a compressed reply would pass through
+# with whatever the provider echoed inside it.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "stream", "gzip", "brotli", "deflate"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "matched-path", "query"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "fs", "signal"] }

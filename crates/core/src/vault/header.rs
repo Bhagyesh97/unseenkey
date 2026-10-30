@@ -106,6 +106,7 @@ pub fn build(
         wrapped_vk_rec: Some(wrapped_vk_rec),
         created_at: now,
         wraps: Vec::new(),
+        audit_head_required: false,
     })
 }
 

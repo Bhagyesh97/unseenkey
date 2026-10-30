@@ -844,6 +844,7 @@ fn reveal(
         ));
     }
     let c = unlocked(paths)?;
+    c.ensure_owner()?;
     let r = c.post(
         &format!("/v1/secrets/{name}/reveal"),
         json!({ "confirm": true, "reason": reason }),
@@ -1319,6 +1320,10 @@ fn handle_create(
         body["policy"] = serde_json::from_str::<Value>(&p.to_json()).unwrap_or(Value::Null);
     }
     incidents.apply(&mut body)?;
+    // A policy of one's own is the owner's call; the care-level default is not.
+    if body.get("preset_policy").is_some() || body.get("policy").is_some() {
+        c.ensure_owner()?;
+    }
     let created = c.post("/v1/handles", body)?;
     print_handle_created(&created, json);
     Ok(())
@@ -1326,6 +1331,7 @@ fn handle_create(
 
 fn handle_resume(paths: &VaultPaths, r#ref: &str) -> Result<(), CliError> {
     let c = unlocked(paths)?;
+    c.ensure_owner()?;
     let h = c.post(&format!("/v1/handles/{ref}/resume"), json!({}))?;
     println!(
         "{} is back to normal ({}).",
@@ -1457,6 +1463,7 @@ fn handle_policy(
         }
         _ => return Err(CliError::general("pass --preset <policy> or --file <path>")),
     };
+    c.ensure_owner()?;
     let updated = c.patch(&format!("/v1/handles/{ref}"), body)?;
     println!(
         "Policy updated for {}:",
@@ -1482,6 +1489,7 @@ fn env_cmd(
     let mut body = json!({ "secret": secret, "label": label, "camouflage": camouflage });
     if let Some(spec) = policy {
         body["preset_policy"] = json!(qualify_policy(&c, secret, &spec)?);
+        c.ensure_owner()?;
     }
     incidents.apply(&mut body)?;
     let created = c.post("/v1/handles", body)?;
@@ -1718,7 +1726,10 @@ fn approvals_decide(
     allow: bool,
     remember: bool,
 ) -> Result<(), CliError> {
-    let c = Client::connect(paths, true)?;
+    let c = unlocked(paths)?;
+    // The answer is the owner's: a tool that holds the session token could
+    // otherwise approve its own request.
+    c.ensure_owner()?;
     let r = c.post(
         &format!("/v1/approvals/{id}"),
         json!({ "decision": if allow { "allow" } else { "deny" }, "remember": remember }),
@@ -1818,6 +1829,7 @@ fn care(paths: &VaultPaths, level: Option<&str>) -> Result<(), CliError> {
             println!("Change it with `usk care relaxed|balanced|strict`. Allowed websites, scrubbing and the log apply at every level.");
         }
         Some(l) => {
+            c.ensure_owner()?;
             let r = c.patch("/v1/settings", json!({ "care": l }))?;
             let l = r["care"].as_str().unwrap_or(l).to_string();
             println!("Care is now {l}: {}.", explain(&l));
@@ -1907,6 +1919,13 @@ fn secret_set(
         return Err(CliError::general(
             "nothing to change; pass --allow-injection, --no-scrub, --notes, --tag or --upstream",
         ));
+    }
+    // Where a key may go and how it may leave the vault are the owner's to change.
+    if ["provider", "allow_injection", "no_scrub", "upstreams"]
+        .iter()
+        .any(|k| body.contains_key(*k))
+    {
+        c.ensure_owner()?;
     }
     let m = c.patch(&format!("/v1/secrets/{name}"), Value::Object(body))?;
     println!(

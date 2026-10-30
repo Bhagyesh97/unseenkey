@@ -9,34 +9,36 @@ All responses are JSON. Errors: `{ "error": "<code>", "message": "…" }`.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/v1/status` | `{locked, vault_id, version, uptime, cloud: {enabled, synced_at}}` |
-| POST | `/v1/unlock` | body `{password}` or `{prf_output}`; returns `{ok}`; rate limited (5/min) |
+| POST | `/v1/unlock` | body `{password}` or `{wrap_id, kek}`; returns `{ok, owner_token}`; rate limited (5/min) |
+| POST | `/v1/confirm` | same body as `/v1/unlock`, on an unlocked vault: checks the credential without touching the lock and returns `{ok, owner_token}`; shares the unlock rate limit. The owner token goes in `X-Usk-Owner` on the routes marked **owner** below; it lives in the client's memory and every lock invalidates it |
 | POST | `/v1/lock` | |
 | GET | `/v1/secrets` | metadata list (no values) |
 | POST | `/v1/secrets` | `{name, type, value \| fields, provider?, upstreams?, tags?}` |
 | GET | `/v1/secrets/{id}` | metadata + policy summary + handles |
-| PATCH | `/v1/secrets/{id}` | metadata or new value (creates a version) |
-| DELETE | `/v1/secrets/{id}` | tombstone |
-| POST | `/v1/secrets/{id}/reveal` | requires `{confirm:true}`; returns value once; audit `reveal`; optional `reason` |
+| PATCH | `/v1/secrets/{id}` | metadata or new value (replaces the stored version). `upstreams`, `provider`, `allow_injection` and `no_scrub` are **owner** |
+| DELETE | `/v1/secrets/{id}` | erases every version of the value; a tombstone marks the metadata |
+| POST | `/v1/secrets/{id}/reveal` | **owner**; requires `{confirm:true}`; returns value once; audit `reveal`; optional `reason` |
+| POST | `/v1/secrets/{id}/inject` | **owner**; plaintext for `usk run`, only with `allow_injection`; audit `inject` |
 | POST | `/v1/secrets/import` | multipart or `{format, content}` |
 | GET/POST | `/v1/policies`, `/v1/policies/{id}` | CRUD; POST validates and returns `explanation` |
-| POST | `/v1/handles` | `{secret, preset_policy \| policy, label?, expires_in_days?, camouflage?, cap_per_day?, cap_per_minute?, canary?, on_anomaly?, project?}` → returns the handle **once**; the view carries `canary`, `on_anomaly`, `status` and `last_anomaly` |
+| POST | `/v1/handles` | **owner** when `preset_policy` or `policy` is given (the care-level default needs only the session token). `{secret, preset_policy \| policy, label?, expires_in_days?, camouflage?, cap_per_day?, cap_per_minute?, canary?, on_anomaly?, project?}` → returns the handle **once**; the view carries `canary`, `on_anomaly`, `status` and `last_anomaly` |
 | GET | `/v1/handles` | list (hashes, labels, counts, never handle strings) |
 | DELETE | `/v1/handles/{id}` | revoke |
 | POST | `/v1/handles/{id}/forget` | `{rule?}`: clear "allow always" decisions (one rule, or all). They live in the handle record, survive restarts, and are wiped by a policy change |
-| PATCH | `/v1/handles/{id}` | `{preset_policy \| policy}` replaces the policy (and forgets remembered rules); `{on_anomaly}` changes the incident response alone |
-| POST | `/v1/handles/{id}/resume` | back to normal after an incident: ends a throttle, approval mode or pause, restarts the burst detector |
+| PATCH | `/v1/handles/{id}` | **owner**; `{preset_policy \| policy}` replaces the policy (and forgets remembered rules); `{on_anomaly}` changes the incident response alone |
+| POST | `/v1/handles/{id}/resume` | **owner**; back to normal after an incident: ends a throttle, approval mode or pause, restarts the burst detector |
 | GET | `/v1/projects[?dir=…]` | projects with their folders, secrets, `cap_per_day`, `requests_today`, active `handles`; `dir` returns only the project whose folder most closely contains it |
-| PATCH | `/v1/settings` | `{care}` (`relaxed` \| `balanced` \| `strict`): what Unseenkey hands out by itself; re-applied to handles that follow it, returns `handles_updated`. `{idle_lock_minutes}` (0 = never, at most 1440): takes effect at once and is saved to `config.toml`; audited as `settings_changed`. Polling reads (`GET /v1/status`, `/approvals`, `/events`, `/callers`) do not count as activity for the idle lock |
+| PATCH | `/v1/settings` | **owner**; `{care}` (`relaxed` \| `balanced` \| `strict`): what Unseenkey hands out by itself; re-applied to handles that follow it, returns `handles_updated`. `{idle_lock_minutes}` (0 = never, at most 1440): takes effect at once and is saved to `config.toml`; audited as `settings_changed`. Polling reads (`GET /v1/status`, `/approvals`, `/events`, `/callers`) do not count as activity for the idle lock |
 | POST | `/v1/detect` | `{value?, name?}` → `{recognised: {provider, display, how: shape\|name, note, testable} \| null}`; stores and sends nothing |
 | POST | `/v1/secrets/{ref}/test` | one read-only request from the provider preset's `[verify]`, on a host the secret is locked to → `{tested, ok, status, provider, message}`; audited as `key_tested` |
 | POST | `/v1/projects` | `{name?, paths?, secrets?, cap_per_day?, notes?}`; the name defaults to the first folder's (`shop`, `shop 2`, …) |
 | GET/PATCH/DELETE | `/v1/projects/{id\|name}` | PATCH `{name?, paths?, cap_per_day?, notes?}` (`cap_per_day: null` removes the limit); DELETE keeps the secrets and handles |
 | POST | `/v1/projects/{ref}/secrets` | `{secret}` adds a secret; `DELETE /v1/projects/{ref}/secrets/{secret}` takes it out (it stays in the vault) |
-| GET/POST/DELETE | `/v1/unlock-methods`, `/v1/unlock-methods/{id}` | device unlock methods (Windows Hello); `POST /v1/unlock` also takes `{wrap_id, kek}` |
+| GET/POST/DELETE | `/v1/unlock-methods`, `/v1/unlock-methods/{id}` | device unlock methods (Windows Hello); POST (enrolling) is **owner**; `POST /v1/unlock` and `/v1/confirm` also take `{wrap_id, kek}` |
 | GET | `/v1/callers` / POST / DELETE | manage MCP/device callers |
 | GET | `/v1/audit?since=&kind=&limit=` | decrypted events for the owner |
 | GET | `/v1/audit/verify` | re-hash the chain; returns first broken seq if any |
-| GET | `/v1/approvals` / POST `/v1/approvals/{id}` | list pending; decide `{decision: allow\|deny, remember: bool}` |
+| GET | `/v1/approvals` / POST `/v1/approvals/{id}` | list pending; decide `{decision: allow\|deny, remember: bool}` (**owner**). `latest` names the one waiting request and is refused (409 `ambiguous`) when several wait |
 | GET | `/v1/presets` | compiled presets |
 | POST | `/v1/env-guard/scan` | `{path}` → detected secrets in `.env`-like files (values not returned, only positions) |
 | POST | `/v1/env-guard/fix` | move detected secrets into the vault and rewrite the file with handles |
@@ -79,7 +81,7 @@ usk add <name> [--type api_key] [--provider openai] [--upstream host]   (prompts
 usk add --from-env .env          import & optionally replace with handles
 usk ls [--provider stripe] [--tag x]
 usk show <name>                  metadata only
-usk reveal <name> [--reason "…"] value, once, audited, requires confirmation
+usk reveal <name> [--reason "…"] value, once, audited, requires confirmation and the password (owner)
 usk rm <name>                    also revokes every active handle of the secret
 usk rotate <name>                (Phase 4) run provider adapter
 

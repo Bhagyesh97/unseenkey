@@ -55,6 +55,8 @@ struct Env {
     _daemon: Running,
     base: String,
     session: String,
+    /// The owner token from the unlock; sent as the CLI and app do.
+    owner: std::sync::Mutex<Option<String>>,
     mcp_token: String,
     agent: ureq::Agent,
 }
@@ -82,14 +84,21 @@ fn call(r: Result<ureq::Response, ureq::Error>) -> (u16, Value) {
 
 impl Env {
     fn mgmt(&self, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
-        let req = self
+        let mut req = self
             .agent
             .request(method, &format!("{}{}", self.base, path))
             .set("Authorization", &format!("Bearer {}", self.session));
-        call(match body {
+        if let Some(o) = self.owner.lock().unwrap().as_ref() {
+            req = req.set("X-Usk-Owner", o);
+        }
+        let (code, v) = call(match body {
             Some(b) => req.send_json(b),
             None => req.call(),
-        })
+        });
+        if code == 200 && path == "/v1/unlock" {
+            *self.owner.lock().unwrap() = v["owner_token"].as_str().map(str::to_string);
+        }
+        (code, v)
     }
     fn rpc(&self, token: &str, msg: Value) -> (u16, Value) {
         call(
@@ -159,6 +168,7 @@ care = \"strict\"
     let mut env = Env {
         base: format!("http://{}", daemon.addr),
         session: daemon.token().to_string(),
+        owner: std::sync::Mutex::new(None),
         mcp_token: String::new(),
         agent: ureq::AgentBuilder::new()
             .max_idle_connections(0)

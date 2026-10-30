@@ -107,7 +107,7 @@ fn init_add_ls_reveal_rm_with_daemon() {
 
     let o = usk(&vault, &["reveal", "openai"], "");
     assert!(!o.status.success(), "reveal without --yes must fail");
-    let o = usk(&vault, &["reveal", "openai", "--yes"], "");
+    let o = usk(&vault, &["reveal", "openai", "--yes"], PW);
     assert!(o.status.success(), "{}", err(&o));
     assert_eq!(out(&o).trim(), value);
 
@@ -153,7 +153,7 @@ fn init_add_ls_reveal_rm_with_daemon() {
         &[
             "handle", "create", "stripe", "--label", "dev", "--policy", "payments",
         ],
-        "",
+        "brand-new-password-123\n",
     );
     assert!(o.status.success(), "{}", err(&o));
     let t = out(&o);
@@ -166,7 +166,7 @@ fn init_add_ls_reveal_rm_with_daemon() {
     let o = usk(
         &vault,
         &["--json", "env", "stripe", "--policy", "read-only"],
-        "",
+        "brand-new-password-123\n",
     );
     assert!(o.status.success(), "{}", err(&o));
     assert!(
@@ -188,7 +188,7 @@ fn init_add_ls_reveal_rm_with_daemon() {
     let o = usk(
         &vault,
         &["handle", "policy", "dev", "--preset", "read-only"],
-        "",
+        "brand-new-password-123\n",
     );
     assert!(o.status.success(), "{}", err(&o));
     let o = usk(&vault, &["handle", "revoke", "dev"], "");
@@ -289,7 +289,7 @@ fn run_injection_and_env_guard() {
     let o = usk(
         &vault,
         &["run", "--with", "K=stripe", "--", shell, flag, echo],
-        "",
+        PW,
     );
     assert!(!o.status.success());
     assert!(err(&o).contains("injection is off"), "{}", err(&o));
@@ -299,14 +299,14 @@ fn run_injection_and_env_guard() {
     let o = usk(
         &vault,
         &["secret", "set", "stripe", "--allow-injection", "true"],
-        "",
+        PW,
     );
     assert!(o.status.success(), "{}", err(&o));
     assert!(out(&o).contains("injection allowed"), "{}", out(&o));
     let o = usk(
         &vault,
         &["run", "--with", "K=stripe", "--", shell, flag, echo],
-        "",
+        PW,
     );
     assert!(o.status.success(), "{}", err(&o));
     assert!(out(&o).contains("[REDACTED:usk:stripe]"), "{}", out(&o));
@@ -321,7 +321,7 @@ fn run_injection_and_env_guard() {
     let o = usk(
         &vault,
         &["run", "--with", "K=stripe", "--", shell, flag, "exit 7"],
-        "",
+        PW,
     );
     assert_eq!(o.status.code(), Some(7));
     // Audited as `inject`, never as a value.
@@ -516,7 +516,7 @@ fn aws_credentials_and_sdk_environment() {
         assert_eq!(m["provider"], "aws", "{m}");
     }
     for name in ["aws-dev", "aws-prod"] {
-        let o = usk(&vault, &["reveal", name, "--yes"], "");
+        let o = usk(&vault, &["reveal", name, "--yes"], PW);
         assert_eq!(out(&o).lines().next(), Some(SECRET), "{name}: {}", err(&o));
     }
 
@@ -532,7 +532,7 @@ fn aws_credentials_and_sdk_environment() {
             "--shell",
             "dotenv",
         ],
-        "",
+        PW,
     );
     assert!(o.status.success(), "{}", err(&o));
     let env = out(&o);
@@ -568,7 +568,7 @@ fn camouflage_handles_from_the_cli() {
             "--shell",
             "dotenv",
         ],
-        "",
+        PW,
     );
     assert!(o.status.success(), "{}", err(&o));
     let env_text = out(&o);
@@ -605,7 +605,7 @@ fn camouflage_handles_from_the_cli() {
         &[
             "env", "openai", "--policy", "chat", "--label", "plain", "--shell", "dotenv",
         ],
-        "",
+        PW,
     );
     assert!(out(&o).contains("OPENAI_API_KEY=usk_h_"), "{}", out(&o));
 }
@@ -655,7 +655,7 @@ fn caps_canaries_and_resume_from_the_cli() {
             "--on-anomaly",
             "pause",
         ],
-        "",
+        PW,
     );
     assert!(o.status.success(), "{}", err(&o));
     let text = out(&o);
@@ -698,7 +698,7 @@ fn caps_canaries_and_resume_from_the_cli() {
     assert!(out(&o).contains("canary:     yes"), "{}", out(&o));
 
     // Resume is a no-op on a normal handle and says so politely.
-    let o = usk(&vault, &["handle", "resume", "capped"], "");
+    let o = usk(&vault, &["handle", "resume", "capped"], PW);
     assert!(o.status.success(), "{}", err(&o));
     assert!(out(&o).contains("back to normal"), "{}", out(&o));
 
@@ -715,7 +715,7 @@ fn caps_canaries_and_resume_from_the_cli() {
             "--shell",
             "dotenv",
         ],
-        "",
+        PW,
     );
     assert!(o.status.success(), "{}", err(&o));
     assert!(out(&o).contains("STRIPE_SECRET_KEY=usk_h_"), "{}", out(&o));
@@ -768,7 +768,7 @@ fn provider_changes_and_user_presets_from_the_cli() {
     let o = usk(
         &vault,
         &["secret", "set", "deploy-key", "--provider", "hostinger"],
-        "",
+        PW,
     );
     assert!(o.status.success(), "{}", err(&o));
     let o = usk(&vault, &["--json", "show", "deploy-key"], "");
@@ -782,7 +782,7 @@ fn provider_changes_and_user_presets_from_the_cli() {
     let o = usk(
         &vault,
         &["secret", "set", "deploy-key", "--provider", "acme"],
-        "",
+        PW,
     );
     assert!(o.status.success(), "{}", err(&o));
     let o = usk(
@@ -795,7 +795,7 @@ fn provider_changes_and_user_presets_from_the_cli() {
             "--shell",
             "dotenv",
         ],
-        "",
+        PW,
     );
     assert!(o.status.success(), "{}", err(&o));
     let env_text = out(&o);
@@ -902,7 +902,7 @@ fn replacing_a_value_keeps_the_handles() {
     );
     assert!(o.status.success(), "{}", err(&o));
     assert!(out(&o).contains("now version 2"), "{}", out(&o));
-    let o = usk(&vault, &["reveal", "deploy", "--yes"], "");
+    let o = usk(&vault, &["reveal", "deploy", "--yes"], PW);
     assert!(
         out(&o).contains("zxcvbnmasdfghjklqwertyuiop654321"),
         "{}",

@@ -2,7 +2,7 @@
 
 use crate::state::{AppState, Event};
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -85,6 +85,28 @@ impl From<VaultError> for ApiError {
 }
 
 type ApiResult<T> = Result<Json<T>, ApiError>;
+
+/// The routes that reveal a value, hand out or widen access, enroll an unlock
+/// method or answer an approval need more than the session token, which any
+/// program running as the user can read from `daemon.token`. They need an
+/// owner token: issued by `POST /v1/unlock` and `POST /v1/confirm` against
+/// the password or a device unlock, kept in the client's memory and sent as
+/// `X-Usk-Owner`. An AI tool with a shell holds the session token; it does
+/// not hold this.
+pub fn require_owner(s: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
+    let presented = headers
+        .get(crate::token::OWNER_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim);
+    match presented {
+        Some(t) if s.owner_token_valid(t) => Ok(()),
+        _ => Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "owner_required",
+            "this needs the owner: confirm with the vault password or device unlock (POST /v1/confirm) and send the owner token in X-Usk-Owner",
+        )),
+    }
+}
 
 /// `GET /healthz`
 pub async fn healthz() -> &'static str {
@@ -175,10 +197,14 @@ fn apply_care(v: &mut crate::state::DaemonVault, care: presets::Care) -> Result<
 }
 
 /// `PATCH /v1/settings`: change the idle lock now and keep it in `config.toml`.
+/// Owner only: a longer idle lock or a looser care level widens what every
+/// tool may do.
 pub async fn patch_settings(
     State(s): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(p): Json<PatchSettings>,
 ) -> ApiResult<serde_json::Value> {
+    require_owner(&s, &headers)?;
     if let Some(m) = p.idle_lock_minutes {
         if m > 24 * 60 {
             return Err(ApiError::new(
@@ -314,15 +340,15 @@ pub async fn unlock(
         ));
     }
     let mut v = s.vault.lock().await;
-    let method = match (&req.password, &req.wrap_id, &req.kek) {
+    let attempt: Result<&'static str, VaultError> = match (&req.password, &req.wrap_id, &req.kek) {
         (Some(password), None, None) => {
             let pw = SecretBytes::from_slice(password.as_bytes());
             // Argon2id takes up to a second: keep it off the async threads.
             tokio::task::block_in_place(|| {
                 v.reload_header()?;
                 v.unlock_with_password(&pw)
-            })?;
-            "password"
+            })
+            .map(|()| "password")
         }
         (None, Some(wrap_id), Some(kek)) => {
             let id = Id::from_hex(wrap_id.trim()).ok_or_else(|| {
@@ -335,10 +361,18 @@ pub async fn unlock(
             let kek = decode_b64_32(kek, "kek")?;
             let kek = SecretBytes::from_slice(kek.as_slice());
             v.reload_header()?;
-            v.unlock_with_kek(&id, &kek)?;
-            "device"
+            v.unlock_with_kek(&id, &kek).map(|()| "device")
         }
         _ => unreachable!("shape checked above"),
+    };
+    let method = match attempt {
+        Ok(m) => m,
+        Err(e) => {
+            if matches!(e, VaultError::WrongCredential) {
+                s.record_credential_failure().await;
+            }
+            return Err(e.into());
+        }
     };
     if let Some(problem) = v.audit_head_problem() {
         tracing::warn!(
@@ -359,7 +393,87 @@ pub async fn unlock(
     }
     s.emit(Event::Unlocked);
     tracing::info!("vault unlocked");
-    Ok(Json(serde_json::json!({ "ok": true })))
+    // Unlocking proved the owner is here: the same call hands out the owner
+    // token, so the client that unlocked needs no second prompt.
+    let owner_token = s.issue_owner_token();
+    Ok(Json(
+        serde_json::json!({ "ok": true, "owner_token": owner_token }),
+    ))
+}
+
+/// `POST /v1/confirm`: prove the owner is present without touching the lock
+/// state. Same body as `/v1/unlock`; returns an owner token (see
+/// [`require_owner`]). Rate limited together with unlock attempts.
+pub async fn confirm_owner(
+    State(s): State<Arc<AppState>>,
+    Json(req): Json<UnlockRequest>,
+) -> ApiResult<serde_json::Value> {
+    let shape_ok = matches!(
+        (&req.password, &req.wrap_id, &req.kek),
+        (Some(_), None, None) | (None, Some(_), Some(_))
+    );
+    if !shape_ok {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid",
+            "send either password, or wrap_id and kek",
+        ));
+    }
+    if !s.unlock_allowed(5, Duration::from_secs(60)).await {
+        return Err(ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "too many attempts; wait a minute",
+        ));
+    }
+    let mut v = s.vault.lock().await;
+    if v.is_locked() {
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "vault_locked",
+            "the vault is locked; unlock it instead, which confirms the owner too",
+        ));
+    }
+    let attempt: Result<&'static str, VaultError> = match (&req.password, &req.wrap_id, &req.kek) {
+        (Some(password), None, None) => {
+            let pw = SecretBytes::from_slice(password.as_bytes());
+            tokio::task::block_in_place(|| {
+                // A password changed by `usk recover` while we ran applies.
+                v.reload_header()?;
+                v.verify_password(&pw)
+            })
+            .map(|()| "password")
+        }
+        (None, Some(wrap_id), Some(kek)) => {
+            let id = Id::from_hex(wrap_id.trim()).ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::NOT_FOUND,
+                    "unlock_method_not_found",
+                    "no such unlock method",
+                )
+            })?;
+            let kek = decode_b64_32(kek, "kek")?;
+            let kek = SecretBytes::from_slice(kek.as_slice());
+            v.reload_header()?;
+            v.verify_kek(&id, &kek).map(|()| "device")
+        }
+        _ => unreachable!("shape checked above"),
+    };
+    drop(v);
+    let method = match attempt {
+        Ok(m) => m,
+        Err(e) => {
+            if matches!(e, VaultError::WrongCredential) {
+                s.record_credential_failure().await;
+            }
+            return Err(e.into());
+        }
+    };
+    let owner_token = s.issue_owner_token();
+    tracing::info!(method, "owner confirmed");
+    Ok(Json(
+        serde_json::json!({ "ok": true, "owner_token": owner_token }),
+    ))
 }
 
 /// `POST /v1/lock`
@@ -412,11 +526,19 @@ pub struct AddUnlockMethod {
     pub kek: Zeroizing<String>,
 }
 
-/// `POST /v1/unlock-methods` — enroll a device unlock method (vault must be unlocked).
+/// `POST /v1/unlock-methods` — enroll a device unlock method (vault must be
+/// unlocked). Owner only: an enrolled KEK opens the vault without the
+/// password from then on, so a program holding just the session token must
+/// not be able to add one.
 pub async fn unlock_methods_add(
     State(s): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<AddUnlockMethod>,
 ) -> ApiResult<serde_json::Value> {
+    if s.vault.lock().await.is_locked() {
+        return Err(VaultError::Locked.into());
+    }
+    require_owner(&s, &headers)?;
     let kind = req.kind.trim();
     if kind.is_empty()
         || kind.len() > 32
@@ -853,12 +975,22 @@ pub struct PatchSecret {
     pub fields: BTreeMap<String, Zeroizing<String>>,
 }
 
-/// `PATCH /v1/secrets/{ref}`
+/// `PATCH /v1/secrets/{ref}`. Changing where a secret may go (`upstreams`,
+/// `provider`) or how it may leave the vault (`allow_injection`, `no_scrub`)
+/// widens access and is owner only; a rename, tags, notes or a new value are not.
 pub async fn patch_secret(
     State(s): State<Arc<AppState>>,
     Path(r): Path<String>,
+    headers: HeaderMap,
     Json(mut p): Json<PatchSecret>,
 ) -> ApiResult<SecretMeta> {
+    let widens = p.allow_injection.is_some()
+        || p.no_scrub.is_some()
+        || p.upstreams.is_some()
+        || p.provider.is_some();
+    if widens {
+        require_owner(&s, &headers)?;
+    }
     if let Some(value) = p.value.as_mut() {
         tidy_value(value);
     }
@@ -1001,12 +1133,14 @@ fn hex_of(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-/// `POST /v1/secrets/{ref}/reveal`
+/// `POST /v1/secrets/{ref}/reveal`. Owner only.
 pub async fn reveal_secret(
     State(s): State<Arc<AppState>>,
     Path(r): Path<String>,
+    headers: HeaderMap,
     Json(req): Json<RevealRequest>,
 ) -> ApiResult<RevealResponse> {
+    require_owner(&s, &headers)?;
     if !req.confirm {
         return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
@@ -1070,12 +1204,14 @@ pub struct InjectRequest {
 }
 
 /// `POST /v1/secrets/{ref}/inject` — plaintext for `usk run`. Only for secrets
-/// with `allow_injection`; every call is audited as `inject`.
+/// with `allow_injection`, owner only, and every call is audited as `inject`.
 pub async fn inject_secret(
     State(s): State<Arc<AppState>>,
     Path(r): Path<String>,
+    headers: HeaderMap,
     Json(req): Json<InjectRequest>,
 ) -> ApiResult<RevealResponse> {
+    require_owner(&s, &headers)?;
     let mut v = s.vault.lock().await;
     let id = resolve(&v, &r)?;
     let meta = v.get(&id)?.clone();
@@ -1261,11 +1397,18 @@ fn resolve_handle(v: &crate::state::DaemonVault, r: &str) -> Result<Id, ApiError
     Ok(v.handle_by_label(r)?.handle_id)
 }
 
-/// `POST /v1/handles`
+/// `POST /v1/handles`. A handle with the care-level default policy can be
+/// made with the session token (that is what `usk guard fix` and AI tools
+/// get); naming a policy of one's own is owner only, since that is how a
+/// tool would give itself more than the care level allows.
 pub async fn create_handle(
     State(s): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<CreateHandle>,
 ) -> Result<(StatusCode, Json<HandleCreated>), ApiError> {
+    if req.policy.is_some() || req.preset_policy.is_some() {
+        require_owner(&s, &headers)?;
+    }
     let mut v = s.vault.lock().await;
     let secret_id = resolve(&v, &req.secret)?;
     let meta = v.get(&secret_id)?.clone();
@@ -1427,12 +1570,14 @@ pub struct PatchHandle {
     pub on_anomaly: Option<AnomalyResponse>,
 }
 
-/// `PATCH /v1/handles/{ref}`
+/// `PATCH /v1/handles/{ref}`. Owner only.
 pub async fn patch_handle(
     State(s): State<Arc<AppState>>,
     Path(r): Path<String>,
+    headers: HeaderMap,
     Json(p): Json<PatchHandle>,
 ) -> ApiResult<HandleView> {
+    require_owner(&s, &headers)?;
     let mut v = s.vault.lock().await;
     let id = resolve_handle(&v, &r)?;
     let policy = match (&p.policy, &p.preset_policy) {
@@ -1468,10 +1613,13 @@ pub async fn patch_handle(
 
 /// `POST /v1/handles/{ref}/resume` — back to normal after an incident: the
 /// throttle, approval mode or pause ends and the burst detector starts afresh.
+/// Owner only: the incident may be the tool's own doing.
 pub async fn resume_handle(
     State(s): State<Arc<AppState>>,
     Path(r): Path<String>,
+    headers: HeaderMap,
 ) -> ApiResult<HandleView> {
+    require_owner(&s, &headers)?;
     let mut v = s.vault.lock().await;
     let id = resolve_handle(&v, &r)?;
     let changed = v.resume_handle(&id)?;
@@ -1559,12 +1707,15 @@ pub struct Decide {
     pub remember: bool,
 }
 
-/// `POST /v1/approvals/{id}`
+/// `POST /v1/approvals/{id}`. Owner only: an approval is the owner's answer,
+/// and the tool that asked holds the session token.
 pub async fn approvals_decide(
     State(s): State<Arc<AppState>>,
     Path(id): Path<String>,
+    headers: HeaderMap,
     Json(d): Json<Decide>,
 ) -> ApiResult<serde_json::Value> {
+    require_owner(&s, &headers)?;
     let allow = match d.decision.as_str() {
         "allow" => true,
         "deny" => false,
@@ -1576,15 +1727,28 @@ pub async fn approvals_decide(
             ))
         }
     };
-    // Accept "latest" as the newest pending id.
+    // "latest" names the one pending request. With several waiting it is
+    // refused: a tool could slip its own request in just before the owner
+    // answers, and the owner would approve the wrong thing.
     let id = if id == "latest" {
-        match s.approvals_pending().await.last() {
-            Some(p) => p.id,
-            None => {
+        let pending = s.approvals_pending().await;
+        match pending.as_slice() {
+            [] => {
                 return Err(ApiError::new(
                     StatusCode::NOT_FOUND,
                     "not_found",
                     "nothing is waiting for approval",
+                ))
+            }
+            [one] => one.id,
+            _ => {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "ambiguous",
+                    format!(
+                        "{} requests are waiting; pass the id of the one you mean (usk approvals lists them)",
+                        pending.len()
+                    ),
                 ))
             }
         }

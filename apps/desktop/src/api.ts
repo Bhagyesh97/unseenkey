@@ -154,12 +154,39 @@ function wrap<T>(p: Promise<T>): Promise<T> {
   });
 }
 
+/**
+ * Some actions (revealing a key, approving a request, changing what access
+ * may do) need the owner, not just a running app: the daemon answers
+ * `owner_required` until the password or Windows Hello confirms it. The Rust
+ * side tries Hello by itself; when that is not available, this asks the
+ * person for the password through the prompt the App registers, confirms,
+ * and runs the action again.
+ */
+let ownerPrompt: (() => Promise<string | null>) | null = null;
+
+export function setOwnerPrompt(fn: (() => Promise<string | null>) | null): void {
+  ownerPrompt = fn;
+}
+
+async function withOwner<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (e) {
+    if (!(e instanceof ApiError) || e.code !== "owner_required" || !ownerPrompt) throw e;
+    const password = await ownerPrompt();
+    if (password === null) throw e;
+    await wrap(invoke<void>("confirm_owner", { password }));
+    return await run();
+  }
+}
+
 export const api = {
   status: () => wrap(invoke<Status>("status")),
   createVault: (password: string) => wrap(invoke<{ vault_id: string; words: string[] }>("create_vault", { password })),
   unlock: (password: string) => wrap(invoke<void>("unlock", { password })),
   lock: () => wrap(invoke<void>("lock")),
-  call: <T = Json>(method: string, path: string, body?: Json) => wrap(invoke<T>("api", { method, path, body: body ?? null })),
+  call: <T = Json>(method: string, path: string, body?: Json) =>
+    withOwner(() => wrap(invoke<T>("api", { method, path, body: body ?? null }))),
   secrets: () => api.call<SecretMeta[]>("GET", "/v1/secrets"),
   handles: () => api.call<HandleView[]>("GET", "/v1/handles"),
   approvals: () => api.call<Approval[]>("GET", "/v1/approvals"),

@@ -50,6 +50,23 @@ pub fn verify(expected: &Digest, presented: &str) -> bool {
     digest_eq(expected, &handle_hash(presented.as_bytes()))
 }
 
+/// Prefix for owner tokens: issued against the password or a device unlock,
+/// held in a client's memory, never written to disk.
+pub const OWNER_PREFIX: &str = "usk_o_";
+
+/// Header an owner token travels in.
+pub const OWNER_HEADER: &str = "x-usk-owner";
+
+/// A fresh owner token.
+pub fn owner_token() -> String {
+    format!("{OWNER_PREFIX}{}", random_base62(32))
+}
+
+/// Cheap shape check before hashing.
+pub fn is_owner_token_shaped(s: &str) -> bool {
+    s.starts_with(OWNER_PREFIX) && s.len() == OWNER_PREFIX.len() + 32
+}
+
 /// Write the token file with owner-only permissions.
 pub fn write_token_file(path: &Path, token: &SessionToken) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {

@@ -284,3 +284,157 @@ fn guards() {
         Err(VaultError::NoVault)
     ));
 }
+
+/// A second handle on the same file, to look at what is really stored.
+fn raw(path: &std::path::Path) -> SqliteStorage {
+    SqliteStorage::open(path).unwrap()
+}
+
+#[test]
+fn replaced_and_deleted_values_leave_nothing_behind() {
+    use unseenkey_core::storage::Storage;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vault.db");
+    let pw = SecretBytes::from("prune-test-password");
+    let (mut v, _) = Vault::create(
+        SqliteStorage::open(&path).unwrap(),
+        FixedClock(1),
+        &pw,
+        FAST,
+    )
+    .unwrap();
+    let id = v.add(new_secret("a", "first-value")).unwrap();
+    v.update_value(&id, SecretBytes::from("second-value"), BTreeMap::new())
+        .unwrap();
+    v.update_value(&id, SecretBytes::from("third-value"), BTreeMap::new())
+        .unwrap();
+    assert_eq!(v.get(&id).unwrap().value_version, 3);
+    // Only the current version of the value exists in the file.
+    let s = raw(&path);
+    assert!(s.record_version(&id, 1).unwrap().is_none());
+    assert!(s.record_version(&id, 2).unwrap().is_none());
+    assert_eq!(s.latest_record(&id).unwrap().unwrap().version, 3);
+    drop(s);
+
+    // A handle keeps only its newest record too, so removing that row cannot
+    // revive an earlier policy or a pre-revocation state.
+    let (h, _) = v
+        .create_handle(
+            &id,
+            "dev",
+            unseenkey_core::policy::Policy::allow_all(),
+            None,
+        )
+        .unwrap();
+    v.revoke_handle(&h.handle_id).unwrap();
+    let s = raw(&path);
+    assert_eq!(s.latest_record(&h.handle_id).unwrap().unwrap().version, 2);
+    assert!(s.record_version(&h.handle_id, 1).unwrap().is_none());
+    drop(s);
+
+    // Deleting a secret erases every version of the value; a tombstone marks
+    // the metadata and nothing older stays.
+    v.delete(&id).unwrap();
+    let s = raw(&path);
+    assert!(s.latest_record(&id).unwrap().is_none(), "value rows remain");
+    let meta_id = unseenkey_core::ids::Id::derived("usk/meta-record/v1", &id);
+    let latest = s.latest_record(&meta_id).unwrap().unwrap();
+    assert!(latest.deleted && latest.ciphertext.is_empty());
+    assert_eq!(
+        s.list_latest(None, true)
+            .unwrap()
+            .iter()
+            .filter(|r| r.record_id == meta_id)
+            .count(),
+        1
+    );
+    for ver in 1..latest.version {
+        assert!(s.record_version(&meta_id, ver).unwrap().is_none());
+    }
+}
+
+#[test]
+fn a_deleted_audit_head_is_tampering_not_an_old_log() {
+    use unseenkey_core::audit::HeadStatus;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vault.db");
+    let pw = SecretBytes::from("head-test-password");
+    {
+        let (mut v, _) = Vault::create(
+            SqliteStorage::open(&path).unwrap(),
+            FixedClock(1),
+            &pw,
+            FAST,
+        )
+        .unwrap();
+        v.audit("unlock", serde_json::json!({})).unwrap();
+        v.audit("use", serde_json::json!({ "n": 1 })).unwrap();
+        assert_eq!(v.audit_verify().unwrap().head, HeadStatus::Verified);
+    }
+    // What a file-level attacker does to make a cut-short log look fine.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute("DELETE FROM audit_head", [])
+        .unwrap();
+    let mut v = Vault::open(SqliteStorage::open(&path).unwrap(), FixedClock(2)).unwrap();
+    v.unlock_with_password(&pw).unwrap();
+    assert_eq!(v.audit_head_problem(), Some(HeadStatus::Removed));
+    let tampered = v.audit_events(1, Some("audit_tampered"), 10).unwrap();
+    assert_eq!(tampered.len(), 1);
+    assert_eq!(tampered[0].body["state"], "removed");
+    // The first append after unlock wrote a fresh head; the record of the
+    // removal is in the log for good.
+    assert_eq!(v.audit_verify().unwrap().head, HeadStatus::Verified);
+}
+
+#[test]
+fn a_log_that_never_had_a_head_is_still_tolerated() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vault.db");
+    let pw = SecretBytes::from("legacy-head-password");
+    {
+        let (mut v, _) = Vault::create(
+            SqliteStorage::open(&path).unwrap(),
+            FixedClock(1),
+            &pw,
+            FAST,
+        )
+        .unwrap();
+        v.audit("unlock", serde_json::json!({})).unwrap();
+    }
+    // A 0.1.0 vault: rows, no head, and no flag saying one was ever written.
+    let c = rusqlite::Connection::open(&path).unwrap();
+    c.execute("DELETE FROM audit_head", []).unwrap();
+    c.execute("UPDATE header SET audit_head_required = 0", [])
+        .unwrap();
+    drop(c);
+    let mut v = Vault::open(SqliteStorage::open(&path).unwrap(), FixedClock(2)).unwrap();
+    v.unlock_with_password(&pw).unwrap();
+    assert_eq!(v.audit_head_problem(), None);
+    assert!(v.audit_verify().unwrap().ok());
+}
+
+#[test]
+fn the_owner_can_be_confirmed_without_relocking() {
+    let pw = SecretBytes::from("confirm-me-please");
+    let (mut v, _) = Vault::create(MemoryStorage::new(), FixedClock(1), &pw, FAST).unwrap();
+    assert!(v.verify_password(&pw).is_ok());
+    assert!(matches!(
+        v.verify_password(&SecretBytes::from("not it")),
+        Err(VaultError::WrongCredential)
+    ));
+    let kek = SecretBytes::random(32);
+    let wrap = v.add_key_wrap("hello", "laptop", [1; 32], &kek).unwrap();
+    assert!(v.verify_kek(&wrap, &kek).is_ok());
+    assert!(matches!(
+        v.verify_kek(&wrap, &SecretBytes::random(32)),
+        Err(VaultError::WrongCredential)
+    ));
+    assert!(matches!(
+        v.verify_kek(&unseenkey_core::ids::Id::new_v7(9), &kek),
+        Err(VaultError::UnlockMethodNotFound)
+    ));
+    // Nothing to confirm against while locked: unlocking is the proof then.
+    v.lock();
+    assert!(matches!(v.verify_password(&pw), Err(VaultError::Locked)));
+}

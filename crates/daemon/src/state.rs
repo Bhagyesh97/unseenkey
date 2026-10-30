@@ -228,6 +228,13 @@ pub struct AppState {
     pub vault: Mutex<DaemonVault>,
     /// Hash of the session token.
     pub token_hash: Digest,
+    /// Hashes of the owner tokens issued since the last lock. An owner token
+    /// is handed out only against the password or a device unlock, lives in
+    /// the client's memory (never on disk) and is what the routes that
+    /// reveal a value, approve a request or widen access ask for. The
+    /// session token in `daemon.token` is readable by any program running as
+    /// the user, and must not be enough for those.
+    pub owner_tokens: RwLock<Vec<Digest>>,
     /// `Host` header values we accept (`127.0.0.1:port`, `localhost:port`, `[::1]:port`).
     pub allowed_hosts: std::collections::HashSet<String>,
     /// Last authenticated or brokered request, for idle locking.
@@ -291,10 +298,41 @@ impl AppState {
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
+        self.owner_tokens
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         self.oauth.lock().await.clear();
         self.emit(Event::Locked { reason });
         tracing::info!(reason, "vault locked");
         true
+    }
+
+    /// Issue an owner token. The caller has just proved it knows the password
+    /// or holds the device credential. Only the hash is kept.
+    pub fn issue_owner_token(&self) -> String {
+        let plain = crate::token::owner_token();
+        let mut held = self.owner_tokens.write().unwrap_or_else(|e| e.into_inner());
+        // Bounded: a client that keeps confirming does not grow this without end.
+        if held.len() >= 32 {
+            held.remove(0);
+        }
+        held.push(unseenkey_core::crypto::hash::handle_hash(plain.as_bytes()));
+        plain
+    }
+
+    /// Is `presented` an owner token issued since the last lock?
+    pub fn owner_token_valid(&self, presented: &str) -> bool {
+        if !crate::token::is_owner_token_shaped(presented) {
+            return false;
+        }
+        let hash = unseenkey_core::crypto::hash::handle_hash(presented.as_bytes());
+        let held = self.owner_tokens.read().unwrap_or_else(|e| e.into_inner());
+        let mut found = false;
+        for h in held.iter() {
+            found |= unseenkey_core::crypto::hash::digest_eq(h, &hash);
+        }
+        found
     }
 
     /// How careful the access Unseenkey hands out by itself is.
@@ -341,16 +379,21 @@ impl AppState {
         let _ = self.events.send(e);
     }
 
-    /// Sliding-window rate limit: at most `max` attempts per `window`.
+    /// Sliding-window rate limit on *failed* credential checks (unlock and
+    /// owner confirmation): once `max` have failed within `window`, both are
+    /// refused until the window moves on. Successes do not count, so an owner
+    /// confirming several actions in a row is not locked out, while guessing
+    /// is capped all the same.
     pub async fn unlock_allowed(&self, max: usize, window: Duration) -> bool {
         let now = Instant::now();
         let mut attempts = self.unlock_attempts.lock().await;
         attempts.retain(|t| now.duration_since(*t) < window);
-        if attempts.len() >= max {
-            return false;
-        }
-        attempts.push(now);
-        true
+        attempts.len() < max
+    }
+
+    /// Count a failed credential check toward [`AppState::unlock_allowed`].
+    pub async fn record_credential_failure(&self) {
+        self.unlock_attempts.lock().await.push(Instant::now());
     }
 
     /// Current usage snapshot for a handle (before counting this request).

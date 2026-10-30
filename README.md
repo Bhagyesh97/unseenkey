@@ -109,10 +109,12 @@ Paste a key and the provider, its allowed websites and a safe default fill in, f
 
 - **Vault:** Argon2id → XChaCha20-Poly1305, one SQLite file, keys locked in memory and zeroised on lock, 24-word recovery phrase, optional Windows Hello.
 - **Fail closed:** each secret is locked to its provider's hosts; unmatched requests, browser-origin requests and anything the broker cannot classify are refused.
-- **Audit:** hash-chained log with a keyed head, so `usk log verify` catches edits, gaps and a log cut short; the entry is committed before the response reaches the caller.
-- **Scrubbing:** the real key, its encodings and OAuth access tokens are removed from responses, logs and error messages.
+- **Audit:** hash-chained log with a keyed head, so `usk log verify` catches edits, gaps, a log cut short and a deleted head; the entry is committed before the response reaches the caller.
+- **Scrubbing:** the real key, its encodings and OAuth access tokens are removed from responses, logs and error messages. The broker negotiates compression itself and unpacks replies before scrubbing; a reply it cannot unpack is refused.
+- **Owner confirmation:** revealing a value, approving a request, enrolling a device unlock, loosening a setting and handing out or changing a policy need an owner token that only an unlock or a fresh password or Windows Hello check gives out. It lives in the CLI's or the app's memory, never on disk. The session token in `daemon.token`, which any program running as you can read, is not enough for them.
+- **Nothing old stays behind:** a replaced or deleted value, policy or handle state is erased from the file, not merely superseded.
 
-**What it does not do.** It stops *accidental* leaks (chats, git, logs, screenshots, SDK telemetry) and bounds what a *dishonest* holder of a handle can do. A process running as you with arbitrary code execution can still *use* an unlocked vault within policy, and a transparent proxy for tools like `gh` and `git` is not built yet. For a hostile agent you also want an OS sandbox. Read the [threat model](docs/04-threat-model.md) before trusting it with anything; report vulnerabilities privately per [SECURITY.md](SECURITY.md).
+**What it does not do.** It stops *accidental* leaks (chats, git, logs, screenshots, SDK telemetry) and bounds what a *dishonest* holder of a handle can do. A process running as you with arbitrary code execution can still *use* an unlocked vault within the care level, add keys, and make care-level handles, and a transparent proxy for tools like `gh` and `git` is not built yet. For a hostile agent you also want an OS sandbox. Read the [threat model](docs/04-threat-model.md) before trusting it with anything; report vulnerabilities privately per [SECURITY.md](SECURITY.md).
 
 ## Documentation and roadmap
 

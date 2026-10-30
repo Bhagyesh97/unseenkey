@@ -98,6 +98,9 @@ impl<S: Storage, C: Clock> Vault<S, C> {
             now,
         )?;
         self.storage.insert_record(&rec)?;
+        // Older versions hold older policies and a pre-revocation state;
+        // without them, removing the newest row cannot bring those back.
+        self.storage.prune_versions(&h.handle_id, version)?;
         if let Some(hash) = h.hash_bytes() {
             self.handle_hashes.insert(hash, h.handle_id);
         }
@@ -634,6 +637,13 @@ impl<S: Storage, C: Clock> Vault<S, C> {
             },
             &head,
         )?;
+        if !self.header.audit_head_required {
+            // This log has a head now: from here on a missing one is evidence
+            // of tampering, not of age. Written after the append, so a crash
+            // between the two leaves a head without the flag, never the reverse.
+            self.header.audit_head_required = true;
+            self.storage.save_header(&self.header)?;
+        }
         Ok(seq)
     }
 
@@ -698,7 +708,12 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         let mut report = audit::verify(&self.header.vault_id, &rows);
         if let Some(vk) = &self.vk {
             let head = self.storage.audit_head()?;
-            report.head = audit::check_head(&self.audit_head_key(vk), head.as_ref(), rows.last());
+            report.head = audit::check_head(
+                &self.audit_head_key(vk),
+                head.as_ref(),
+                rows.last(),
+                self.header.audit_head_required,
+            );
         }
         Ok(report)
     }

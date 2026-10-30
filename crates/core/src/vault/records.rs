@@ -100,8 +100,14 @@ impl fmt::Debug for SecretString {
 impl SecretString {
     fn from_bytes(b: &SecretBytes) -> Self {
         // Secrets are text in practice; invalid UTF-8 is preserved losslessly as hex
-        // with a marker so binary blobs round-trip.
+        // with a marker so binary blobs round-trip. Text that happens to start
+        // with a marker is escaped, so it cannot be read back as something else.
         match core::str::from_utf8(b.expose()) {
+            Ok(s) if s.starts_with("hex:") || s.starts_with("txt:") => {
+                let mut t = String::from("txt:");
+                t.push_str(s);
+                Self(t)
+            }
             Ok(s) => Self(String::from(s)),
             Err(_) => {
                 let mut s = String::from("hex:");
@@ -112,6 +118,9 @@ impl SecretString {
     }
 
     fn to_bytes(&self) -> SecretBytes {
+        if let Some(t) = self.0.strip_prefix("txt:") {
+            return SecretBytes::from_slice(t.as_bytes());
+        }
         if let Some(h) = self.0.strip_prefix("hex:") {
             if let Ok(v) = hex::decode(h) {
                 return SecretBytes::new(v);
@@ -314,8 +323,12 @@ mod tests {
         let raw = SecretBytes::new(alloc::vec![0xff, 0x00, 0xfe]);
         let s = SecretString::from_bytes(&raw);
         assert_eq!(s.to_bytes(), raw);
-        let text = SecretBytes::from("hex:not-really");
-        assert_eq!(SecretString::from_bytes(&text).to_bytes(), text);
+        // Text that looks like one of the markers comes back as typed: a
+        // password "hex:1234" is not the two bytes 0x12 0x34.
+        for text in ["hex:not-really", "hex:1234", "txt:x", "txt:hex:00", "plain"] {
+            let t = SecretBytes::from(text);
+            assert_eq!(SecretString::from_bytes(&t).to_bytes(), t, "{text}");
+        }
     }
 
     #[test]

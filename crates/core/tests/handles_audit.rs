@@ -294,11 +294,14 @@ fn keyed_head_catches_truncation_and_tolerates_old_logs() {
     );
     drop(v);
 
-    // A log from before keyed heads has none: reported, not failed, and the
-    // next event gives it one.
+    // A log from before keyed heads has none and the header never recorded
+    // one: reported, not failed, and the next event gives it one. (Deleting
+    // the head from a log that had one is tampering; see tests/vault.rs.)
     {
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.execute("DELETE FROM audit_head", []).unwrap();
+        conn.execute("UPDATE header SET audit_head_required = 0", [])
+            .unwrap();
     }
     let mut v = Vault::open(SqliteStorage::open(&path).unwrap(), FixedClock(5)).unwrap();
     v.unlock_with_password(&SecretBytes::from(PW)).unwrap();

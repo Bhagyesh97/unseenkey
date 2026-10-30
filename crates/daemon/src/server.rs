@@ -108,6 +108,12 @@ impl Running {
         self.token.plain()
     }
 
+    /// The shared state, for tests that need to park an approval or look at
+    /// counters without going through the HTTP API.
+    pub fn state_for_tests(&self) -> Arc<AppState> {
+        self.state.clone()
+    }
+
     /// Request shutdown and wait for the server to finish.
     pub async fn shutdown(self) {
         self.state.request_shutdown();
@@ -213,6 +219,7 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
     let state = Arc::new(AppState {
         vault: Mutex::new(vault),
         token_hash: token.hash(),
+        owner_tokens: RwLock::new(Vec::new()),
         allowed_hosts: allowed_hosts(addr),
         last_activity: Mutex::new(Instant::now()),
         unlock_attempts: Mutex::new(Vec::new()),
@@ -255,6 +262,7 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
     let v1 = Router::new()
         .route("/status", get(api::status))
         .route("/unlock", post(api::unlock))
+        .route("/confirm", post(api::confirm_owner))
         .route("/lock", post(api::lock))
         .route(
             "/unlock-methods",

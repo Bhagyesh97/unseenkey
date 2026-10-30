@@ -17,6 +17,7 @@ const PW: &str = "projects-test-password";
 struct C {
     base: String,
     token: String,
+    owner: std::sync::Mutex<Option<String>>,
     agent: ureq::Agent,
 }
 
@@ -32,14 +33,21 @@ impl C {
         }
     }
     fn mgmt(&self, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
-        let req = self
+        let mut req = self
             .agent
             .request(method, &format!("{}{}", self.base, path))
             .set("Authorization", &format!("Bearer {}", self.token));
-        Self::call(match body {
+        if let Some(o) = self.owner.lock().unwrap().as_ref() {
+            req = req.set("X-Usk-Owner", o);
+        }
+        let (code, v) = Self::call(match body {
             Some(b) => req.send_json(b),
             None => req.call(),
-        })
+        });
+        if code == 200 && path == "/v1/unlock" {
+            *self.owner.lock().unwrap() = v["owner_token"].as_str().map(str::to_string);
+        }
+        (code, v)
     }
     fn ok(&self, method: &str, path: &str, body: Option<Value>) -> Value {
         let (code, v) = self.mgmt(method, path, body);
@@ -95,6 +103,7 @@ async fn setup() -> (tempfile::TempDir, Running, C) {
     let c = C {
         base: format!("http://{}", r.addr),
         token: r.token().to_string(),
+        owner: std::sync::Mutex::new(None),
         agent: ureq::AgentBuilder::new()
             .max_idle_connections(0)
             .timeout(Duration::from_secs(20))

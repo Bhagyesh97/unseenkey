@@ -95,14 +95,19 @@ async fn broker_overhead_p99() {
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(10))
         .build();
+    let owner = std::cell::RefCell::new(None::<String>);
     let mgmt = |method: &str, path: &str, body: Value| -> Value {
-        agent
+        let mut req = agent
             .request(method, &format!("{base}{path}"))
-            .set("Authorization", &format!("Bearer {token}"))
-            .send_json(body)
-            .unwrap()
-            .into_json()
-            .unwrap()
+            .set("Authorization", &format!("Bearer {token}"));
+        if let Some(o) = owner.borrow().as_ref() {
+            req = req.set("X-Usk-Owner", o);
+        }
+        let v: Value = req.send_json(body).unwrap().into_json().unwrap();
+        if path == "/v1/unlock" {
+            *owner.borrow_mut() = v["owner_token"].as_str().map(str::to_string);
+        }
+        v
     };
     mgmt("POST", "/v1/unlock", json!({ "password": PW }));
     mgmt(

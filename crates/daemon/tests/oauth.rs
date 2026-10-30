@@ -97,6 +97,7 @@ struct T {
     daemon: Running,
     base: String,
     token: String,
+    owner: std::sync::Mutex<Option<String>>,
     agent: ureq::Agent,
     mock: Shared,
 }
@@ -114,14 +115,21 @@ fn outcome(r: Result<ureq::Response, ureq::Error>) -> (u16, Value) {
 
 impl T {
     fn mgmt(&self, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
-        let req = self
+        let mut req = self
             .agent
             .request(method, &format!("{}{}", self.base, path))
             .set("Authorization", &format!("Bearer {}", self.token));
-        outcome(match body {
+        if let Some(o) = self.owner.lock().unwrap().as_ref() {
+            req = req.set("X-Usk-Owner", o);
+        }
+        let (code, v) = outcome(match body {
             Some(b) => req.send_json(b),
             None => req.call(),
-        })
+        });
+        if code == 200 && path == "/v1/unlock" {
+            *self.owner.lock().unwrap() = v["owner_token"].as_str().map(str::to_string);
+        }
+        (code, v)
     }
     /// An API call the way an SDK makes it: the handle where the access token goes.
     fn call(&self, handle: &str) -> (u16, Value) {
@@ -207,6 +215,7 @@ async fn setup() -> T {
     let t = T {
         base: format!("http://{}", daemon.addr),
         token: daemon.token().to_string(),
+        owner: std::sync::Mutex::new(None),
         agent: ureq::AgentBuilder::new()
             .max_idle_connections(0)
             .timeout(Duration::from_secs(20))
