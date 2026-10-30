@@ -81,6 +81,23 @@ usk add google-oauth                                                         # p
 usk run --with DATABASE_URL=prod-db -- ./app                                 # for what cannot be proxied (audited, scrubbed)
 ```
 
+## Why not just…
+
+| | A `.env` file | A secrets manager (Doppler, Infisical, 1Password CLI, Vault) | Your own proxy | Unseenkey |
+|---|---|---|---|---|
+| Your AI tool never sees the real key | No | No, it is injected into the process | Yes | **Yes** |
+| Works offline, no account | Yes | Usually needs an account or a server | Yes | **Yes** |
+| Rules per call: host, path, method | No | No | If you build them | **Presets for 65 providers** |
+| Asks you before risky calls | No | At most for reading a secret, not per call | If you build it | **Yes, confirmed with Windows Hello or your password** |
+| Removes the key from responses | No | No | If you build it | **Yes, streamed and compressed too** |
+| Spending limits | No | No | If you build them | **Per handle and per project** |
+| Tamper-evident log of every call | No | Logs secret reads, not API calls | If you build it | **Yes** |
+| AWS signing and OAuth refresh | The key sits in the file | The key reaches the SDK | If you build them | **Done inside the broker** |
+
+**Already use a vault? Keep it.** A vault stores keys; Unseenkey stops them reaching the agent. Importers for 1Password, Bitwarden and the OS keychain are on the roadmap ([#4](https://github.com/Bhagyesh97/unseenkey/issues/4)).
+
+**Built your own proxy?** So have others: Infisical Agent Vault, fnox and OneCLI share the core idea. Unseenkey focuses on the person who owns the key: a desktop app with approvals, AWS re-signing, OAuth refresh, canary keys, a log that catches deleted entries, and next, lending a key to someone you hire.
+
 ## Install
 
 ```sh
