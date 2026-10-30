@@ -46,7 +46,7 @@
   <section class="hero">
     <div class="wrap hero-grid">
       <div class="hero-copy">
-        <a class="badge" href="https://github.com/Bhagyesh97/unseenkey/releases/latest"><b>v0.1.5</b> · open source · Windows, macOS, Linux</a>
+        <a class="badge" href="https://github.com/Bhagyesh97/unseenkey/releases/latest"><b>v0.1.6</b> · open source · Windows, macOS, Linux</a>
         <h1>Your AI <em>uses</em> your API keys. It never <em>sees</em> them.</h1>
         <p class="lead">Unseenkey keeps your keys in an encrypted vault on your own machine and gives Claude Code, Cursor, your scripts and the people you hire a <strong>handle</strong> instead. A handle works only through Unseenkey, within rules you set, and every call is logged.</p>
         <p class="lead strong">A leaked handle costs you nothing. A leaked key costs you until you notice.</p>
@@ -206,7 +206,7 @@
             <div class="care-opt"><b>Strict</b><span>Each provider's cautious default, such as Stripe read-only. Best for keys you share.</span></div>
           </div>
           <div class="note glass">
-            <b>New in 0.1.5:</b> revealing a key, approving a request or widening access needs your password or Windows Hello. Any program on your machine can read the session token, but that token alone can no longer do any of these.
+            <b>Since 0.1.5:</b> revealing a key, approving a request or widening access needs your password or Windows Hello. Any program on your machine can read the session token, but that token alone can no longer do any of these. <b>0.1.6</b> adds taking over an AI tool's connection to that list, and tells you when a new AI tool connects.
           </div>
         </div>
       </div>
@@ -370,9 +370,10 @@ cargo install --locked --git https://github.com/Bhagyesh97/unseenkey usk</pre>
         <p class="fine">Installers for Windows (MSI, EXE), macOS (DMG) and Linux (deb, rpm, AppImage), and CLI archives for every platform. The installers are not yet code-signed, so Windows SmartScreen and macOS Gatekeeper warn on first launch.</p>
       </div>
       <div data-reveal>
-        <h2>Six releases in nine days</h2>
+        <h2>Seven releases in ten days</h2>
         <p class="sub">Built in the open since 30 September. <a href="https://github.com/Bhagyesh97/unseenkey/blob/main/CHANGELOG.md">Full changelog</a>.</p>
         <ol class="releases">
+          <li><b>0.1.6</b><time>31 Oct</time><span>Security fix: an AI tool's connection cannot be taken over by another program; new connections are announced and logged.</span></li>
           <li><b>0.1.5</b><time>30 Oct</time><span>Security fixes from a full code review: owner confirmation, compressed replies scrubbed, old values erased.</span></li>
           <li><b>0.1.4</b><time>30 Oct</time><span>65 providers, keys recognised and tested on paste, the "how careful" setting, activity in plain words.</span></li>
           <li><b>0.1.3</b><time>30 Oct</time><span>Replace a key without breaking what uses it; a refused key says how to fix it.</span></li>
