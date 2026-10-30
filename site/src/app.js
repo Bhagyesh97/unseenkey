@@ -117,16 +117,35 @@ const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
   if (!box) return;
   const script = [
     { cmd: "usk init", out: ["Vault created at %APPDATA%\\Unseenkey\\vault.db", "RECOVERY PHRASE (write it down, shown once):", "  1. ••••••   2. ••••••   3. ••••••   …  24. ••••••"] },
-    { cmd: "usk add anthropic", out: ["Value (hidden): ", "Stored anthropic: Anthropic, locked to api.anthropic.com"] },
+    { cmd: "usk add anthropic", out: ["Value (hidden): ", "Detected: Anthropic", "Upstream locked to: api.anthropic.com", "Tested: works."] },
     { cmd: "usk env anthropic --policy chat", out: ['$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:7391/p/anthropic"', '$env:ANTHROPIC_API_KEY = "<h>usk_h_7Qx9mKpL2vRtWbN4cJ8sYdF3gH6zA1eU</h>"'] },
     { cmd: 'claude -p "hello"', out: ["Hello! How can I help you today?"] },
     { cmd: "usk log", out: ["#14  use   POST api.anthropic.com/v1/messages → 200   anthropic via \"anthropic env\"   1.9 ms", "#13  handle_created   anthropic env   chat", "chain ok (14 events)"] },
   ];
   const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/&lt;h&gt;/g, '<span class="h">').replace(/&lt;\/h&gt;/g, "</span>");
+  const full = (cur) => script.map((l) => `<div class="t-cmd"><span class="t-ps">$</span> ${esc(l.cmd)}${cur ? '<span class="t-cur"></span>' : ""}</div>` + l.out.map((o) => `<div class="t-out">${esc(o)}</div>`).join("")).join("");
   const renderAll = () => {
-    box.innerHTML = script.map((l) => `<div class="t-cmd"><span class="t-ps">$</span> ${esc(l.cmd)}</div>` + l.out.map((o) => `<div class="t-out">${esc(o)}</div>`).join("")).join("");
+    box.innerHTML = full(false);
   };
   if (reduced) return renderAll();
+  // Reserve the finished session's height up front, so typing it out (and
+  // starting over) never moves the rest of the page.
+  const reserve = () => {
+    const ghost = box.cloneNode(false);
+    ghost.removeAttribute("id");
+    ghost.removeAttribute("aria-label");
+    ghost.style.cssText = `position:absolute;visibility:hidden;left:-9999px;top:0;min-height:0;width:${box.offsetWidth}px`;
+    ghost.innerHTML = full(true);
+    box.parentNode.appendChild(ghost);
+    box.style.minHeight = `${ghost.offsetHeight}px`;
+    ghost.remove();
+  };
+  reserve();
+  let resizeTimer;
+  addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(reserve, 150);
+  }, { passive: true });
   let running = false;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   async function run() {

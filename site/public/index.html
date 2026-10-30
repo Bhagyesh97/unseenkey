@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Unseenkey — use API keys without seeing them</title>
-  <meta name="description" content="Let AI agents, scripts and the people you hire use your API keys without ever seeing them. A local vault and policy broker with a tamper-evident audit log. Open source, Windows, macOS and Linux.">
+  <title>Unseenkey — your AI uses your API keys, it never sees them</title>
+  <meta name="description" content="Let Claude Code, Cursor, your scripts and the people you hire use your API keys without ever seeing them. A local vault and policy broker with approvals and a tamper-evident log. 65 providers. Open source, Windows, macOS and Linux.">
   <link rel="canonical" href="https://unseenkey.com/">
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
   <link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-  <meta property="og:title" content="Unseenkey — use API keys without seeing them">
-  <meta property="og:description" content="A leaked handle costs you nothing. A leaked key costs you until you notice. Local vault + policy broker for AI agents, scripts and contractors.">
+  <meta property="og:title" content="Unseenkey — your AI uses your API keys, it never sees them">
+  <meta property="og:description" content="A leaked handle costs you nothing. A leaked key costs you until you notice. Local vault + policy broker for AI agents, scripts and the people you hire.">
   <meta property="og:image" content="https://unseenkey.com/og.png">
   <meta property="og:url" content="https://unseenkey.com/">
   <meta property="og:type" content="website">
@@ -25,13 +25,17 @@
 <header class="wrap top">
   <a class="brand" href="/"><img src="/favicon-192.png" alt="">Unseenkey</a>
   <nav>
+    <a href="#problem">Why</a>
     <a href="#how">How it works</a>
     <a href="#features">Features</a>
-    <a href="#try">Try it</a>
+    <a href="#compare">Compare</a>
+    <a href="#security">Security</a>
     <a href="#install">Install</a>
     <a href="#delegation">Hiring a developer?</a>
-    <a href="https://github.com/Bhagyesh97/unseenkey">GitHub</a>
   </nav>
+  <a class="gh" href="https://github.com/Bhagyesh97/unseenkey" aria-label="Unseenkey on GitHub" title="Unseenkey on GitHub">
+    <svg viewBox="0 0 16 16" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+  </a>
   <button id="theme" class="theme" type="button" aria-label="Theme" title="Theme: system, light or dark">
     <svg class="i-sun" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
     <svg class="i-moon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
@@ -42,13 +46,13 @@
   <section class="hero">
     <div class="wrap hero-grid">
       <div class="hero-copy">
-        <span class="badge">Open source · v0.1 alpha · Windows, macOS, Linux</span>
-        <h1>Let AI agents, scripts and the people you hire <em>use</em> your API keys — without ever <em>seeing</em> them.</h1>
-        <p class="lead">Unseenkey keeps your keys in an encrypted vault on your machine and hands out <strong>handles</strong> instead. A handle only works through the local broker, within a policy you set, and every call is logged.</p>
+        <a class="badge" href="https://github.com/Bhagyesh97/unseenkey/releases/latest"><b>v0.1.5</b> · open source · Windows, macOS, Linux</a>
+        <h1>Your AI <em>uses</em> your API keys. It never <em>sees</em> them.</h1>
+        <p class="lead">Unseenkey keeps your keys in an encrypted vault on your own machine and gives Claude Code, Cursor, your scripts and the people you hire a <strong>handle</strong> instead. A handle works only through Unseenkey, within rules you set, and every call is logged.</p>
         <p class="lead strong">A leaked handle costs you nothing. A leaked key costs you until you notice.</p>
         <div class="cta">
-          <a class="btn primary" href="#install">Install</a>
-          <a class="btn" href="https://github.com/Bhagyesh97/unseenkey">View on GitHub</a>
+          <a class="btn primary" href="#install">Install free</a>
+          <a class="btn" href="https://github.com/Bhagyesh97/unseenkey">Star on GitHub</a>
         </div>
       </div>
       <div class="hero-art" aria-hidden="true">
@@ -58,10 +62,38 @@
       </div>
     </div>
     <div class="wrap stats" data-reveal="stagger">
-      <div><b><span data-count="19">0</span></b><span>provider presets</span></div>
+      <div><b><span data-count="65">0</span></b><span>providers built in</span></div>
       <div><b><span data-count="1.9">0</span> ms</b><span>p99 broker overhead</span></div>
-      <div><b><span data-count="163">0</span></b><span>tests on every push</span></div>
+      <div><b><span data-count="214">0</span></b><span>tests on every push</span></div>
       <div><b>0 bytes</b><span>of telemetry, ever</span></div>
+    </div>
+  </section>
+
+  <section id="problem">
+    <div class="wrap">
+      <div data-reveal>
+        <h2>Keys leak faster than ever, and AI tools speed it up.</h2>
+        <p class="sub">GitGuardian scanned every public GitHub commit made in 2025. Every one of these leaks started as a real key in a file, a chat or a config. A handle in the same place is worthless.</p>
+      </div>
+      <div class="facts" data-reveal="stagger">
+        <div class="fact glass">
+          <b>28.65M</b>
+          <span>new secrets leaked on public GitHub in 2025, <strong>up 34%</strong> in a year.</span>
+        </div>
+        <div class="fact glass">
+          <b>2×</b>
+          <span>Commits made with Claude Code leaked secrets at <strong>3.2%</strong>, against 1.5% for all commits. AI writes the key wherever the code needs it.</span>
+        </div>
+        <div class="fact glass">
+          <b>24,008</b>
+          <span>secrets found in MCP config files. <strong>2,117</strong> of them still worked.</span>
+        </div>
+        <div class="fact glass">
+          <b>64%</b>
+          <span>of the keys leaked in 2022 <strong>still worked</strong> in January 2026. Rotation rarely happens.</span>
+        </div>
+      </div>
+      <p class="fine source">Source: <a href="https://blog.gitguardian.com/the-state-of-secrets-sprawl-2026/">GitGuardian, The State of Secrets Sprawl 2026</a>.</p>
     </div>
   </section>
 
@@ -70,7 +102,7 @@
       <div data-reveal>
         <h2>Two minutes with Claude Code</h2>
         <p class="sub">Add the key once. From then on every tool gets a handle, and the broker does the rest.</p>
-        <p>Works the same for OpenAI, Stripe, AWS, GitHub, Google, Slack and thirteen more providers, plus any other host. <code>--shell powershell|cmd|dotenv</code> prints the variables for your shell or <code>.env</code>. The daemon starts itself, listens on loopback only, and locks when you walk away.</p>
+        <p>Paste a key and Unseenkey works out the provider, locks the key to that provider's websites and sends one read-only request to check that it works. 65 providers are built in, among them OpenAI, Anthropic, Stripe, AWS, GitHub, Google, Supabase, ElevenLabs and DeepSeek, plus any other host. The daemon starts itself, listens on loopback only, and locks when you walk away.</p>
       </div>
       <div class="term glass" data-reveal>
         <div class="term-bar"><span></span><span></span><span></span><em>PowerShell</em></div>
@@ -84,7 +116,7 @@
       <div class="h-row" data-reveal>
         <div>
           <h2>How it works</h2>
-          <p class="sub">The key never leaves the vault except inside a request the policy allowed. Watch an allowed call go through, and a forbidden one stop at the broker.</p>
+          <p class="sub">The key never leaves the vault except inside a request the rules allowed. Watch an allowed call go through, and a forbidden one stop at the broker.</p>
         </div>
         <button id="flow-replay" class="btn small" type="button">Replay</button>
       </div>
@@ -107,7 +139,7 @@
           <text class="f-title" x="600" y="76" text-anchor="middle">Unseenkey broker</text>
           <text class="f-mono f-muted f-small" x="600" y="99" text-anchor="middle">127.0.0.1 only · vault encrypted at rest</text>
           <g class="f-step"><rect x="440" y="120" width="320" height="26" rx="6"/><text x="452" y="138">1  handle → secret, decrypted per request</text></g>
-          <g class="f-step"><rect x="440" y="150" width="320" height="26" rx="6"/><text x="452" y="168">2  policy: host · path · rate · expiry · approval</text></g>
+          <g class="f-step"><rect x="440" y="150" width="320" height="26" rx="6"/><text x="452" y="168">2  rules: host · path · rate · expiry · approval</text></g>
           <g class="f-step"><rect x="440" y="180" width="320" height="26" rx="6"/><text x="452" y="198">3  audit entry before the first byte leaves</text></g>
           <g class="f-step"><rect x="440" y="210" width="320" height="26" rx="6"/><text x="452" y="228">4  real key injected into the outgoing request</text></g>
           <g class="f-step"><rect x="440" y="240" width="320" height="26" rx="6"/><text x="452" y="258">5  response scrubbed of the real key</text></g>
@@ -121,7 +153,7 @@
             <text class="f-muted" x="1020" y="176" text-anchor="middle">sees a normal request</text>
             <text class="f-muted" x="1020" y="198" text-anchor="middle">with the real key</text>
             <text class="f-muted f-small" x="1020" y="246" text-anchor="middle">Anthropic · OpenAI · Stripe · AWS · GitHub</text>
-            <text class="f-muted f-small" x="1020" y="267" text-anchor="middle">Google · Slack · 19 presets + any host</text>
+            <text class="f-muted f-small" x="1020" y="267" text-anchor="middle">Google · Supabase · 65 providers + any host</text>
           </g>
           <!-- arrows -->
           <line class="f-arrow" x1="332" y1="150" x2="416" y2="150" marker-end="url(#arrow)"/>
@@ -133,8 +165,50 @@
             <rect id="f-pkt-bg" class="f-pkt ok" x="190" y="135" width="120" height="30" rx="15"/>
             <text id="f-pkt-label" class="f-pkt-text" x="250" y="155" text-anchor="middle">handle</text>
           </g>
-          <text class="f-muted f-small" x="600" y="402" text-anchor="middle">The key never leaves the vault except inside a request the policy allowed. Every call is in a hash-chained log.</text>
+          <text class="f-muted f-small" x="600" y="402" text-anchor="middle">The key never leaves the vault except inside a request the rules allowed. Every call is in a hash-chained log.</text>
         </svg>
+      </div>
+    </div>
+  </section>
+
+  <section id="control">
+    <div class="wrap">
+      <div data-reveal>
+        <h2>You stay in charge, in plain words.</h2>
+        <p class="sub">Risky calls wait for you. Everything else just works. And an AI tool on your machine cannot say yes on your behalf.</p>
+      </div>
+      <div class="cols-2 top-align">
+        <div class="mock-stack" data-reveal>
+          <div class="approval glass" aria-label="Example approval prompt">
+            <div class="ap-head"><span class="ap-dot"></span>Approval needed<span class="ap-timer">0:45</span></div>
+            <p class="ap-title"><b>Claude Code</b> wants to use your <b>Stripe</b> key to send a request to</p>
+            <p class="ap-req"><code>POST api.stripe.com/v1/refunds</code></p>
+            <p class="ap-why">Refunds move money out, so it asks you first.</p>
+            <div class="ap-actions" aria-hidden="true">
+              <span class="btn small">Don't allow</span>
+              <span class="btn small">Allow this once</span>
+              <span class="btn small primary">Always allow this</span>
+            </div>
+            <p class="ap-foot"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>Your answer is confirmed with Windows Hello or your password</p>
+          </div>
+          <ul class="feed glass" aria-label="Example activity">
+            <li><span class="dot ok"></span><span><b>Claude Code</b> used openai: sent api.openai.com/v1/chat/completions · OK</span></li>
+            <li><span class="dot bad"></span><span><b>“contractor”</b> was stopped from using stripe-live: the rules for this access do not allow it</span></li>
+            <li><span class="dot ok"></span><span><b>Check nothing was changed:</b> the activity log is intact</span></li>
+          </ul>
+        </div>
+        <div data-reveal>
+          <h3 class="h3">How careful should it be?</h3>
+          <p class="muted">One setting decides what AI tools may do with a key on their own.</p>
+          <div class="care">
+            <div class="care-opt"><b>Relaxed</b><span>Anything goes. Deleting things and moving money out (refunds, payouts, transfers) ask you first.</span></div>
+            <div class="care-opt on"><b>Balanced <em>default</em></b><span>Calling a model or taking a payment just works. Deletes, money out, and key, billing or account changes ask you first.</span></div>
+            <div class="care-opt"><b>Strict</b><span>Each provider's cautious default, such as Stripe read-only. Best for keys you share.</span></div>
+          </div>
+          <div class="note glass">
+            <b>New in 0.1.5:</b> revealing a key, approving a request or widening access needs your password or Windows Hello. Any program on your machine can read the session token, but that token alone can no longer do any of these.
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -149,17 +223,17 @@
         <div class="card glass">
           <span class="tag">Today</span>
           <h3>Your AI agent</h3>
-          <p>Claude Code, Cursor, Windsurf and MCP tools call APIs through the broker. The key is never in the context window, never in a transcript, never in the agent's memory. <code>usk mcp install claude-code</code>.</p>
+          <p>Claude Code, Claude Desktop, Cursor and Windsurf call APIs through the broker. The key is never in the context window, a transcript or the agent's memory. One click in the app, or <code>usk mcp install claude-code</code>.</p>
         </div>
         <div class="card glass">
           <span class="tag">Today</span>
           <h3>Your own scripts and repos</h3>
-          <p><code>usk guard fix .env</code> moves real keys into the vault and rewrites the file with handles. Commit it, screenshot it, paste it: nothing happens. Caps and canaries catch what slips through.</p>
+          <p>"Protect a project" moves the real keys out of a folder's <code>.env</code> into the vault and leaves handles behind. Commit it, screenshot it, paste it: nothing happens. Caps and canaries catch what slips through.</p>
         </div>
         <div class="card glass">
           <span class="tag soon">Next</span>
           <h3>The developer you hire</h3>
-          <p>Grant a freelancer or agency the use of a key with a policy, an expiry and a signed log, through a broker they don't control. Revoke in one click; they can prove they never held it.</p>
+          <p>Grant a freelancer or agency the use of a key with rules, an expiry and a signed log, through a broker they don't control. Revoke in one click. <a href="#delegation">Join the waitlist</a>.</p>
         </div>
       </div>
     </div>
@@ -169,18 +243,63 @@
     <div class="wrap">
       <div data-reveal>
         <h2>What a handle can do</h2>
-        <p class="sub">Each handle carries its own rules, explained in plain English, enforced before anything leaves your machine.</p>
+        <p class="sub">Each handle carries its own rules, explained in plain English and enforced before anything leaves your machine.</p>
       </div>
       <div class="grid" data-reveal="stagger">
-        <div class="card glass"><h3>Policy per handle</h3><p>Presets per provider: <code>stripe:payments</code> takes payments and refuses refunds and payouts. Paths, methods, time windows, expiry, approvals.</p></div>
-        <div class="card glass"><h3>Hard caps</h3><p><code>--cap 500/day</code>: the 501st request is refused before it leaves the machine. A stolen handle cannot run up a bill.</p></div>
+        <div class="card glass"><h3>Paste and done</h3><p>A key's shape tells Unseenkey which of 65 providers it belongs to. Allowed websites fill in, and one read-only request checks that it works.</p></div>
+        <div class="card glass"><h3>Rules per handle</h3><p>Presets per provider: <code>stripe:payments</code> takes payments and refuses refunds and payouts. Paths, methods, time windows, expiry, approvals.</p></div>
+        <div class="card glass"><h3>Hard caps</h3><p><code>--cap 500/day</code>: the 501st request is refused before it leaves the machine. Projects get a daily limit across all their keys.</p></div>
         <div class="card glass"><h3>Canaries</h3><p><code>--canary</code> makes a handle that never works. Plant it in <code>.env.example</code>; any use means someone has your files, and the vault locks.</p></div>
+        <div class="card glass"><h3>Live approvals</h3><p>Sensitive calls wait for you: allow once, always allow, or don't allow. Confirmed with Windows Hello or your password.</p></div>
+        <div class="card glass"><h3>Projects</h3><p>Keys grouped by the app that uses them. AI tools working in a project's folder see only that project's keys.</p></div>
         <div class="card glass"><h3>Incident responses</h3><p>A burst of refused requests throttles, pauses, asks you, or locks the vault. Your choice per handle; one click to resume.</p></div>
-        <div class="card glass"><h3>Live approvals</h3><p>Sensitive calls wait for you: allow once, allow always for this rule, or deny. Desktop notifications on Windows, macOS and Linux.</p></div>
-        <div class="card glass"><h3>Camouflage handles</h3><p>Handles shaped like the provider's own keys for SDKs that validate formats. Every format carries the <code>usk</code> marker.</p></div>
+        <div class="card glass"><h3>Camouflage handles</h3><p>Handles shaped like the provider's own keys (<code>sk-proj-usk-…</code>) for SDKs that check formats. Every format carries the <code>usk</code> marker.</p></div>
         <div class="card glass"><h3>AWS and OAuth2</h3><p>boto3, the AWS CLI and the JS SDK sign with a placeholder; the broker re-signs with the real key. Refresh tokens stay in the vault.</p></div>
-        <div class="card glass"><h3>Tamper-evident log</h3><p>Every call, allowed or refused, in a hash-chained audit log, written before the first byte goes out. <code>usk log verify</code>.</p></div>
-        <div class="card glass"><h3>Desktop app</h3><p>Secrets, handles, approvals and activity in one window. Windows Hello unlock, lock on sleep and screen lock, signed auto-updates.</p></div>
+        <div class="card glass"><h3>Tamper-evident log</h3><p>Every call, allowed or refused, written before the response returns. A hash chain plus a keyed head catches edits, gaps and deleted entries.</p></div>
+        <div class="card glass"><h3>Activity in plain words</h3><p>"Claude Code used openai · OK". Grouped by day, with filters and search. Click any entry for the technical record.</p></div>
+        <div class="card glass"><h3>Desktop app</h3><p>Projects, keys, agent access, approvals and activity. Windows Hello, locks when idle (5 minutes to 4 hours), on sleep and screen lock. Signed auto-updates.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="compare">
+    <div class="wrap">
+      <div data-reveal>
+        <h2>Why not just…</h2>
+        <p class="sub">Most people already handle keys one of these ways. Here is what each one leaves open.</p>
+      </div>
+      <div class="table-wrap glass" data-reveal>
+        <table class="compare">
+          <thead>
+            <tr>
+              <th scope="col"></th>
+              <th scope="col">A <code>.env</code> file</th>
+              <th scope="col">A secrets manager<small>Doppler, Infisical, 1Password CLI, Vault</small></th>
+              <th scope="col">Your own proxy</th>
+              <th scope="col" class="us">Unseenkey</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Your AI tool never sees the real key</th><td class="no">No</td><td class="no">No, it is injected into the process</td><td class="yes">Yes</td><td class="yes us">Yes</td></tr>
+            <tr><th scope="row">Works offline, no account</th><td class="yes">Yes</td><td class="mid">Usually needs an account or a server</td><td class="yes">Yes</td><td class="yes us">Yes</td></tr>
+            <tr><th scope="row">Rules per call: host, path, method</th><td class="no">No</td><td class="no">No</td><td class="mid">If you build them</td><td class="yes us">Yes, presets for 65 providers</td></tr>
+            <tr><th scope="row">Asks you before risky calls</th><td class="no">No</td><td class="mid">At most for reading a secret, not per call</td><td class="mid">If you build it</td><td class="yes us">Yes, confirmed with Windows Hello</td></tr>
+            <tr><th scope="row">Removes the key from responses</th><td class="no">No</td><td class="no">No</td><td class="mid">If you build it</td><td class="yes us">Yes, streamed and compressed too</td></tr>
+            <tr><th scope="row">Spending limits</th><td class="no">No</td><td class="no">No</td><td class="mid">If you build them</td><td class="yes us">Per handle and per project</td></tr>
+            <tr><th scope="row">Tamper-evident log of every call</th><td class="no">No</td><td class="mid">Logs secret reads, not API calls</td><td class="mid">If you build it</td><td class="yes us">Yes</td></tr>
+            <tr><th scope="row">AWS signing and OAuth refresh</th><td class="mid">The key sits in the file</td><td class="mid">The key reaches the SDK</td><td class="mid">If you build them</td><td class="yes us">Done inside the broker</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="cols-2 top-align compare-notes" data-reveal>
+        <div>
+          <h3 class="h3">Already use a vault? Keep it.</h3>
+          <p class="muted">A vault stores keys; Unseenkey stops them reaching the agent. They work together. Importers for 1Password, Bitwarden and the OS keychain are on the roadmap.</p>
+        </div>
+        <div>
+          <h3 class="h3">Built your own proxy?</h3>
+          <p class="muted">So have others: Infisical Agent Vault, fnox and OneCLI share the core idea, which tells us the problem is real. Unseenkey focuses on the person who owns the key: a desktop app with approvals, AWS re-signing, OAuth refresh, canary keys, a log that catches deleted entries, and next, lending a key to someone you hire.</p>
+        </div>
       </div>
     </div>
   </section>
@@ -213,11 +332,29 @@
     </div>
   </section>
 
+  <section id="security">
+    <div class="wrap">
+      <div data-reveal>
+        <h2>Security, and what it does not do</h2>
+        <p class="sub">Everything here is in the open: the code, the <a href="https://github.com/Bhagyesh97/unseenkey/blob/main/docs/04-threat-model.md">threat model</a> and the <a href="https://github.com/Bhagyesh97/unseenkey/blob/main/SECURITY.md">disclosure policy</a>.</p>
+      </div>
+      <div class="grid sec" data-reveal="stagger">
+        <div class="card glass"><h3>Encrypted vault</h3><p>Argon2id (256 MiB) and XChaCha20-Poly1305. Keys locked in memory and wiped on lock. A 24-word recovery phrase; no escrow, no support-desk recovery.</p></div>
+        <div class="card glass"><h3>Owner confirmation</h3><p>Revealing a key, approving a request or widening access needs your password or Windows Hello, not just a token any program could read.</p></div>
+        <div class="card glass"><h3>Fail closed</h3><p>Each key is locked to its provider's hosts. Browser-origin requests, unmatched requests and anything the broker cannot classify are refused.</p></div>
+        <div class="card glass"><h3>Scrubbing</h3><p>The real key is removed from responses, including gzip, brotli and deflate replies, and from logs and error messages. A handle never reaches the provider.</p></div>
+        <div class="card glass"><h3>Erased, not just deleted</h3><p>Replacing or deleting a key purges every old version from the vault file, so an old copy of the file cannot give it back.</p></div>
+        <div class="card glass"><h3>Signed releases</h3><p>Every archive has a Sigstore signature and an SBOM; desktop updates are signed. Every CI action is pinned to an exact commit.</p></div>
+      </div>
+      <p class="fine limits" data-reveal><b>What it does not do.</b> It is alpha software and not yet externally audited, so use it with keys you can rotate. It stops accidental leaks and limits what misuse can do. A program running as you on an unlocked machine can still <em>use</em> keys within the rules, but it cannot take the key away or approve its own requests. It is not a sandbox; for a hostile agent you also want one.</p>
+    </div>
+  </section>
+
   <section id="install" class="install">
     <div class="wrap cols-2 top-align">
       <div data-reveal>
         <h2>Install</h2>
-        <p class="sub">Signed builds for every platform. No account, no telemetry, nothing leaves your machine.</p>
+        <p class="sub">Free and open source. No account, no telemetry, nothing leaves your machine.</p>
 <pre class="glass"><span class="c"># Windows</span>
 scoop bucket add unseenkey https://github.com/Bhagyesh97/scoop-unseenkey
 scoop install usk
@@ -227,17 +364,22 @@ brew install Bhagyesh97/unseenkey/usk
 
 <span class="c"># from source (Rust 1.85+)</span>
 cargo install --locked --git https://github.com/Bhagyesh97/unseenkey usk</pre>
-        <p class="fine">Desktop installers for Windows, macOS and Linux, and CLI archives for every platform, are on the <a href="https://github.com/Bhagyesh97/unseenkey/releases/latest">releases page</a>. Every archive has a Sigstore signature, every installer a minisign signature, and each release ships an SBOM. The installers are not yet code-signed, so Windows SmartScreen and macOS Gatekeeper warn on first launch.</p>
+        <div class="cta">
+          <a class="btn primary" href="https://github.com/Bhagyesh97/unseenkey/releases/latest">Download the desktop app</a>
+        </div>
+        <p class="fine">Installers for Windows (MSI, EXE), macOS (DMG) and Linux (deb, rpm, AppImage), and CLI archives for every platform. The installers are not yet code-signed, so Windows SmartScreen and macOS Gatekeeper warn on first launch.</p>
       </div>
       <div data-reveal>
-        <h2 id="security">Security</h2>
-        <ul class="plain">
-          <li><strong>Vault:</strong> Argon2id and XChaCha20-Poly1305, keys locked in memory, a 24-word recovery phrase, optional Windows Hello.</li>
-          <li><strong>Fail closed:</strong> each secret is locked to its provider's hosts; unmatched requests, browser-origin requests and anything the broker cannot classify are refused.</li>
-          <li><strong>Scrubbing:</strong> the real key and its encodings are removed from responses, logs and error messages.</li>
-          <li><strong>Open:</strong> Apache-2.0, a <a href="https://github.com/Bhagyesh97/unseenkey/blob/main/docs/04-threat-model.md">published threat model</a> that also says what it does not protect against, and a <a href="https://github.com/Bhagyesh97/unseenkey/blob/main/SECURITY.md">disclosure policy</a>.</li>
-        </ul>
-        <p class="fine">Alpha software, not yet externally audited. Use it with keys you can rotate. A process with code execution on your machine can still <em>use</em> an unlocked vault within policy; for a hostile agent you also want an OS sandbox.</p>
+        <h2>Six releases in nine days</h2>
+        <p class="sub">Built in the open since 30 September. <a href="https://github.com/Bhagyesh97/unseenkey/blob/main/CHANGELOG.md">Full changelog</a>.</p>
+        <ol class="releases">
+          <li><b>0.1.5</b><time>30 Oct</time><span>Security fixes from a full code review: owner confirmation, compressed replies scrubbed, old values erased.</span></li>
+          <li><b>0.1.4</b><time>30 Oct</time><span>65 providers, keys recognised and tested on paste, the "how careful" setting, activity in plain words.</span></li>
+          <li><b>0.1.3</b><time>30 Oct</time><span>Replace a key without breaking what uses it; a refused key says how to fix it.</span></li>
+          <li><b>0.1.2</b><time>24 Oct</time><span>Projects: protect a folder in one step, a daily limit per project.</span></li>
+          <li><b>0.1.1</b><time>23 Oct</time><span>The log catches deleted entries, limits survive a restart, the desktop app's design.</span></li>
+          <li><b>0.1.0</b><time>22 Oct</time><span>First public release.</span></li>
+        </ol>
       </div>
     </div>
   </section>
@@ -246,7 +388,7 @@ cargo install --locked --git https://github.com/Bhagyesh97/unseenkey usk</pre>
     <div class="wrap">
       <div class="waitlist glass" data-reveal>
         <h2>Hiring a developer? Never hand over your keys.</h2>
-        <p class="sub">Delegation is the next thing we build: a client grants a developer or agency the use of a Stripe, AWS or OpenAI key with a policy, an expiry and a signed log, through a broker the developer does not control. If you have handed a key to a contractor, or been handed one, we would like to talk to you before we build it.</p>
+        <p class="sub">Delegation is the next thing we build: a client grants a developer or agency the use of a Stripe, AWS or OpenAI key with rules, an expiry and a signed log, through a broker the developer does not control. If you have handed a key to a contractor, or been handed one, we would like to talk to you before we build it.</p>
         <form id="wl" novalidate>
           <label>Email<input type="email" name="email" required placeholder="you@company.com" autocomplete="email"></label>
           <label>You are
@@ -265,6 +407,38 @@ cargo install --locked --git https://github.com/Bhagyesh97/unseenkey usk</pre>
       </div>
     </div>
   </section>
+
+  <section id="faq">
+    <div class="wrap narrow">
+      <h2 data-reveal>Questions</h2>
+      <div class="faq" data-reveal>
+        <details>
+          <summary>Is it free?</summary>
+          <p>Yes. The local app, the CLI and every feature on this page are free and open source under Apache-2.0. The hosted part that is coming next, for sharing keys with people you hire, will be paid.</p>
+        </details>
+        <details>
+          <summary>Does it work with my tools?</summary>
+          <p>Claude Code, Claude Desktop, Cursor and Windsurf connect in one click. Any SDK that lets you set its API address works, which covers OpenAI, Anthropic, Stripe, AWS and most others. Tools that cannot change their address can use <code>usk run</code>, which is weaker: that one process sees the key, but its output is scrubbed and logged.</p>
+        </details>
+        <details>
+          <summary>Does it slow requests down?</summary>
+          <p>It adds one hop inside your own machine. Measured on a Windows laptop against a local mock server: 0.4 ms at the median and 1.9 ms at p99.</p>
+        </details>
+        <details>
+          <summary>What if I forget my password?</summary>
+          <p>When you create the vault you get 24 recovery words, shown once. Write them down. There is no other way back in, by design.</p>
+        </details>
+        <details>
+          <summary>Can I use it on servers or in CI?</summary>
+          <p>Not yet. Today it is built for your own machine: development and AI tools.</p>
+        </details>
+        <details>
+          <summary>Why should I trust it with my keys?</summary>
+          <p>Your keys never leave your machine. There is no server, no account and no analytics. The code, the threat model and the release signatures are public. It has not had an external audit yet, so start with keys you can rotate.</p>
+        </details>
+      </div>
+    </div>
+  </section>
 </main>
 
 <footer>
@@ -272,6 +446,7 @@ cargo install --locked --git https://github.com/Bhagyesh97/unseenkey usk</pre>
     <span>© 2026 Unseenkey · Apache-2.0</span>
     <span>
       <a href="https://github.com/Bhagyesh97/unseenkey">GitHub</a> ·
+      <a href="https://github.com/Bhagyesh97/unseenkey/blob/main/CHANGELOG.md">Changelog</a> ·
       <a href="https://github.com/Bhagyesh97/unseenkey/blob/main/docs/00-README.md">Docs</a> ·
       <a href="https://github.com/Bhagyesh97/unseenkey/blob/main/SECURITY.md">Security</a> ·
       <a href="mailto:hello@unseenkey.com">hello@unseenkey.com</a>
