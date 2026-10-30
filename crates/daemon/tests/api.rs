@@ -756,3 +756,89 @@ async fn approving_latest_with_several_pending_is_refused() {
     assert_eq!(c.get("/v1/approvals").1.as_array().unwrap().len(), 2);
     r.shutdown().await;
 }
+
+/// Registering an AI tool under a name that already exists hands the new
+/// token everything approved for that name. A program that read
+/// `daemon.token` must not be able to take over Claude Code's identity that
+/// way: replacing needs the owner, and every registration is audited.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_existing_ai_tool_cannot_be_taken_over_with_the_session_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = start(dir.path(), false).await;
+    let c = C::new(&r);
+
+    // Locked: nothing can be registered, so nothing goes unaudited.
+    let (code, b) = c.post("/v1/callers", json!({ "name": "claude-code" }));
+    assert_eq!(code, 401, "{b}");
+    assert_eq!(b["error"], "vault_locked");
+
+    assert_eq!(c.post("/v1/unlock", json!({ "password": PW })).0, 200);
+    c.forget_owner();
+
+    // A new name needs only the session token.
+    let (code, first) = c.post("/v1/callers", json!({ "name": "claude-code" }));
+    assert_eq!(code, 201, "{first}");
+    let first = first["token"].as_str().unwrap().to_string();
+
+    // The same name again: refused, with or without asking to replace.
+    let (code, b) = c.post("/v1/callers", json!({ "name": "claude-code" }));
+    assert_eq!(code, 409, "{b}");
+    assert_eq!(b["error"], "caller_exists");
+    let (code, b) = c.post(
+        "/v1/callers",
+        json!({ "name": "claude-code", "replace": true }),
+    );
+    assert_eq!(code, 403, "{b}");
+    assert_eq!(b["error"], "owner_required");
+
+    // The original token still works.
+    let mcp = |token: &str| {
+        C::status_of(
+            c.agent
+                .post(&format!("{}/mcp", c.base))
+                .set("Authorization", &format!("Bearer {token}"))
+                .set("Content-Type", "application/json")
+                .send_string(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#),
+        )
+        .0
+    };
+    assert_eq!(mcp(&first), 200);
+
+    // The owner can replace it; the old token stops working.
+    assert_eq!(c.post("/v1/confirm", json!({ "password": PW })).0, 200);
+    let (code, second) = c.post(
+        "/v1/callers",
+        json!({ "name": "claude-code", "replace": true }),
+    );
+    assert_eq!(code, 201, "{second}");
+    let second = second["token"].as_str().unwrap().to_string();
+    assert_ne!(first, second);
+    assert_eq!(mcp(&first), 401);
+    assert_eq!(mcp(&second), 200);
+
+    // Removing is audited too.
+    assert_eq!(c.delete("/v1/callers/claude-code").0, 200);
+
+    let (_, audit) = c.get("/v1/audit?since=1&limit=100");
+    let entries: Vec<(&str, &str)> = audit
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"].as_str().unwrap().starts_with("caller_"))
+        .map(|e| {
+            (
+                e["kind"].as_str().unwrap(),
+                e["body"]["name"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        entries,
+        [
+            ("caller_registered", "claude-code"),
+            ("caller_replaced", "claude-code"),
+            ("caller_removed", "claude-code"),
+        ]
+    );
+    r.shutdown().await;
+}

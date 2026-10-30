@@ -11,7 +11,7 @@ const FILTERS: { id: string; label: string; kinds: string[] }[] = [
   { id: "blocked", label: "Blocked", kinds: ["deny", "egress_blocked"] },
   { id: "alerts", label: "Alerts", kinds: ["anomaly", "canary_tripped", "audit_tampered"] },
   { id: "asks", label: "Requests to you", kinds: ["approval_required", "approval_decided", "access_requested"] },
-  { id: "changes", label: "Changes", kinds: ["secret_created", "secret_updated", "secret_deleted", "handle_created", "handle_revoked", "handle_resumed", "policy_changed", "project_created", "project_changed", "project_deleted", "settings_changed", "unlock_method_added", "unlock_method_removed", "approval_forgotten", "reveal", "inject"] },
+  { id: "changes", label: "Changes", kinds: ["secret_created", "secret_updated", "secret_deleted", "handle_created", "handle_revoked", "handle_resumed", "policy_changed", "project_created", "project_changed", "project_deleted", "settings_changed", "unlock_method_added", "unlock_method_removed", "approval_forgotten", "reveal", "inject", "caller_registered", "caller_replaced", "caller_removed"] },
   { id: "signins", label: "Lock and unlock", kinds: ["unlock", "lock"] },
 ];
 
@@ -74,6 +74,12 @@ function sentence(e: AuditEvent, names: Map<string, string>): Line {
       return { text: `Project ${s("name")} deleted (its keys stay)`, tone: "plain" };
     case "settings_changed":
       return { text: b.idle_lock_minutes === 0 ? "Auto-lock turned off" : `Auto-lock set to ${b.idle_lock_minutes} minutes`, tone: "plain" };
+    case "caller_registered":
+      return { text: `New AI tool connected: ${who(`mcp:${s("name")}`)}`, tone: "warn" };
+    case "caller_replaced":
+      return { text: `${who(`mcp:${s("name")}`)} was set up again; its old connection stopped working`, tone: "plain" };
+    case "caller_removed":
+      return { text: `${who(`mcp:${s("name")}`)} was disconnected`, tone: "plain" };
     case "unlock_method_added":
       return { text: "Windows Hello unlock turned on", tone: "ok" };
     case "unlock_method_removed":

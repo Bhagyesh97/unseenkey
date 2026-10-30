@@ -62,6 +62,13 @@ pub enum Event {
         /// `created`, `updated`, `deleted`.
         change: &'static str,
     },
+    /// An AI tool (MCP client) was registered, replaced or removed.
+    CallerChanged {
+        /// Client name, e.g. `cursor`.
+        name: String,
+        /// `registered`, `replaced`, `removed`.
+        change: &'static str,
+    },
     /// A value was revealed.
     Revealed {
         /// Secret id (hex).

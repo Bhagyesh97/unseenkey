@@ -1775,19 +1775,60 @@ pub async fn approvals_decide(
 pub struct CreateCaller {
     /// Client name, e.g. `cursor`, `claude-code`.
     pub name: String,
+    /// Replace the token of a client that is already registered (owner only).
+    #[serde(default)]
+    pub replace: bool,
 }
 
 /// `POST /v1/callers` — register an MCP client; returns its token once.
+///
+/// A new name needs only the session token: the client starts with what an
+/// AI tool's first use of a key gets anyway. An existing name is refused with
+/// `caller_exists` unless the request says `replace` and carries the owner
+/// token, because the new token inherits everything approved for that name;
+/// otherwise any program that read `daemon.token` could take over Claude
+/// Code's identity. Both need an unlocked vault, so every registration is in
+/// the audit log.
 pub async fn callers_create(
     State(s): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<CreateCaller>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let mut v = s.vault.lock().await;
+    if v.is_locked() {
+        return Err(VaultError::Locked.into());
+    }
+    let replacing = s.callers.exists(&req.name);
+    if replacing {
+        if !req.replace {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "caller_exists",
+                format!(
+                    "an AI tool named {:?} is already registered; replacing it gives the new token everything approved for it, so it needs the owner (`usk mcp install {}`)",
+                    req.name, req.name
+                ),
+            ));
+        }
+        require_owner(&s, &headers)?;
+    }
     let now = unseenkey_core::time::Clock::now_unix_ms(&unseenkey_core::time::SystemClock);
     let token = s
         .callers
         .create(&req.name, now)
         .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, "invalid_caller", e.to_string()))?;
-    tracing::info!(caller = %req.name, "mcp client registered");
+    let (kind, change) = if replacing {
+        (kinds::CALLER_REPLACED, "replaced")
+    } else {
+        (kinds::CALLER_REGISTERED, "registered")
+    };
+    let _ = v.audit(kind, serde_json::json!({ "name": req.name }));
+    drop(v);
+    s.emit(Event::CallerChanged {
+        name: req.name.clone(),
+        change,
+    });
+    tracing::info!(caller = %req.name, change, "mcp client registered");
     Ok((
         StatusCode::CREATED,
         Json(
@@ -1823,6 +1864,17 @@ pub async fn callers_remove(
             "no such caller",
         ));
     }
+    // Removing only takes access away, so it works while locked too; the
+    // audit entry is written when the vault is open to write it.
+    let _ = s
+        .vault
+        .lock()
+        .await
+        .audit(kinds::CALLER_REMOVED, serde_json::json!({ "name": name }));
+    s.emit(Event::CallerChanged {
+        name,
+        change: "removed",
+    });
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

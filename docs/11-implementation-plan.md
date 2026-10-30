@@ -149,6 +149,20 @@ Assumes one experienced developer full-time (with AI assistance), or a two-perso
 - SOC 2 Type II; third-party crypto audit; publish report.
 - Helm chart, SSO/SCIM for self-hosted enterprise.
 
+## Next release: 0.1.7, one-step setup for AI tools
+
+Goal: an AI tool can be connected with one command, from a Claude Code plugin or an MCP bundle, without making caller identities easier to steal. Order matters: the identity fix lands before anything registers callers on its own.
+
+1. **Caller identities cannot be taken over (security, first). Shipped on its own in 0.1.6 (2026-10-31).** `POST /v1/callers` for a name that already existed silently replaced its token, and needed only the session token any same-user program can read; the new token inherited everything approved for that caller.
+   - An existing name answers 409 `caller_exists`; replacing it needs the owner token (`X-Usk-Owner`), like other access-widening routes since 0.1.5. `usk mcp install` asks for the password when it replaces.
+   - Audit `caller_registered`, `caller_replaced` and `caller_removed`, and emit a daemon event so the app shows "New AI tool connected: <name>".
+   - Tests: replace without the owner token is refused; each action is audited.
+2. **The MCP bridge registers itself.** `usk mcp --client <name>` with no token file registers the caller with the session token (a new caller gets only care-level access, as an AI tool's first use already does), writes the token file (0600) and carries on. A 409 means the name is taken: answer with a JSON-RPC error telling the owner to run `usk mcp install <name>`, never replace it. No vault: the error says to install Unseenkey and run `usk init`.
+3. **Claude Code plugin in this repository.** `.claude-plugin/marketplace.json` (marketplace `unseenkey`) listing `plugins/unseenkey/`: a `plugin.json`, an `.mcp.json` running `usk mcp --client claude-code-plugin`, and a skill that tells Claude to use `list_secrets` / `call_api` for any API key and never to ask the user to paste one (`usk add <name>` instead). Install: `claude plugin marketplace add Bhagyesh97/unseenkey`, then `claude plugin install unseenkey@unseenkey`. `claude plugin validate` in CI. The README says to use the plugin or `usk mcp install claude-code`, not both.
+4. **MCP bundle and the official registry** (may slip to 0.1.8: it changes the release workflow). The release job builds one `.mcpb` per platform (manifest plus `usk` and `uskd`), signs it with the other artifacts and records its SHA-256; `server.json` (`io.github.Bhagyesh97/unseenkey`, `registryType: mcpb`) is published with `mcp-publisher`. The bundle still needs a vault, and its description says so. MCPB rather than crates.io, so users need no Rust toolchain.
+
+**Done:** a fresh Claude Code installs the plugin and calls an API through Unseenkey with no other setup than `usk init` and `usk add`; registering over an existing caller without the owner token is refused and audited; the server is listed at registry.modelcontextprotocol.io. Then: recommend the plugin to awesome-claude-code (it is Claude Code-specific), and automate the Scoop and Homebrew bumps.
+
 ## Suggested order of first commits (Phase 0/1 kickoff)
 
 1. `cargo new` workspace; `crates/core` with `crypto::secret_bytes` + tests.

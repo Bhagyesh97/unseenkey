@@ -254,7 +254,7 @@ fn install_mcp(state: tauri::State<'_, AppData>, client: String) -> Result<Strin
     // The installer talks to the daemon (registers the caller) and writes the
     // client's config file; it prints to stdout, which the app has no use for.
     let _g = state.connect_lock.lock().unwrap_or_else(|e| e.into_inner());
-    usk::mcp::install(&state.paths, &client, None).map_err(err_string)?;
+    usk::mcp::install_as(&state.paths, &client, None, state.owner()).map_err(err_string)?;
     Ok(format!(
         "Registered {client} and wrote its MCP config. Restart {client}, then ask it to list your unseenkey secrets."
     ))

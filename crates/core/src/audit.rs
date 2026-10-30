@@ -130,6 +130,13 @@ pub mod kinds {
     pub const PROJECT_CHANGED: &str = "project_changed";
     /// A project was deleted (its secrets and handles stay).
     pub const PROJECT_DELETED: &str = "project_deleted";
+    /// An AI tool (MCP client) was registered under a new name (`name`).
+    pub const CALLER_REGISTERED: &str = "caller_registered";
+    /// The owner replaced the token of an existing AI tool (`name`): the old
+    /// token stops working and the new one keeps what was approved for it.
+    pub const CALLER_REPLACED: &str = "caller_replaced";
+    /// An AI tool was removed (`name`).
+    pub const CALLER_REMOVED: &str = "caller_removed";
     /// On unlock, the keyed head did not match the log (`state`, `head_seq`,
     /// `last_seq`): the log was cut short or rewritten while locked. Recorded
     /// as an event because the next append replaces the head.

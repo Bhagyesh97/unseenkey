@@ -221,6 +221,7 @@ export type DaemonEvent =
   | { event: "secret_changed"; id: string; change: string }
   | { event: "project_changed"; id: string; change: string }
   | { event: "revealed"; id: string }
+  | { event: "caller_changed"; name: string; change: "registered" | "replaced" | "removed" }
   | { event: "use"; secret: string; label: string; status: number }
   | { event: "egress_blocked"; secret: string; leaked: string[] }
   | { event: "approval_requested"; id: string; label: string; secret: string; caller: string; method: string; path: string; scope: string }

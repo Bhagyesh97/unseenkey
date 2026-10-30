@@ -35,7 +35,7 @@ All responses are JSON. Errors: `{ "error": "<code>", "message": "…" }`.
 | GET/PATCH/DELETE | `/v1/projects/{id\|name}` | PATCH `{name?, paths?, cap_per_day?, notes?}` (`cap_per_day: null` removes the limit); DELETE keeps the secrets and handles |
 | POST | `/v1/projects/{ref}/secrets` | `{secret}` adds a secret; `DELETE /v1/projects/{ref}/secrets/{secret}` takes it out (it stays in the vault) |
 | GET/POST/DELETE | `/v1/unlock-methods`, `/v1/unlock-methods/{id}` | device unlock methods (Windows Hello); POST (enrolling) is **owner**; `POST /v1/unlock` and `/v1/confirm` also take `{wrap_id, kek}` |
-| GET | `/v1/callers` / POST / DELETE | manage MCP/device callers |
+| GET | `/v1/callers` / POST / DELETE | manage MCP clients. POST `{name, replace?}` needs an unlocked vault and returns the client's token once; a new name needs only the session token, an existing one answers 409 `caller_exists` unless `replace` is set and the **owner** token is sent (the new token keeps everything approved for that name). Audited as `caller_registered`, `caller_replaced`, `caller_removed`; each emits a `caller_changed` event |
 | GET | `/v1/audit?since=&kind=&limit=` | decrypted events for the owner |
 | GET | `/v1/audit/verify` | re-hash the chain; returns first broken seq if any |
 | GET | `/v1/approvals` / POST `/v1/approvals/{id}` | list pending; decide `{decision: allow\|deny, remember: bool}` (**owner**). `latest` names the one waiting request and is refused (409 `ambiguous`) when several wait |

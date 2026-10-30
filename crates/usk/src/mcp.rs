@@ -109,11 +109,63 @@ fn config_path(client: &str, home: Option<&Path>) -> Option<PathBuf> {
     Some(p)
 }
 
-/// Register `client` with the daemon and write its MCP config.
+/// Register `client` with the daemon and write its MCP config. Unlocks the
+/// vault first if needed (registrations are audited), and asks for the
+/// password again only to replace a client that is already registered.
 pub fn install(paths: &VaultPaths, client: &str, home: Option<&Path>) -> Result<(), CliError> {
+    let c = Client::connect(paths, true)?;
+    c.ensure_unlocked()?;
+    install_with(&c, paths, client, home, true)
+}
+
+/// [`install`] for a caller that cannot prompt (the desktop app): it passes
+/// the owner token it holds, and replacing an existing client fails with
+/// `owner_required` when there is none.
+pub fn install_as(
+    paths: &VaultPaths,
+    client: &str,
+    home: Option<&Path>,
+    owner: Option<String>,
+) -> Result<(), CliError> {
+    let c = Client::connect(paths, true)?;
+    c.set_owner(owner);
+    install_with(&c, paths, client, home, false)
+}
+
+/// `POST /v1/callers`; on `caller_exists`, confirm the owner and replace.
+fn register(c: &Client, client: &str, prompt: bool) -> Result<Value, CliError> {
+    match c.post("/v1/callers", json!({ "name": client })) {
+        Err(e) if e.kind == "caller_exists" => {
+            if prompt {
+                if c.owner().is_none() {
+                    println!(
+                        "{client} is already registered; replacing its token needs your password."
+                    );
+                }
+                c.ensure_owner()?;
+            } else if c.owner().is_none() {
+                return Err(CliError::with_code(
+                    1,
+                    "owner_required",
+                    format!("{client} is already registered; confirm it is you, then try again"),
+                ));
+            }
+            c.post("/v1/callers", json!({ "name": client, "replace": true }))
+        }
+        other => other,
+    }
+}
+
+fn install_with(
+    c: &Client,
+    paths: &VaultPaths,
+    client: &str,
+    home: Option<&Path>,
+    prompt: bool,
+) -> Result<(), CliError> {
     if client == "all" {
-        for c in CLIENTS {
-            install(paths, c, home)?;
+        for name in CLIENTS {
+            install_with(c, paths, name, home, prompt)?;
         }
         return Ok(());
     }
@@ -123,8 +175,7 @@ pub fn install(paths: &VaultPaths, client: &str, home: Option<&Path>) -> Result<
             CLIENTS.join(", ")
         )));
     }
-    let c = Client::connect(paths, true)?;
-    let created = c.post("/v1/callers", json!({ "name": client }))?;
+    let created = register(c, client, prompt)?;
     let token = created["token"]
         .as_str()
         .ok_or_else(|| CliError::general("daemon returned no token"))?;

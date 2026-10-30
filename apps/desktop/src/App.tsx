@@ -9,6 +9,7 @@ import { Activity } from "./pages/Activity";
 import { Agents } from "./pages/Agents";
 import { Settings } from "./pages/Settings";
 import { checkForUpdate, installUpdate, type UpdateInfo } from "./updates";
+import { who } from "./words";
 
 import icon from "./assets/icon.png";
 
@@ -99,6 +100,8 @@ export function App() {
         setToast(`${e.caller} wants to use ${e.secret}: ${e.scope}`);
       } else if (e.event === "approval_decided") {
         void api.approvals().then(setApprovals).catch(() => {});
+      } else if (e.event === "caller_changed" && e.change === "registered") {
+        setToast(`New AI tool connected: ${who(`mcp:${e.name}`)}. If you did not set it up, disconnect it with: usk mcp remove ${e.name}`);
       } else if (e.event === "egress_blocked") {
         setToast(`Blocked: a request via ${e.secret} carried ${e.leaked.join(", ")}`);
       } else if (e.event === "anomaly") {

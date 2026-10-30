@@ -99,6 +99,15 @@ impl Callers {
         Ok(token)
     }
 
+    /// Whether a caller with this name is registered.
+    pub fn exists(&self, name: &str) -> bool {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clients
+            .contains_key(name)
+    }
+
     /// Remove a caller.
     pub fn remove(&self, name: &str) -> std::io::Result<bool> {
         let mut f = self.inner.write().unwrap_or_else(|e| e.into_inner());

@@ -107,7 +107,7 @@ Read this before writing any code that touches a secret. Every mitigation here m
 
 - INV-1: Plaintext is never written to disk, logs, crash dumps or error messages.
 - INV-2: Plaintext leaves the daemon only inside an outgoing request to a host on the secret's upstream list, or via an explicitly audited reveal/injection.
-- INV-3: Management routes require the session token. The routes that reveal a value, answer an approval, enroll an unlock method, change settings or name or change a policy additionally require an owner token, issued only against the password or a device unlock, held in memory and cleared on lock. (Handles themselves are capabilities: any local caller holding one may use it within its policy; the `callers` list restricts MCP identities, not processes.)
+- INV-3: Management routes require the session token. The routes that reveal a value, answer an approval, enroll an unlock method, change settings, name or change a policy, or replace an existing MCP client's token additionally require an owner token, issued only against the password or a device unlock, held in memory and cleared on lock. (Handles themselves are capabilities: any local caller holding one may use it within its policy; the `callers` list restricts MCP identities, not processes.)
 - INV-9: A response the scrubber cannot read (an encoding the broker did not ask for) is refused, never passed through.
 - INV-10: A write erases the record versions it supersedes; a delete leaves no version of the value in the file.
 - INV-4: Every use produces exactly one audit event before the response is returned to the caller.
