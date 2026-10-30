@@ -13,6 +13,8 @@ on:
       - ".github/workflows/site.yml"
   workflow_dispatch:
 
+# Every action is pinned to a commit (its tag is in the comment), so a moved
+# tag cannot change what runs here.
 permissions:
   contents: read
   deployments: write
@@ -31,12 +33,12 @@ jobs:
             echo "ok=false" >> "$GITHUB_OUTPUT"
             echo "::notice::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID are not set; skipping the deploy"
           fi
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         if: steps.secrets.outputs.ok == 'true'
       # Wrangler from the site's own lockfile, not cloudflare/wrangler-action:
       # the repository only allows GitHub's and a short list of vetted actions,
       # and a third-party action made this workflow fail before it started.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: steps.secrets.outputs.ok == 'true'
         with:
           node-version: 22

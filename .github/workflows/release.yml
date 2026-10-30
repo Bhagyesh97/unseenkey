@@ -19,7 +19,7 @@ jobs:
     name: tag matches versions
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - shell: bash
         run: |
           set -euo pipefail
@@ -58,12 +58,12 @@ jobs:
             target: x86_64-pc-windows-msvc
             archive: zip
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
+      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2
         if: matrix.cross
         with:
           tool: cross
@@ -88,7 +88,7 @@ jobs:
           fi
           rm -rf "$name"
           ls -la
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.target }}
           path: dist/*
@@ -105,8 +105,8 @@ jobs:
       # The SBOM is generated from the source tree (Cargo.lock, package-lock.json),
       # not from the archives: syft cannot see inside a tarball of binaries and
       # produced an empty document on the first run.
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist
           merge-multiple: true
@@ -115,7 +115,7 @@ jobs:
           cd dist
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
-      - uses: sigstore/cosign-installer@v3
+      - uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9 # v3
       - name: sign (keyless, Sigstore)
         run: |
           cd dist
@@ -124,7 +124,7 @@ jobs:
           done
           ls -la
       - name: SBOM (from Cargo.lock and package-lock.json)
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           path: .
           format: cyclonedx-json
@@ -135,7 +135,7 @@ jobs:
           n=$(python3 -c "import json; print(len(json.load(open('dist/sbom.cdx.json')).get('components', [])))")
           echo "sbom components: $n"
           [ "$n" -gt 50 ] || { echo "::error::SBOM has only $n components"; exit 1; }
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         id: draft
         with:
           files: dist/*
@@ -164,21 +164,21 @@ jobs:
           - os: ubuntu-22.04
             args: ""
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Linux system libraries
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
         with:
           workspaces: apps/desktop/src-tauri
       - run: npm ci
@@ -207,7 +207,7 @@ jobs:
           echo "${{ secrets.WINDOWS_CERTIFICATE }}" | base64 -d > "$RUNNER_TEMP/cert.pfx"
           echo "TAURI_WINDOWS_SIGN_PFX=$RUNNER_TEMP/cert.pfx" >> "$GITHUB_ENV"
           echo "TAURI_WINDOWS_SIGN_PFX_PASSWORD=${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}" >> "$GITHUB_ENV"
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -231,7 +231,7 @@ jobs:
     if: always() && needs.release.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

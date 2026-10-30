@@ -3,6 +3,7 @@
 **/target/
 # Second target dir used while a running daemon/app holds target/debug/*.exe
 /target-alt/
+/target-alt-desktop/
 Cargo.lock.bak
 
 # Node / desktop UI / browser tests
