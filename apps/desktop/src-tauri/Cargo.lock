@@ -5255,7 +5255,7 @@ dependencies = [
 
 [[package]]
 name = "unseenkey-core"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "aho-corasick",
  "argon2",
@@ -5284,7 +5284,7 @@ dependencies = [
 
 [[package]]
 name = "unseenkey-daemon"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -5308,7 +5308,7 @@ dependencies = [
 
 [[package]]
 name = "unseenkey-desktop"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -5373,7 +5373,7 @@ dependencies = [
 
 [[package]]
 name = "usk"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "clap",
  "dirs",

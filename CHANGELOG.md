@@ -2,6 +2,13 @@
 
 The top section of this file becomes the release notes when a `v*` tag is pushed.
 
+## 0.1.7 — 2026-10-31
+
+- **Claude Code plugin.** `claude plugin marketplace add Bhagyesh97/unseenkey`, then `claude plugin install unseenkey@unseenkey`: Claude Code gets the Unseenkey tools and a skill that tells it to use them for any API key and never to ask you to paste one. Needs `usk` on your PATH and a vault (`usk init`). Use the plugin or `usk mcp install claude-code`, not both.
+- **An AI tool connects itself.** `usk mcp --client <name>` with no token registers the tool on first use and keeps its token, so an MCP config or plugin needs no `usk mcp install` first. It only ever registers a new name: one that is already registered, or that you disconnected, is left alone, and the tool says to run `usk mcp install <name>` (which asks for your password). While the vault is locked or not set up, the tool stays connected and says what to do instead of failing to start.
+- **A disconnected AI tool stays disconnected.** After `usk mcp remove <name>`, nothing can register that name again without your password (409 `caller_removed`); `usk mcp install <name>` reconnects it.
+- **AI tools connected from the desktop app work.** The configs the app writes run the app itself as `mcp --client <name>`, which opened the app instead of answering; the app now runs the bridge when started that way.
+
 ## 0.1.6 — 2026-10-31
 
 A security fix; no new features.
