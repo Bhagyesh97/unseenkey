@@ -132,22 +132,26 @@ pub fn install_as(
     install_with(&c, paths, client, home, false)
 }
 
-/// `POST /v1/callers`; on `caller_exists`, confirm the owner and replace.
+/// `POST /v1/callers`; on `caller_exists` or `caller_removed`, confirm the
+/// owner and register anyway.
 fn register(c: &Client, client: &str, prompt: bool) -> Result<Value, CliError> {
     match c.post("/v1/callers", json!({ "name": client })) {
-        Err(e) if e.kind == "caller_exists" => {
+        Err(e) if e.kind == "caller_exists" || e.kind == "caller_removed" => {
+            let why = if e.kind == "caller_exists" {
+                format!("{client} is already registered; replacing its token")
+            } else {
+                format!("{client} was disconnected; reconnecting it")
+            };
             if prompt {
                 if c.owner().is_none() {
-                    println!(
-                        "{client} is already registered; replacing its token needs your password."
-                    );
+                    println!("{why} needs your password.");
                 }
                 c.ensure_owner()?;
             } else if c.owner().is_none() {
                 return Err(CliError::with_code(
                     1,
                     "owner_required",
-                    format!("{client} is already registered; confirm it is you, then try again"),
+                    format!("{why} needs the owner; confirm it is you, then try again"),
                 ));
             }
             c.post("/v1/callers", json!({ "name": client, "replace": true }))
@@ -236,7 +240,7 @@ pub fn remove(paths: &VaultPaths, client: &str) -> Result<(), CliError> {
         let _ = c.delete(&format!("/v1/callers/{client}"));
     }
     let _ = std::fs::remove_file(token_path(paths, client));
-    println!("removed MCP client {client}; delete the mcpServers.unseenkey entry from its config if you no longer want it");
+    println!("removed MCP client {client}; it stays disconnected until you run `usk mcp install {client}`. You can also delete the unseenkey entry from its MCP config (or disable the plugin)");
     Ok(())
 }
 
@@ -285,20 +289,117 @@ fn client_dir() -> Option<String> {
         })
 }
 
-/// stdio ⇄ `/mcp` bridge. Runs until stdin closes.
-pub fn bridge(paths: &VaultPaths, client: &str) -> Result<(), CliError> {
-    let token = std::fs::read_to_string(token_path(paths, client))
+fn read_token(paths: &VaultPaths, client: &str) -> Option<String> {
+    std::fs::read_to_string(token_path(paths, client))
+        .ok()
         .map(|t| t.trim().to_string())
-        .map_err(|_| {
-            CliError::general(format!(
-                "no token for MCP client {client:?}; run `usk mcp install {client}`"
-            ))
-        })?;
-    let c = Client::connect(paths, true)?;
-    let url = format!("{}/mcp", c.base_url());
+        .filter(|t| !t.is_empty())
+}
+
+/// Why a bridge has no caller token. Until it has one it answers the
+/// handshake itself, gives the reason as the result of every tool call, and
+/// tries again before each message.
+enum Waiting {
+    /// Registering needs an unlocked vault (every registration is audited).
+    Locked,
+    /// The name is registered and this bridge has no token for it.
+    Taken,
+    /// The owner disconnected this name.
+    Removed,
+    /// No vault on this machine.
+    NoVault,
+    /// The daemon would not start, or refused for another reason.
+    Failed(String),
+}
+
+impl Waiting {
+    fn explain(&self, client: &str) -> String {
+        match self {
+            Waiting::Locked => "Unseenkey is locked, so this AI tool is not connected to it yet. Ask the user to unlock it (open the Unseenkey app, or run `usk unlock`), then try again.".into(),
+            Waiting::Taken => format!("An AI tool named \"{client}\" is already connected to Unseenkey, and this one has no token for it. Ask the user to run `usk mcp install {client}` to reconnect it."),
+            Waiting::Removed => format!("The user disconnected this AI tool from Unseenkey. If they want it back, they can run `usk mcp install {client}`."),
+            Waiting::NoVault => "Unseenkey is not set up on this computer. Ask the user to install it (https://unseenkey.com) and run `usk init`, then try again.".into(),
+            Waiting::Failed(e) => format!("This AI tool could not connect to Unseenkey: {e}. Ask the user to open the Unseenkey app, then try again."),
+        }
+    }
+}
+
+/// Register `client` with the session token and keep its token (0600). A new
+/// name gets what an AI tool's first use of a key gets anyway; an existing or
+/// disconnected name is never taken over from here, that needs the owner.
+fn self_register(paths: &VaultPaths, client: &str) -> Result<String, Waiting> {
+    if !paths.vault.exists() {
+        return Err(Waiting::NoVault);
+    }
+    let c = Client::connect(paths, true).map_err(|e| Waiting::Failed(e.message))?;
+    match c.post("/v1/callers", json!({ "name": client })) {
+        Ok(v) => {
+            let token = v["token"]
+                .as_str()
+                .ok_or_else(|| Waiting::Failed("the daemon returned no token".into()))?;
+            write_token(&token_path(paths, client), token)
+                .map_err(|e| Waiting::Failed(e.message))?;
+            eprintln!("unseenkey: registered MCP client {client}");
+            Ok(token.to_string())
+        }
+        Err(e) => Err(match e.kind.as_str() {
+            "vault_locked" => Waiting::Locked,
+            "caller_exists" => Waiting::Taken,
+            "caller_removed" => Waiting::Removed,
+            _ => Waiting::Failed(e.message),
+        }),
+    }
+}
+
+/// The answer to `msg` from a bridge without a token: the handshake and the
+/// lists as the daemon would give them (the reason added to the
+/// instructions), and `why` for everything else. `None` for notifications.
+fn waiting_reply(msg: &Value, why: &str) -> Option<Value> {
+    if let Value::Array(batch) = msg {
+        let replies: Vec<Value> = batch.iter().filter_map(|m| waiting_reply(m, why)).collect();
+        return (!replies.is_empty()).then_some(Value::Array(replies));
+    }
+    let id = msg.get("id")?.clone();
+    let method = msg["method"].as_str().unwrap_or("");
+    let result = match unseenkey_daemon::mcp::static_result(method, false) {
+        Some(mut r) => {
+            if let Some(text) = r["instructions"].as_str() {
+                r["instructions"] = json!(format!("{text} {why}"));
+            }
+            r
+        }
+        None if method == "tools/call" => {
+            json!({ "content": [{ "type": "text", "text": why }], "isError": true })
+        }
+        None => {
+            return Some(
+                json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32000, "message": why } }),
+            )
+        }
+    };
+    Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+}
+
+/// stdio ⇄ `/mcp` bridge. Runs until stdin closes.
+///
+/// With no token file it registers `client` itself ([`self_register`]), so
+/// an MCP config or plugin that runs `usk mcp --client <name>` needs no
+/// `usk mcp install` first. Until that works it keeps the client's session
+/// alive and says what the user has to do.
+pub fn bridge(paths: &VaultPaths, client: &str) -> Result<(), CliError> {
+    if !CLIENTS.contains(&client) && !unseenkey_daemon::callers::valid_name(client) {
+        return Err(CliError::general(format!(
+            "invalid client name {client:?}: use a-z, 0-9 and -"
+        )));
+    }
+    let mut token = read_token(paths, client);
+    let mut url: Option<String> = None;
     let dir = client_dir().map(|d| unseenkey_core::projects::encode_dir(&d));
+    // Long enough for an approval to be answered; read and write timeouts
+    // rather than a deadline, see `Client`.
     let agent = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(600))
+        .timeout_read(std::time::Duration::from_secs(600))
+        .timeout_write(std::time::Duration::from_secs(600))
         .build();
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
@@ -310,25 +411,71 @@ pub fn bridge(paths: &VaultPaths, client: &str) -> Result<(), CliError> {
         if line.trim().is_empty() {
             continue;
         }
-        let req_id = serde_json::from_str::<Value>(&line)
-            .ok()
-            .and_then(|v| v.get("id").cloned());
-        let mut req = agent
-            .post(&url)
-            .set("Authorization", &format!("Bearer {token}"))
-            .set("Content-Type", "application/json");
-        if let Some(d) = &dir {
-            req = req.set(unseenkey_daemon::mcp::PROJECT_DIR_HEADER, d);
+        let parsed = serde_json::from_str::<Value>(&line).ok();
+        let req_id = parsed.as_ref().and_then(|v| v.get("id").cloned());
+        // A second try only after a 401: the token was replaced or removed.
+        let mut out = None;
+        for _ in 0..2 {
+            if token.is_none() {
+                // `usk mcp install` or another session may have written it.
+                token = read_token(paths, client);
+            }
+            if token.is_none() {
+                match self_register(paths, client) {
+                    Ok(t) => token = Some(t),
+                    Err(w) => {
+                        let why = w.explain(client);
+                        out = match &parsed {
+                            Some(msg) => waiting_reply(msg, &why).map(|v| v.to_string()),
+                            None => req_id.clone().map(|id| {
+                                json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32700, "message": "parse error" } }).to_string()
+                            }),
+                        };
+                        break;
+                    }
+                }
+            }
+            let Some(tok) = token.clone() else { break };
+            if url.is_none() {
+                match Client::connect(paths, true) {
+                    Ok(c) => url = Some(format!("{}/mcp", c.base_url())),
+                    Err(e) => {
+                        out = req_id.clone().map(|id| {
+                            json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32000, "message": format!("unseenkey daemon unreachable: {}", e.message) } }).to_string()
+                        });
+                        break;
+                    }
+                }
+            }
+            let mut req = agent
+                .post(url.as_deref().unwrap_or_default())
+                .set("Authorization", &format!("Bearer {tok}"))
+                .set("Content-Type", "application/json");
+            if let Some(d) = &dir {
+                req = req.set(unseenkey_daemon::mcp::PROJECT_DIR_HEADER, d);
+            }
+            out = match req.send_string(&line) {
+                Ok(r) if r.status() == 202 => None,
+                Ok(r) => Some(r.into_string().unwrap_or_default()),
+                Err(ureq::Error::Status(401, _)) => {
+                    // Kept if the second try is refused as well.
+                    out = req_id.clone().map(|id| {
+                        json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32000, "message": format!("Unseenkey refused this AI tool's token. Ask the user to run `usk mcp install {client}`.") } }).to_string()
+                    });
+                    token = None;
+                    continue;
+                }
+                Err(ureq::Error::Status(_, r)) => Some(r.into_string().unwrap_or_default()),
+                Err(e) => {
+                    // The daemon may have restarted on another port.
+                    url = None;
+                    req_id.clone().map(|id| {
+                        json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32000, "message": format!("unseenkey daemon unreachable: {e}") } }).to_string()
+                    })
+                }
+            };
+            break;
         }
-        let resp = req.send_string(&line);
-        let out = match resp {
-            Ok(r) if r.status() == 202 => None,
-            Ok(r) => Some(r.into_string().unwrap_or_default()),
-            Err(ureq::Error::Status(_, r)) => Some(r.into_string().unwrap_or_default()),
-            Err(e) => req_id.map(|id| {
-                json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32000, "message": format!("unseenkey daemon unreachable: {e}") } }).to_string()
-            }),
-        };
         if let Some(text) = out {
             if text.trim().is_empty() {
                 continue;

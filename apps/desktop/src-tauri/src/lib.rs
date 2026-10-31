@@ -333,6 +333,19 @@ pub fn run_daemon(args: &[String]) -> Result<(), usk::io::CliError> {
     usk::daemon::run(opts, &paths, true)
 }
 
+/// Be the MCP stdio bridge. The configs the app writes for AI tools run this
+/// executable as `mcp --client <name>` (see `main.rs`), so connecting one from
+/// the app needs no separate `usk` install.
+pub fn run_mcp_bridge(args: &[String]) -> Result<(), usk::io::CliError> {
+    let client = args
+        .iter()
+        .position(|a| a == "--client")
+        .and_then(|i| args.get(i + 1))
+        .ok_or_else(|| usk::io::CliError::general("usage: mcp --client <name>"))?;
+    let paths = paths().map_err(usk::io::CliError::general)?;
+    usk::mcp::bridge(&paths, client)
+}
+
 fn b64(bytes: &[u8]) -> String {
     use base64::Engine as _;
     base64::engine::general_purpose::STANDARD.encode(bytes)

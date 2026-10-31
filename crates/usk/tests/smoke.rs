@@ -469,13 +469,119 @@ fn mcp_install_bridge_and_remove() {
         "bridge output must never contain a value"
     );
 
-    // Remove: token gone, bridge refuses.
+    // Remove: token gone, and the bridge does not register the name again;
+    // it answers the handshake and says how to reconnect.
     let o = usk(&vault, &["mcp", "remove", "cursor"], "");
     assert!(o.status.success(), "{}", err(&o));
     assert!(!token_file.exists());
-    let o = usk(&vault, &["mcp", "--client", "cursor"], input);
+    let lines = bridge(&vault, "cursor");
+    assert_eq!(lines[0]["result"]["serverInfo"]["name"], "unseenkey");
+    assert!(tool_text(&lines).contains("usk mcp install cursor"));
+    assert!(!token_file.exists());
+}
+
+/// Runs the stdio bridge for `client` over the handshake, the tool list and
+/// one `list_secrets` call; returns the three replies.
+fn bridge(vault: &Path, client: &str) -> Vec<serde_json::Value> {
+    let input = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"t\",\"version\":\"0\"}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"list_secrets\",\"arguments\":{}}}\n",
+    );
+    let o = usk(vault, &["mcp", "--client", client], input);
+    assert!(o.status.success(), "{}", err(&o));
+    let lines: Vec<serde_json::Value> = out(&o)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            serde_json::from_str(l).unwrap_or_else(|e| panic!("non-JSON on stdout: {l} ({e})"))
+        })
+        .collect();
+    assert_eq!(lines.len(), 3, "{}", out(&o));
+    assert!(lines[1]["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|t| t["name"] == "call_api"));
+    lines
+}
+
+fn tool_text(lines: &[serde_json::Value]) -> String {
+    lines[2]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no tool result: {}", lines[2]))
+        .to_string()
+}
+
+#[test]
+fn the_bridge_registers_itself() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    let _stop = StopDaemon(&vault);
+
+    // No vault yet: the session stays up and says how to set one up.
+    let lines = bridge(&vault, "claude-code-plugin");
+    assert!(lines[0]["result"]["instructions"]
+        .as_str()
+        .unwrap()
+        .contains("usk init"));
+    assert_eq!(lines[2]["result"]["isError"], true);
+    assert!(tool_text(&lines).contains("usk init"));
+
+    assert!(usk(&vault, &["init", "--profile", "light"], PW)
+        .status
+        .success());
+    let o = usk(
+        &vault,
+        &["add", "stripe", "--stdin"],
+        &format!("{PW}sk_live_51Habcdefghijklmnop\n"),
+    );
+    assert!(o.status.success(), "{}", err(&o));
+
+    // Unlocked: the first run registers the client and keeps its token.
+    let token_file = dir.path().join("mcp").join("claude-code-plugin.token");
+    let lines = bridge(&vault, "claude-code-plugin");
+    assert!(tool_text(&lines).contains("\"stripe\""), "{}", lines[2]);
+    let token = std::fs::read_to_string(&token_file).unwrap();
+    assert!(token.starts_with("usk_m_"));
+    let o = usk(&vault, &["mcp", "clients"], "");
+    assert!(out(&o).contains("mcp:claude-code-plugin"), "{}", out(&o));
+    // Later runs reuse it.
+    bridge(&vault, "claude-code-plugin");
+    assert_eq!(std::fs::read_to_string(&token_file).unwrap(), token);
+
+    // Locked: registering waits for an unlock; the session stays up.
+    assert!(usk(&vault, &["lock"], "").status.success());
+    let other = dir.path().join("mcp").join("other-tool.token");
+    let lines = bridge(&vault, "other-tool");
+    assert!(lines[0]["result"]["instructions"]
+        .as_str()
+        .unwrap()
+        .contains("locked"));
+    assert!(tool_text(&lines).contains("usk unlock"));
+    assert!(!other.exists());
+    assert!(usk(&vault, &["unlock"], PW).status.success());
+    let lines = bridge(&vault, "other-tool");
+    assert!(tool_text(&lines).contains("\"stripe\""), "{}", lines[2]);
+    assert!(other.exists());
+
+    // A name that is registered without this bridge's token is never taken over.
+    std::fs::remove_file(&token_file).unwrap();
+    let lines = bridge(&vault, "claude-code-plugin");
+    assert!(tool_text(&lines).contains("usk mcp install claude-code-plugin"));
+    assert!(!token_file.exists());
+    // The owner can: install asks for the password and writes a new token.
+    let o = usk(&vault, &["mcp", "install", "claude-code-plugin"], PW);
+    assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
+    assert!(out(&o).contains("needs your password"), "{}", out(&o));
+    let lines = bridge(&vault, "claude-code-plugin");
+    assert!(tool_text(&lines).contains("\"stripe\""), "{}", lines[2]);
+    assert_ne!(std::fs::read_to_string(&token_file).unwrap(), token);
+
+    // Not a name a caller can have: refused before anything is registered.
+    let o = usk(&vault, &["mcp", "--client", "Bad Name"], "");
     assert!(!o.status.success());
-    assert!(err(&o).contains("usk mcp install cursor"), "{}", err(&o));
 }
 
 #[test]

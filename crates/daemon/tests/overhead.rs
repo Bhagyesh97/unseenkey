@@ -93,7 +93,8 @@ async fn broker_overhead_p99() {
     let base = format!("http://{}", daemon.addr);
     let token = daemon.token().to_string();
     let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(10))
+        .timeout_read(Duration::from_secs(10))
+        .timeout_write(Duration::from_secs(10))
         .build();
     let owner = std::cell::RefCell::new(None::<String>);
     let mgmt = |method: &str, path: &str, body: Value| -> Value {

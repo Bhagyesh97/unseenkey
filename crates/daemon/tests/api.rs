@@ -818,6 +818,26 @@ async fn an_existing_ai_tool_cannot_be_taken_over_with_the_session_token() {
 
     // Removing is audited too.
     assert_eq!(c.delete("/v1/callers/claude-code").0, 200);
+    assert_eq!(mcp(&second), 401);
+
+    // A removed name stays removed: a program cannot register it again on
+    // its own, the owner can.
+    c.forget_owner();
+    let (code, body) = c.post("/v1/callers", json!({ "name": "claude-code" }));
+    assert_eq!(code, 409, "{body}");
+    assert_eq!(body["error"], "caller_removed");
+    let (code, body) = c.post(
+        "/v1/callers",
+        json!({ "name": "claude-code", "replace": true }),
+    );
+    assert_eq!(code, 403, "{body}");
+    assert_eq!(c.post("/v1/confirm", json!({ "password": PW })).0, 200);
+    let (code, third) = c.post(
+        "/v1/callers",
+        json!({ "name": "claude-code", "replace": true }),
+    );
+    assert_eq!(code, 201, "{third}");
+    assert_eq!(mcp(third["token"].as_str().unwrap()), 200);
 
     let (_, audit) = c.get("/v1/audit?since=1&limit=100");
     let entries: Vec<(&str, &str)> = audit
@@ -838,6 +858,7 @@ async fn an_existing_ai_tool_cannot_be_taken_over_with_the_session_token() {
             ("caller_registered", "claude-code"),
             ("caller_replaced", "claude-code"),
             ("caller_removed", "claude-code"),
+            ("caller_registered", "claude-code"),
         ]
     );
     r.shutdown().await;

@@ -218,7 +218,8 @@ async fn setup() -> Env {
         // No client-side redirects: the broker must return upstream 3xx untouched.
         agent: ureq::AgentBuilder::new()
             .max_idle_connections(0)
-            .timeout(Duration::from_secs(10))
+            .timeout_read(Duration::from_secs(10))
+            .timeout_write(Duration::from_secs(10))
             .redirects(0)
             .build(),
         daemon,
@@ -923,7 +924,8 @@ async fn compressed_responses_are_unpacked_and_scrubbed() {
         owner: std::sync::Mutex::new(None),
         agent: ureq::AgentBuilder::new()
             .max_idle_connections(0)
-            .timeout(Duration::from_secs(10))
+            .timeout_read(Duration::from_secs(10))
+            .timeout_write(Duration::from_secs(10))
             .redirects(0)
             .build(),
         daemon,

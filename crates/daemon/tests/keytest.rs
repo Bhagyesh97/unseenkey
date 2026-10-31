@@ -128,7 +128,8 @@ async fn setup() -> (tempfile::TempDir, Running, C) {
         owner: std::sync::Mutex::new(None),
         agent: ureq::AgentBuilder::new()
             .max_idle_connections(0)
-            .timeout(Duration::from_secs(20))
+            .timeout_read(Duration::from_secs(20))
+            .timeout_write(Duration::from_secs(20))
             .build(),
     };
     assert_eq!(c.post("/v1/unlock", json!({ "password": PW })).0, 200);

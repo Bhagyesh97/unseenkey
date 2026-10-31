@@ -691,8 +691,31 @@ async fn store_secret(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args: 
     }
 }
 
-/// Dispatch one JSON-RPC message. `None` for notifications.
-/// Answer one JSON-RPC message for `caller`. `dir` is the folder the client
+/// The replies that need neither the vault nor a caller: the handshake,
+/// `ping`, and the tool, resource and prompt lists. `None` for any other
+/// method. The stdio bridge answers these itself while it has no token yet.
+pub fn static_result(method: &str, allow_store: bool) -> Option<Value> {
+    Some(match method {
+        "initialize" => json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "capabilities": { "tools": { "listChanged": false }, "resources": {}, "prompts": {} },
+            "serverInfo": { "name": "unseenkey", "version": env!("CARGO_PKG_VERSION") },
+            "instructions": INSTRUCTIONS,
+        }),
+        "ping" => json!({}),
+        "tools/list" => json!({ "tools": tools(allow_store) }),
+        "resources/list" => json!({ "resources": [
+            { "uri": "usk://presets", "name": "Provider presets", "description": "Providers and their ready-made policies", "mimeType": "application/json" },
+            { "uri": "usk://audit/recent", "name": "Recent audit events", "description": "Your last 50 broker events", "mimeType": "application/json" },
+        ] }),
+        "prompts/list" => json!({ "prompts": [
+            { "name": "setup-project", "description": "Replace real keys in this project's .env with Unseenkey handles", "arguments": [] }
+        ] }),
+        _ => return None,
+    })
+}
+
+/// Answer one JSON-RPC message for `caller`. `None` for notifications. `dir` is the folder the client
 /// reported it runs in (see [`unseenkey_core::projects`]); inside a
 /// project's folder the tools see only that project's secrets.
 pub async fn handle_message(
@@ -708,15 +731,10 @@ pub async fn handle_message(
         // Notification: nothing to answer.
         return None;
     };
+    if let Some(result) = static_result(method, s.mcp_allow_store) {
+        return Some(rpc_result(id, result));
+    }
     let result = match method {
-        "initialize" => json!({
-            "protocolVersion": PROTOCOL_VERSION,
-            "capabilities": { "tools": { "listChanged": false }, "resources": {}, "prompts": {} },
-            "serverInfo": { "name": "unseenkey", "version": env!("CARGO_PKG_VERSION") },
-            "instructions": INSTRUCTIONS,
-        }),
-        "ping" => json!({}),
-        "tools/list" => json!({ "tools": tools(s.mcp_allow_store) }),
         "tools/call" => {
             let name = params["name"].as_str().unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
@@ -729,10 +747,6 @@ pub async fn handle_message(
                 other => return Some(rpc_error(id, -32602, format!("unknown tool {other:?}"))),
             }
         }
-        "resources/list" => json!({ "resources": [
-            { "uri": "usk://presets", "name": "Provider presets", "description": "Providers and their ready-made policies", "mimeType": "application/json" },
-            { "uri": "usk://audit/recent", "name": "Recent audit events", "description": "Your last 50 broker events", "mimeType": "application/json" },
-        ] }),
         "resources/read" => {
             let uri = params["uri"].as_str().unwrap_or("");
             match uri {
@@ -761,9 +775,6 @@ pub async fn handle_message(
                 _ => return Some(rpc_error(id, -32602, format!("unknown resource {uri:?}"))),
             }
         }
-        "prompts/list" => json!({ "prompts": [
-            { "name": "setup-project", "description": "Replace real keys in this project's .env with Unseenkey handles", "arguments": [] }
-        ] }),
         "prompts/get" => match params["name"].as_str() {
             Some("setup-project") => {
                 json!({ "messages": [{ "role": "user", "content": { "type": "text", "text":

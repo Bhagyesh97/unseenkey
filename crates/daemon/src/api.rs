@@ -1787,8 +1787,10 @@ pub struct CreateCaller {
 /// `caller_exists` unless the request says `replace` and carries the owner
 /// token, because the new token inherits everything approved for that name;
 /// otherwise any program that read `daemon.token` could take over Claude
-/// Code's identity. Both need an unlocked vault, so every registration is in
-/// the audit log.
+/// Code's identity. A name the owner removed is refused the same way
+/// (`caller_removed`), so a tool that registers itself on start cannot undo a
+/// disconnect. All of these need an unlocked vault, so every registration is
+/// in the audit log.
 pub async fn callers_create(
     State(s): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1799,17 +1801,29 @@ pub async fn callers_create(
         return Err(VaultError::Locked.into());
     }
     let replacing = s.callers.exists(&req.name);
-    if replacing {
-        if !req.replace {
-            return Err(ApiError::new(
+    let reconnecting = !replacing && s.callers.is_removed(&req.name);
+    if (replacing || reconnecting) && !req.replace {
+        return Err(if replacing {
+            ApiError::new(
                 StatusCode::CONFLICT,
                 "caller_exists",
                 format!(
                     "an AI tool named {:?} is already registered; replacing it gives the new token everything approved for it, so it needs the owner (`usk mcp install {}`)",
                     req.name, req.name
                 ),
-            ));
-        }
+            )
+        } else {
+            ApiError::new(
+                StatusCode::CONFLICT,
+                "caller_removed",
+                format!(
+                    "the owner disconnected the AI tool named {:?}; reconnecting it needs the owner (`usk mcp install {}`)",
+                    req.name, req.name
+                ),
+            )
+        });
+    }
+    if replacing || reconnecting {
         require_owner(&s, &headers)?;
     }
     let now = unseenkey_core::time::Clock::now_unix_ms(&unseenkey_core::time::SystemClock);

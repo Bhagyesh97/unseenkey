@@ -97,7 +97,8 @@ async fn boto3_through_the_broker_verifies_with_botocore() {
     let token = daemon.token().to_string();
     let agent = ureq::AgentBuilder::new()
         .max_idle_connections(0)
-        .timeout(Duration::from_secs(20))
+        .timeout_read(Duration::from_secs(20))
+        .timeout_write(Duration::from_secs(20))
         .build();
     // The owner token from the unlock, as the CLI and app send it: naming a
     // policy for a handle is owner-only.

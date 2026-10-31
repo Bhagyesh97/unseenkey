@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "unseenkey": {
+      "command": "usk",
+      "args": ["mcp", "--client", "claude-code-plugin"]
+    }
+  }
+}

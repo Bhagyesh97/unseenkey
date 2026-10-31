@@ -35,7 +35,7 @@ All responses are JSON. Errors: `{ "error": "<code>", "message": "…" }`.
 | GET/PATCH/DELETE | `/v1/projects/{id\|name}` | PATCH `{name?, paths?, cap_per_day?, notes?}` (`cap_per_day: null` removes the limit); DELETE keeps the secrets and handles |
 | POST | `/v1/projects/{ref}/secrets` | `{secret}` adds a secret; `DELETE /v1/projects/{ref}/secrets/{secret}` takes it out (it stays in the vault) |
 | GET/POST/DELETE | `/v1/unlock-methods`, `/v1/unlock-methods/{id}` | device unlock methods (Windows Hello); POST (enrolling) is **owner**; `POST /v1/unlock` and `/v1/confirm` also take `{wrap_id, kek}` |
-| GET | `/v1/callers` / POST / DELETE | manage MCP clients. POST `{name, replace?}` needs an unlocked vault and returns the client's token once; a new name needs only the session token, an existing one answers 409 `caller_exists` unless `replace` is set and the **owner** token is sent (the new token keeps everything approved for that name). Audited as `caller_registered`, `caller_replaced`, `caller_removed`; each emits a `caller_changed` event |
+| GET | `/v1/callers` / POST / DELETE | manage MCP clients. POST `{name, replace?}` needs an unlocked vault and returns the client's token once; a new name needs only the session token, an existing one answers 409 `caller_exists` unless `replace` is set and the **owner** token is sent (the new token keeps everything approved for that name). A name the owner removed answers 409 `caller_removed` on the same terms, so a tool that registers itself cannot undo a disconnect. Audited as `caller_registered`, `caller_replaced`, `caller_removed`; each emits a `caller_changed` event |
 | GET | `/v1/audit?since=&kind=&limit=` | decrypted events for the owner |
 | GET | `/v1/audit/verify` | re-hash the chain; returns first broken seq if any |
 | GET | `/v1/approvals` / POST `/v1/approvals/{id}` | list pending; decide `{decision: allow\|deny, remember: bool}` (**owner**). `latest` names the one waiting request and is refused (409 `ambiguous`) when several wait |
@@ -113,7 +113,7 @@ usk project add [name] [--path dir]… [--secret s]… [--cap 500]   (default: t
 usk project ls | show [name] | attach <p> <secret>… | detach <p> <secret>… | rm <p>
 usk project set <p> [--name n] [--path dir]… [--cap N | --no-cap] [--notes …]
 usk handle create <secret> --project <p>   the handle's requests count toward the project's daily limit
-usk mcp --client <name>          stdio MCP bridge to the daemon's /mcp (what the clients' configs run)
+usk mcp --client <name>          stdio MCP bridge to the daemon's /mcp (what the clients' configs run); registers <name> itself when it has no token
 usk mcp install <claude-code|claude-desktop|cursor|windsurf|all|custom-name>   register the client (usk_m_ token) and write its config
 usk mcp clients | usk mcp remove <name>
 usk approvals                    requests waiting for you (proxied calls parked on approval, MCP access requests)
@@ -136,11 +136,15 @@ Server name `unseenkey`. Transports: stdio (`usk mcp`) and `http://127.0.0.1:739
 
 **Project scope.** The stdio bridge sends the folder its client runs in as `X-Usk-Project-Dir` (percent-encoded): `USK_PROJECT_DIR` if set, else `CLAUDE_PROJECT_DIR`, else the bridge's working directory. When a project's folder contains it, every tool sees only that project's secrets (`not_in_project` otherwise), auto-created handles are made for the project (label `mcp:<client>/<project>/<secret>`), and `store_secret` adds the new secret to it. Outside every project nothing changes. The folder is the client's own claim, so this narrows what an honest agent sees; it is not a boundary against a hostile local process.
 
-Claude Desktop / Claude Code config written by `usk mcp install claude`:
+**Connecting.** `usk mcp install <client>` registers the client and writes its config; the config runs the bridge as `<usk or the desktop app> mcp --client <client>`:
 
 ```json
-{ "mcpServers": { "unseenkey": { "command": "usk", "args": ["mcp"] } } }
+{ "mcpServers": { "unseenkey": { "command": "usk", "args": ["mcp", "--client", "cursor"] } } }
 ```
+
+A bridge with no token file registers its client itself with the session token (`POST /v1/callers {name}`), keeps the token in `<vault dir>/mcp/<client>.token` and carries on, so a config or plugin that runs it needs no install step. It never replaces: a name that is registered without its token, or that the owner removed, stays as it is, and the bridge says to run `usk mcp install <client>` (which asks for the password). Until it has a token (vault locked, no vault, name taken) it answers `initialize`, `ping` and the lists itself, adds the reason to the instructions, returns the reason as the result of every tool call, and tries again before each message. A token refused mid-session (replaced or removed) is re-read from the file once before the reason is given.
+
+**Claude Code plugin.** This repository is a plugin marketplace: `claude plugin marketplace add Bhagyesh97/unseenkey`, then `claude plugin install unseenkey@unseenkey`. The plugin (`plugins/unseenkey`) runs `usk mcp --client claude-code-plugin` and adds a skill (`api-keys`) that tells Claude to use these tools for any key and never to ask for one in the chat. It needs `usk` on the PATH.
 
 ### Tools (JSON schema summaries)
 

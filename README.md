@@ -55,6 +55,15 @@ usk log                           # every call, hash-chained
 
 `--shell powershell|cmd|dotenv` prints the variables for your shell or `.env`. The daemon starts itself on first use, listens on loopback only, and locks after 15 minutes without a request or when the screen locks or the machine sleeps.
 
+**Or give Claude Code the tools.** With `usk` on your PATH and a vault (`usk init`), the Claude Code plugin connects itself on first use; Claude then calls APIs through Unseenkey and never sees a key:
+
+```sh
+claude plugin marketplace add Bhagyesh97/unseenkey
+claude plugin install unseenkey@unseenkey
+```
+
+Use the plugin or `usk mcp install claude-code`, not both, or Claude Code gets the tools twice. The plugin needs Unseenkey 0.1.7 or later.
+
 ## What a handle can do
 
 | | |
@@ -66,7 +75,7 @@ usk log                           # every call, hash-chained
 | **Approvals** | Live prompts in the desktop app or `usk approve`: allow once, allow always, deny. |
 | **Camouflage** | Handles shaped like the provider's own keys (`sk-proj-usk-…`) for SDKs that validate formats. Every format carries the `usk` marker. |
 | **AWS and OAuth2** | boto3, the AWS CLI and the JS SDK sign with a placeholder; the broker re-signs with the real key. OAuth2 refresh tokens stay in the vault; the broker keeps the access token fresh. |
-| **MCP server** | `usk mcp install claude-code` (or `claude-desktop`, `cursor`, `windsurf`): the agent gets tools, never values. |
+| **MCP server** | The Claude Code plugin, or `usk mcp install claude-code` (or `claude-desktop`, `cursor`, `windsurf`): the agent gets tools, never values. A tool connects itself on first use; taking over or reconnecting an existing one needs your password. |
 | **Projects** | Group keys by the app that uses them. `usk project protect` (or "Protect a project" in the app) moves a folder's `.env` keys into the vault in one step; AI tools working in that folder see only its keys, and a daily request limit per project stops a runaway bill. |
 | **`.env` guard** | `usk guard fix .env` moves real keys into the vault and rewrites the file with handles. |
 | **Desktop app** | Projects with a status panel, keys, agent access, approvals, activity with chain verification, one-click MCP setup, Windows Hello, signed auto-updates. |

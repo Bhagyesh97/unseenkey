@@ -1,0 +1,18 @@
+{
+  "name": "unseenkey",
+  "owner": {
+    "name": "Bhagyesh97",
+    "url": "https://github.com/Bhagyesh97"
+  },
+  "metadata": {
+    "description": "Unseenkey: use API keys without seeing them."
+  },
+  "plugins": [
+    {
+      "name": "unseenkey",
+      "source": "./plugins/unseenkey",
+      "description": "Lets Claude Code call APIs with your keys without ever seeing them, through the Unseenkey vault on your machine. Needs Unseenkey installed (usk on your PATH) and a vault (usk init).",
+      "category": "security"
+    }
+  ]
+}

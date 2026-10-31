@@ -7,7 +7,7 @@
 //! creation and written by the CLI to `<vault dir>/mcp/<name>.token` (0600).
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 use unseenkey_core::crypto::hash::{digest_eq, handle_hash, Digest};
@@ -32,6 +32,11 @@ pub struct CallerEntry {
 struct File {
     #[serde(default)]
     clients: BTreeMap<String, CallerEntry>,
+    /// Names the owner disconnected. A program cannot register them again
+    /// on its own (an MCP bridge would otherwise reconnect on its next
+    /// start); `usk mcp install` can, with the owner token.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    removed: BTreeSet<String>,
 }
 
 /// The caller registry.
@@ -76,7 +81,8 @@ impl Callers {
         std::fs::write(&self.path, text)
     }
 
-    /// Register (or re-key) a caller. Returns the plaintext token, shown once.
+    /// Register (or re-key) a caller, clearing a removal. Returns the
+    /// plaintext token, shown once.
     pub fn create(&self, name: &str, now: i64) -> std::io::Result<String> {
         if !valid_name(name) {
             return Err(std::io::Error::new(
@@ -95,6 +101,7 @@ impl Callers {
                 last_seen_at: None,
             },
         );
+        f.removed.remove(name);
         self.save(&f)?;
         Ok(token)
     }
@@ -108,11 +115,21 @@ impl Callers {
             .contains_key(name)
     }
 
-    /// Remove a caller.
+    /// Whether the owner removed this name and nobody reconnected it since.
+    pub fn is_removed(&self, name: &str) -> bool {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .removed
+            .contains(name)
+    }
+
+    /// Remove a caller; the name stays reserved (see [`Callers::is_removed`]).
     pub fn remove(&self, name: &str) -> std::io::Result<bool> {
         let mut f = self.inner.write().unwrap_or_else(|e| e.into_inner());
         let existed = f.clients.remove(name).is_some();
         if existed {
+            f.removed.insert(name.to_string());
             self.save(&f)?;
         }
         Ok(existed)
@@ -184,8 +201,14 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(!text.contains(&tok));
         assert_eq!(again.list().len(), 1);
+        assert!(!again.is_removed("cursor"));
         assert!(again.remove("cursor").unwrap());
         assert_eq!(again.verify(&tok, 4), None);
         assert!(!again.remove("cursor").unwrap());
+        // The removal survives a restart and ends when the name is registered again.
+        let reloaded = Callers::load(&path);
+        assert!(reloaded.is_removed("cursor") && !reloaded.exists("cursor"));
+        reloaded.create("cursor", 5).unwrap();
+        assert!(!reloaded.is_removed("cursor"));
     }
 }

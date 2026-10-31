@@ -14,5 +14,13 @@ fn main() {
         }
         return;
     }
+    // The MCP configs the app writes run `<exe> mcp --client <name>`.
+    if args.first().map(String::as_str) == Some("mcp") {
+        if let Err(e) = unseenkey_desktop::run_mcp_bridge(&args) {
+            eprintln!("error: {}", e.message);
+            std::process::exit(1);
+        }
+        return;
+    }
     unseenkey_desktop::run()
 }

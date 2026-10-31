@@ -36,10 +36,15 @@ impl Client {
         // One connection per request: pooling a kept-alive connection to the
         // daemon buys nothing on loopback and turns a server-side close into
         // a spurious "connection aborted" on the next command.
+        // Read and write timeouts, not `timeout()`: an overall deadline makes
+        // ureq set the socket timeout again before every read, and macOS
+        // refuses that (EINVAL, "Invalid argument") once the daemon has closed
+        // its side, failing a reply that already arrived.
         let agent = ureq::AgentBuilder::new()
             .max_idle_connections(0)
             .timeout_connect(Duration::from_secs(3))
-            .timeout(Duration::from_secs(30))
+            .timeout_read(Duration::from_secs(30))
+            .timeout_write(Duration::from_secs(30))
             .build();
         let c = Self {
             base: format!("http://{addr}"),

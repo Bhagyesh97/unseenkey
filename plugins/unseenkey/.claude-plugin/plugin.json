@@ -1,0 +1,13 @@
+{
+  "name": "unseenkey",
+  "version": "0.1.7",
+  "description": "Lets Claude Code call APIs with your keys without ever seeing them, through the Unseenkey vault on your machine. Needs Unseenkey installed (usk on your PATH) and a vault (usk init).",
+  "author": {
+    "name": "Bhagyesh97",
+    "url": "https://github.com/Bhagyesh97"
+  },
+  "homepage": "https://unseenkey.com",
+  "repository": "https://github.com/Bhagyesh97/unseenkey",
+  "license": "Apache-2.0",
+  "keywords": ["api-keys", "secrets", "vault", "security", "mcp"]
+}
