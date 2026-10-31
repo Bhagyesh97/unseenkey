@@ -8,7 +8,7 @@ import { Approvals } from "./pages/Approvals";
 import { Activity } from "./pages/Activity";
 import { Agents } from "./pages/Agents";
 import { Settings } from "./pages/Settings";
-import { checkForUpdate, installUpdate, type UpdateInfo } from "./updates";
+import { openReleases, progressText, useUpdater } from "./updates";
 import { who } from "./words";
 
 import icon from "./assets/icon.png";
@@ -43,8 +43,7 @@ export function App() {
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [toast, setToast] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
-  const [update, setUpdate] = useState<UpdateInfo | null>(null);
-  const [updating, setUpdating] = useState(false);
+  const updater = useUpdater();
   const [restarting, setRestarting] = useState(false);
   // A pending "it is you?" question from an action that needs the owner.
   const [ownerAsk, setOwnerAsk] = useState<{ resolve: (password: string | null) => void } | null>(null);
@@ -62,12 +61,6 @@ export function App() {
     setOwnerAsk(null);
     setOwnerPassword("");
   };
-
-  // One silent check at startup; failures (offline, private repo) are ignored.
-  useEffect(() => {
-    const id = setTimeout(() => void checkForUpdate().then(setUpdate).catch(() => {}), 4000);
-    return () => clearTimeout(id);
-  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -211,13 +204,20 @@ export function App() {
           </div>
         )}
         {toast && <div className="banner info">{toast}</div>}
-        {update && (
+        {updater.error ? (
+          <div className="banner error">
+            {updater.error}{" "}
+            <button className="link" onClick={() => void updater.install()}>Try again</button>
+            <button className="link" onClick={openReleases}>Download it yourself</button>
+            <button className="link" onClick={updater.dismiss}>later</button>
+          </div>
+        ) : updater.progress ? (
+          <div className="banner info">{progressText(updater.progress)}</div>
+        ) : updater.available && (
           <div className="banner info">
-            Unseenkey {update.version} is available.{" "}
-            <button className="link" disabled={updating} onClick={() => { setUpdating(true); void installUpdate().catch((e) => { setError((e as Error).message); setUpdating(false); }); }}>
-              {updating ? "Installing…" : "Install and restart"}
-            </button>
-            <button className="link" onClick={() => setUpdate(null)}>later</button>
+            Unseenkey {updater.available.version} is available.{" "}
+            <button className="link" onClick={() => void updater.install()}>Install and restart</button>
+            <button className="link" onClick={updater.dismiss}>later</button>
           </div>
         )}
         {!status ? (
@@ -230,8 +230,7 @@ export function App() {
               <Projects
                 tick={tick}
                 status={status}
-                update={update}
-                onUpdate={() => { setUpdating(true); void installUpdate().catch((e) => { setError((e as Error).message); setUpdating(false); }); }}
+                updater={updater}
                 onSettings={() => setTab("settings")}
               />
             )}
@@ -242,7 +241,7 @@ export function App() {
             )}
             {tab === "activity" && <Activity tick={tick} />}
             {tab === "agents" && <Agents />}
-            {tab === "settings" && <Settings status={status} onLock={lockNow} />}
+            {tab === "settings" && <Settings status={status} onLock={lockNow} updater={updater} />}
           </>
         )}
       </main>

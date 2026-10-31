@@ -1,6 +1,6 @@
 {
   "name": "unseenkey",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Lets Claude Code call APIs with your keys without ever seeing them, through the Unseenkey vault on your machine. Needs Unseenkey installed (usk on your PATH) and a vault (usk init).",
   "author": {
     "name": "Bhagyesh97",

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type DeviceUnlock, type Status } from "../api";
-import { checkForUpdate, installUpdate, type UpdateInfo } from "../updates";
+import { openReleases, progressText, type Updater } from "../updates";
 
 const CARE = [
   { id: "relaxed", title: "Relaxed", text: "For your own projects. AI tools can do anything; only deleting things and moving money out (refunds, payouts) ask you first." },
@@ -8,16 +8,13 @@ const CARE = [
   { id: "strict", title: "Strict", text: "Each provider's cautious default, often read only. Best when you share keys with other people." },
 ];
 
-export function Settings({ status, onLock }: { status: Status; onLock: () => Promise<void> }) {
+export function Settings({ status, onLock, updater }: { status: Status; onLock: () => Promise<void>; updater: Updater }) {
   const [path, setPath] = useState(".env");
   const [scan, setScan] = useState<{ line: number; key: string; detected: string | null; fixable: boolean }[] | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [device, setDevice] = useState<DeviceUnlock | null>(null);
   const [deviceMsg, setDeviceMsg] = useState<string | null>(null);
   const [deviceBusy, setDeviceBusy] = useState(false);
-  const [update, setUpdate] = useState<UpdateInfo | null | "none" | "checking" | "installing">(null);
-  const [updateErr, setUpdateErr] = useState<string | null>(null);
-  const [progress, setProgress] = useState<string>("");
 
   const loadDevice = () => void api.deviceStatus().then(setDevice).catch(() => setDevice(null));
   useEffect(loadDevice, [status.daemon?.locked]);
@@ -49,27 +46,6 @@ export function Settings({ status, onLock }: { status: Status; onLock: () => Pro
     }
   };
 
-  const doCheck = async () => {
-    setUpdateErr(null);
-    setUpdate("checking");
-    try {
-      const u = await checkForUpdate();
-      setUpdate(u ?? "none");
-    } catch (e) {
-      setUpdate(null);
-      setUpdateErr((e as Error).message);
-    }
-  };
-  const doInstall = async () => {
-    setUpdateErr(null);
-    setUpdate("installing");
-    try {
-      await installUpdate((d, t) => setProgress(t ? `${Math.round((100 * d) / t)}%` : `${Math.round(d / 1024)} KB`));
-    } catch (e) {
-      setUpdate(null);
-      setUpdateErr((e as Error).message);
-    }
-  };
 
   const [care, setCare] = useState<string>(status.daemon?.care ?? "balanced");
   const [careMsg, setCareMsg] = useState<string | null>(null);
@@ -160,15 +136,19 @@ export function Settings({ status, onLock }: { status: Status; onLock: () => Pro
       <h3>Updates</h3>
       <p className="muted small">Updates are signed; a bundle whose signature does not match the built-in key is refused.</p>
       <div className="actions">
-        <button disabled={update === "checking" || update === "installing"} onClick={() => void doCheck()}>{update === "checking" ? "Checking…" : "Check for updates"}</button>
-        {update && typeof update === "object" && (
-          <button className="primary" onClick={() => void doInstall()}>Install {update.version} and restart</button>
+        <button disabled={updater.checking || !!updater.progress} onClick={() => void updater.check()}>{updater.checking ? "Checking…" : "Check for updates"}</button>
+        {updater.available && (
+          <button className="primary" disabled={!!updater.progress} onClick={() => void updater.install()}>Install {updater.available.version} and restart</button>
         )}
       </div>
-      {update === "none" && <p className="muted small">You are on the latest version.</p>}
-      {update === "installing" && <p className="muted small">Downloading {progress}…</p>}
-      {update && typeof update === "object" && update.notes && <pre className="snippet">{update.notes}</pre>}
-      {updateErr && <div className="err">{updateErr}</div>}
+      {updater.upToDate && !updater.available && <p className="muted small">You are on the latest version ({status.app_version}).</p>}
+      {updater.progress && <p className="muted small">{progressText(updater.progress)}</p>}
+      {updater.available?.notes && <pre className="snippet">{updater.available.notes}</pre>}
+      {updater.error && (
+        <div className="err">
+          {updater.error} <button className="link" onClick={openReleases}>Download it yourself</button>
+        </div>
+      )}
 
       </section>
       <section className="section">

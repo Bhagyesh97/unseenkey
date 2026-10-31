@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, ago, folderName, pickFolder, type EnvFinding, type Project, type SecretMeta, type Status } from "../api";
-import type { UpdateInfo } from "../updates";
+import { progressText, type Updater } from "../updates";
 
 type Caller = { name: string; caller: string; last_seen_at: number | null };
 
@@ -12,11 +12,10 @@ const AI_TOOLS = [
 ];
 
 /** `tick` changes on every daemon event: reload in place (see Secrets). */
-export function Projects({ tick, status, update, onUpdate, onSettings }: {
+export function Projects({ tick, status, updater, onSettings }: {
   tick: number;
   status: Status;
-  update: UpdateInfo | null;
-  onUpdate: () => void;
+  updater: Updater;
   onSettings: () => void;
 }) {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -47,7 +46,7 @@ export function Projects({ tick, status, update, onUpdate, onSettings }: {
           <h2>Projects</h2>
           <button className="primary" onClick={() => { setSelected(null); setProtecting(true); }}>+ Protect a project</button>
         </header>
-        <Health status={status} callers={callers} update={update} onUpdate={onUpdate} onSettings={onSettings} onConnected={load} />
+        <Health status={status} callers={callers} updater={updater} onSettings={onSettings} onConnected={load} />
         {err && <div className="err">{err}</div>}
         {projects.length === 0 ? (
           <div className="empty">
@@ -105,11 +104,10 @@ function Usage({ p }: { p: Project }) {
 }
 
 /** Is everything working? One line each, with the fix one click away. */
-function Health({ status, callers, update, onUpdate, onSettings, onConnected }: {
+function Health({ status, callers, updater, onSettings, onConnected }: {
   status: Status;
   callers: Caller[];
-  update: UpdateInfo | null;
-  onUpdate: () => void;
+  updater: Updater;
   onSettings: () => void;
   onConnected: () => Promise<void>;
 }) {
@@ -147,11 +145,13 @@ function Health({ status, callers, update, onUpdate, onSettings, onConnected }: 
         )}
       </div>
       <div className="health-item">
-        <span className={`dot ${update ? "warn" : "ok"}`} />
-        {update ? (
+        <span className={`dot ${updater.available ? "warn" : "ok"}`} />
+        {updater.progress ? (
+          <span>{progressText(updater.progress)}</span>
+        ) : updater.available ? (
           <>
-            <span>Version {update.version} is available</span>
-            <button className="link" onClick={onUpdate}>Install</button>
+            <span>Version {updater.available.version} is available</span>
+            <button className="link" onClick={() => void updater.install()}>Install</button>
           </>
         ) : (
           <>

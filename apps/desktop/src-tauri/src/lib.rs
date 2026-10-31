@@ -457,6 +457,51 @@ fn device_unlock_remove(state: tauri::State<'_, AppData>) -> Result<(), String> 
     Ok(())
 }
 
+/// Append one line to `logs/desktop.log` (the UI's record of update failures
+/// and the like; it never holds secrets). Over 1 MiB, the old file moves aside.
+#[tauri::command]
+fn log_line(state: tauri::State<'_, AppData>, message: String) {
+    use std::io::Write;
+    let logs = &state.paths.logs;
+    let _ = std::fs::create_dir_all(logs);
+    let path = logs.join("desktop.log");
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 1 << 20) {
+        let _ = std::fs::rename(&path, logs.join("desktop.log.old"));
+    }
+    let line: String = message
+        .chars()
+        .take(2000)
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = writeln!(f, "{} {}", jiff::Timestamp::now(), line);
+    }
+}
+
+/// Open the releases page, for downloading the installer by hand when the
+/// built-in update fails. The URL is fixed; the UI cannot open anything else.
+#[tauri::command]
+fn open_releases() -> Result<(), String> {
+    const URL: &str = "https://github.com/Bhagyesh97/unseenkey/releases/latest";
+    let (program, args): (&str, &[&str]) = if cfg!(windows) {
+        ("rundll32", &["url.dll,FileProtocolHandler", URL])
+    } else if cfg!(target_os = "macos") {
+        ("open", &[URL])
+    } else {
+        ("xdg-open", &[URL])
+    };
+    let mut child = std::process::Command::new(program)
+        .args(args)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    std::thread::spawn(move || child.wait());
+    Ok(())
+}
+
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -559,7 +604,9 @@ pub fn run() {
             device_unlock_status,
             device_unlock_enroll,
             device_unlock,
-            device_unlock_remove
+            device_unlock_remove,
+            log_line,
+            open_releases
         ])
         .setup(move |app| {
             let open = MenuItem::with_id(app, "open", "Open Unseenkey", true, None::<&str>)?;

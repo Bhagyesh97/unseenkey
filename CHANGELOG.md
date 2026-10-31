@@ -2,6 +2,14 @@
 
 The top section of this file becomes the release notes when a `v*` tag is pushed.
 
+## 0.1.8 — 2026-11-01
+
+Desktop app updates; nothing else changes.
+
+- **Installing an update shows what it is doing.** The banner's "Install and restart" gave no sign of life while it downloaded, and if it failed the error vanished within ten seconds, so a click seemed to do nothing. The banner, the Projects page and Settings now share one updater: they show "Downloading 42%…" and then "Installing", and a failure stays on screen with **Try again** and **Download it yourself** (opens the releases page). Install always fetches a fresh manifest, and a background check can no longer swallow the click.
+- **The app keeps checking for updates.** It checked once, four seconds after starting; closing the window only hides it in the tray, so an app left running for days never heard of a new version. It now checks again every six hours.
+- **Update failures are logged.** Failed checks and installs are written to `logs/desktop.log` in the vault folder (beside `uskd.log`).
+
 ## 0.1.7 — 2026-10-31
 
 - **Claude Code plugin.** `claude plugin marketplace add Bhagyesh97/unseenkey`, then `claude plugin install unseenkey@unseenkey`: Claude Code gets the Unseenkey tools and a skill that tells it to use them for any API key and never to ask you to paste one. Needs `usk` on your PATH and a vault (`usk init`). Use the plugin or `usk mcp install claude-code`, not both.
