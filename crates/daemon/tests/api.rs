@@ -863,3 +863,68 @@ async fn an_existing_ai_tool_cannot_be_taken_over_with_the_session_token() {
     );
     r.shutdown().await;
 }
+
+/// A reply that ignores the request body must not cost the connection: hyper
+/// closes it when a body is left unread, the client sees a reset, and on
+/// macOS a socket call fails with "Invalid argument" although the reply
+/// arrived. Two requests with bodies on one connection, to a route that
+/// takes none and to one that refuses before reading.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unread_body_keeps_the_connection() {
+    use std::io::{Read, Write};
+    let dir = tempfile::tempdir().unwrap();
+    let r = start(dir.path(), false).await;
+    let addr = r.addr;
+    let replies = tokio::task::spawn_blocking(move || {
+        let mut s = std::net::TcpStream::connect(addr).unwrap();
+        s.set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
+        let mut replies = Vec::new();
+        for path in ["/healthz", "/v1/status", "/healthz"] {
+            // The body follows the headers a moment later, as from a client
+            // that writes them separately: the reply is out by then.
+            let head = format!(
+                "POST {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n"
+            );
+            if s.write_all(head.as_bytes()).is_err() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            if s.write_all(b"{}").is_err() {
+                break;
+            }
+            // Read one reply: headers, then Content-Length bytes.
+            let mut buf = Vec::new();
+            let mut byte = [0u8; 1];
+            while !buf.ends_with(b"\r\n\r\n") {
+                match s.read(&mut byte) {
+                    Ok(1) => buf.push(byte[0]),
+                    _ => return replies,
+                }
+            }
+            let head = String::from_utf8_lossy(&buf).to_lowercase();
+            let len: usize = head
+                .lines()
+                .find_map(|l| l.strip_prefix("content-length:"))
+                .map(|v| v.trim().parse().unwrap())
+                .unwrap_or(0);
+            let mut body = vec![0u8; len];
+            if s.read_exact(&mut body).is_err() {
+                return replies;
+            }
+            replies.push(head.lines().next().unwrap_or("").to_string());
+        }
+        replies
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        replies,
+        [
+            "http/1.1 405 method not allowed",
+            "http/1.1 401 unauthorized",
+            "http/1.1 405 method not allowed",
+        ]
+    );
+    r.shutdown().await;
+}

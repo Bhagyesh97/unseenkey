@@ -26,6 +26,34 @@ use unseenkey_core::storage::sqlite::SqliteStorage;
 use unseenkey_core::time::SystemClock;
 use unseenkey_core::vault::Vault;
 
+/// Read the whole request body before anything answers. A route that takes
+/// no body, or a refusal sent before the body is read, leaves it unread;
+/// hyper then closes the connection when the body arrives and the client
+/// gets a reset that can discard a reply it already had (Windows) or fail a
+/// socket call with "Invalid argument" (macOS).
+async fn read_body(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let (parts, body) = req.into_parts();
+    match axum::body::to_bytes(body, proxy::MAX_BODY).await {
+        Ok(bytes) => {
+            next.run(axum::extract::Request::from_parts(
+                parts,
+                axum::body::Body::from(bytes),
+            ))
+            .await
+        }
+        Err(_) => api::ApiError::new(
+            axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+            "body_too_large",
+            "request body exceeds 32 MiB",
+        )
+        .into_response(),
+    }
+}
+
 /// Startup failures.
 #[derive(Debug, thiserror::Error)]
 pub enum ServeError {
@@ -330,6 +358,7 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
         .route("/mcp", post(crate::mcp::mcp_http).get(crate::mcp::mcp_get))
         .nest("/v1", v1)
         .fallback(api::not_found)
+        .layer(axum::middleware::from_fn(read_body))
         .layer(from_fn_with_state(state.clone(), ingress_guard))
         .with_state(state.clone());
 
