@@ -1,0 +1,45 @@
+{
+  "manifest_version": "0.3",
+  "name": "unseenkey",
+  "display_name": "Unseenkey",
+  "version": "0.0.0",
+  "description": "Use your API keys without Claude ever seeing them. Calls go through the Unseenkey broker on your computer, which adds the key, checks your rules and removes the key from the reply.",
+  "long_description": "Unseenkey keeps your API keys in an encrypted vault on your computer. With this extension, Claude calls an API by naming a key; the broker adds the real key, checks the rules you set for it (for example: Stripe may take payments but not refund), asks you first before risky calls, removes the key from the response and logs the call. No secret value is ever returned to Claude.\n\n**Needs a vault on this computer.** Install the Unseenkey desktop app or the `usk` command line from https://unseenkey.com, create a vault (open the app, or run `usk init`) and add a key (`usk add stripe`). Until then the extension stays connected and tells Claude what is missing.",
+  "author": {
+    "name": "Bhagyesh97",
+    "url": "https://github.com/Bhagyesh97"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Bhagyesh97/unseenkey"
+  },
+  "homepage": "https://unseenkey.com",
+  "documentation": "https://github.com/Bhagyesh97/unseenkey/blob/main/docs/09-api-cli-mcp.md",
+  "support": "https://github.com/Bhagyesh97/unseenkey/issues",
+  "icon": "icon.png",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/usk",
+    "mcp_config": {
+      "command": "${__dirname}/server/usk",
+      "args": ["mcp", "--client", "claude-desktop"],
+      "env": {},
+      "platform_overrides": {
+        "win32": {
+          "command": "${__dirname}/server/usk.exe"
+        }
+      }
+    }
+  },
+  "tools": [
+    { "name": "list_secrets", "description": "List the keys you may use, with their provider and rules. Never returns values." },
+    { "name": "call_api", "description": "Call a provider's API with a stored key, by name. You only see the response, with the key removed." },
+    { "name": "request_access", "description": "Ask the owner to approve a call the rules hold for approval." },
+    { "name": "explain_policy", "description": "What you may do with a key, in plain English." }
+  ],
+  "keywords": ["api-keys", "secrets", "vault", "security", "credentials"],
+  "license": "Apache-2.0",
+  "compatibility": {
+    "platforms": ["darwin", "win32"]
+  }
+}
