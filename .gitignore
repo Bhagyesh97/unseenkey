@@ -8,6 +8,7 @@ Cargo.lock.bak
 
 # Node / desktop UI / browser tests
 node_modules/
+.wrangler/
 dist/
 .vite/
 tests/browser/test-results/

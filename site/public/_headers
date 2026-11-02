@@ -1,0 +1,8 @@
+# Only unseenkey.com should be in search results. The pages.dev hosts serve the
+# same files (production and every preview deployment), so they are noindex.
+# Absolute-URL rules match on the host, so these never apply to unseenkey.com.
+https://:project.pages.dev/*
+  X-Robots-Tag: noindex
+
+https://:version.:project.pages.dev/*
+  X-Robots-Tag: noindex
