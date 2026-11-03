@@ -96,7 +96,7 @@
   <section class="hero">
     <div class="wrap hero-grid">
       <div class="hero-copy">
-        <a class="badge" href="https://github.com/Bhagyesh97/unseenkey/releases/latest"><b>v0.1.8</b> · open source · Windows, macOS, Linux</a>
+        <a class="badge" href="https://github.com/Bhagyesh97/unseenkey/releases/latest"><b>v0.1.9</b> · open source · Windows, macOS, Linux</a>
         <h1>Your AI <em>uses</em> your API keys. It never <em>sees</em> them.</h1>
         <p class="lead">Unseenkey keeps your keys in an encrypted vault on your own machine and gives Claude Code, Cursor, your scripts and the people you hire a <strong>handle</strong> instead. A handle works only through Unseenkey, within rules you set, and every call is logged.</p>
         <p class="lead strong">A leaked handle costs you nothing. A leaked key costs you until you notice.</p>
@@ -152,7 +152,7 @@
       <div data-reveal>
         <h2>Two minutes with Claude Code</h2>
         <p class="sub">Add the key once. From then on every tool gets a handle, and the broker does the rest.</p>
-        <p>Paste a key and Unseenkey works out the provider, locks the key to that provider's websites and sends one read-only request to check that it works. 65 providers are built in, among them OpenAI, Anthropic, Stripe, AWS, GitHub, Google, Supabase, ElevenLabs and DeepSeek, plus any other host. The daemon starts itself, listens on loopback only, and locks when you walk away.</p>
+        <p>Paste a key and Unseenkey works out the provider, locks the key to that provider's websites and sends one read-only request to check that it works. 73 providers are built in, among them OpenAI, Anthropic, Stripe, AWS, GitHub, Google, Supabase, ElevenLabs and DeepSeek, plus any other host. The daemon starts itself, listens on loopback only, and locks when you walk away.</p>
       </div>
       <div class="term glass" data-reveal>
         <div class="term-bar"><span></span><span></span><span></span><em>PowerShell</em></div>
@@ -203,7 +203,7 @@
             <text class="f-muted" x="1020" y="176" text-anchor="middle">sees a normal request</text>
             <text class="f-muted" x="1020" y="198" text-anchor="middle">with the real key</text>
             <text class="f-muted f-small" x="1020" y="246" text-anchor="middle">Anthropic · OpenAI · Stripe · AWS · GitHub</text>
-            <text class="f-muted f-small" x="1020" y="267" text-anchor="middle">Google · Supabase · 65 providers + any host</text>
+            <text class="f-muted f-small" x="1020" y="267" text-anchor="middle">Google · Supabase · 73 providers + any host</text>
           </g>
           <!-- arrows -->
           <line class="f-arrow" x1="332" y1="150" x2="416" y2="150" marker-end="url(#arrow)"/>
@@ -296,7 +296,7 @@
         <p class="sub">Each handle carries its own rules, explained in plain English and enforced before anything leaves your machine.</p>
       </div>
       <div class="grid" data-reveal="stagger">
-        <div class="card glass"><h3>Paste and done</h3><p>A key's shape tells Unseenkey which of 65 providers it belongs to. Allowed websites fill in, and one read-only request checks that it works.</p></div>
+        <div class="card glass"><h3>Paste and done</h3><p>A key's shape tells Unseenkey which of 73 providers it belongs to. Allowed websites fill in, and one read-only request checks that it works.</p></div>
         <div class="card glass"><h3>Rules per handle</h3><p>Presets per provider: <code>stripe:payments</code> takes payments and refuses refunds and payouts. Paths, methods, time windows, expiry, approvals.</p></div>
         <div class="card glass"><h3>Hard caps</h3><p><code>--cap 500/day</code>: the 501st request is refused before it leaves the machine. Projects get a daily limit across all their keys.</p></div>
         <div class="card glass"><h3>Canaries</h3><p><code>--canary</code> makes a handle that never works. Plant it in <code>.env.example</code>; any use means someone has your files, and the vault locks.</p></div>
@@ -332,7 +332,7 @@
           <tbody>
             <tr><th scope="row">Your AI tool never sees the real key</th><td class="no">No</td><td class="no">No, it is injected into the process</td><td class="yes">Yes</td><td class="yes us">Yes</td></tr>
             <tr><th scope="row">Works offline, no account</th><td class="yes">Yes</td><td class="mid">Usually needs an account or a server</td><td class="yes">Yes</td><td class="yes us">Yes</td></tr>
-            <tr><th scope="row">Rules per call: host, path, method</th><td class="no">No</td><td class="no">No</td><td class="mid">If you build them</td><td class="yes us">Yes, presets for 65 providers</td></tr>
+            <tr><th scope="row">Rules per call: host, path, method</th><td class="no">No</td><td class="no">No</td><td class="mid">If you build them</td><td class="yes us">Yes, presets for 73 providers</td></tr>
             <tr><th scope="row">Asks you before risky calls</th><td class="no">No</td><td class="mid">At most for reading a secret, not per call</td><td class="mid">If you build it</td><td class="yes us">Yes, confirmed with Windows Hello</td></tr>
             <tr><th scope="row">Removes the key from responses</th><td class="no">No</td><td class="no">No</td><td class="mid">If you build it</td><td class="yes us">Yes, streamed and compressed too</td></tr>
             <tr><th scope="row">Spending limits</th><td class="no">No</td><td class="no">No</td><td class="mid">If you build them</td><td class="yes us">Per handle and per project</td></tr>
@@ -423,6 +423,7 @@ cargo install --locked --git https://github.com/Bhagyesh97/unseenkey usk</pre>
         <h2>Nine releases in eleven days</h2>
         <p class="sub">Built in the open since 30 September. <a href="https://github.com/Bhagyesh97/unseenkey/blob/main/CHANGELOG.md">Full changelog</a>.</p>
         <ol class="releases">
+          <li><b>0.1.9</b><time>3 Nov</time><span>Google service account keys, keys in two parts (Twilio, Razorpay and others), 73 providers, <code>usk passwd</code>, a bundle for Claude Desktop.</span></li>
           <li><b>0.1.8</b><time>1 Nov</time><span>The desktop app shows update progress and errors, and checks for updates while it runs in the tray.</span></li>
           <li><b>0.1.7</b><time>31 Oct</time><span>Claude Code plugin; AI tools connect themselves on first use; connecting from the desktop app fixed.</span></li>
           <li><b>0.1.6</b><time>31 Oct</time><span>Security fix: an AI tool's connection cannot be taken over by another program; new connections are announced and logged.</span></li>
