@@ -15,17 +15,17 @@ path = "/v4/domains?limit=1"
 
 [[policies]]
 id = "read-only"
-display = "Read domains, events and stats only"
+display = "Read events and stats only; not domains, which hold SMTP passwords, or keys"
 recommended = true
 allow = ["GET /**"]
-deny = ["* /v1/keys", "* /v1/keys/**"]
+deny = ["* /v1/keys", "* /v1/keys/**", "* /v3/domains", "* /v3/domains/**", "* /v4/domains", "* /v4/domains/**"]
 
 [[policies]]
 id = "send"
 display = "Send mail and read; no key or domain changes"
 recommended = true
 allow = ["GET /**", "POST /v3/*/messages", "POST /v3/*/messages.mime"]
-deny = ["DELETE /**", "* /v1/keys", "* /v1/keys/**"]
+deny = ["DELETE /**", "* /v1/keys", "* /v1/keys/**", "* /v3/domains", "* /v3/domains/**", "* /v4/domains", "* /v4/domains/**"]
 
 [[policies]]
 id = "full"

@@ -942,6 +942,10 @@ fn resolve(v: &crate::state::DaemonVault, r: &str) -> Result<Id, ApiError> {
 /// single-line values are trimmed; multi-line ones (PEM keys, credential
 /// files) are kept exactly as given.
 fn tidy_value(v: &mut Zeroizing<String>) {
+    // A file saved by Windows tools may start with a byte order mark.
+    if let Some(rest) = v.strip_prefix('\u{feff}') {
+        *v = Zeroizing::new(rest.to_string());
+    }
     let t = v.trim_matches(|c: char| c.is_whitespace());
     if !t.contains('\n') && t.len() != v.len() {
         *v = Zeroizing::new(t.to_string());
@@ -1071,6 +1075,8 @@ pub async fn patch_secret(
     }
     let mut v = s.vault.lock().await;
     let id = resolve(&v, &r)?;
+    // Everything is checked before anything changes: a refused request stores nothing.
+    let kind = v.get(&id)?.kind;
     if let Some(value) = &p.value {
         if value.is_empty() {
             return Err(ApiError::new(
@@ -1079,46 +1085,15 @@ pub async fn patch_secret(
                 "value is empty",
             ));
         }
-        let mut fields: BTreeMap<String, SecretBytes> = p
-            .fields
-            .iter()
-            .map(|(k, val)| (k.clone(), SecretBytes::from_slice(val.as_bytes())))
-            .collect();
-        let mut new_value = SecretBytes::from_slice(value.as_bytes());
-        // A new password keeps its username; both given at once replace both.
-        if is_pair(&v, &id)? && !fields.contains_key("username") {
-            if let Some((user, pass)) = providers::split_pair(value) {
-                new_value = SecretBytes::from_slice(pass.as_bytes());
-                fields.insert("username".into(), SecretBytes::from_slice(user.as_bytes()));
-            } else if let Some(user) = v.reveal(&id)?.fields.get("username") {
-                fields.insert("username".into(), user.clone());
-            }
-        }
-        v.update_value(&id, new_value, fields)?;
-    }
-    if let Some(username) = &p.username {
-        if !is_pair(&v, &id)? {
+        if kind == SecretKind::GcpServiceAccount {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
-                "username_not_applicable",
-                "only keys that come in two parts have a username",
+                "cannot_replace",
+                "a service account's value is its whole key file, with its scopes beside it: remove it and add the new file",
             ));
         }
-        let username = username.trim();
-        if username.is_empty() {
-            return Err(ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "empty_username",
-                "username is empty",
-            ));
-        }
-        let revealed = v.reveal(&id)?;
-        let mut fields = revealed.fields.clone();
-        fields.insert("username".into(), SecretBytes::from(username));
-        v.update_value(&id, revealed.value.clone(), fields)?;
     }
     if let Some(scope) = &p.scope {
-        let kind = v.get(&id)?.kind;
         if !matches!(
             kind,
             SecretKind::GcpServiceAccount | SecretKind::Oauth2Client
@@ -1129,14 +1104,77 @@ pub async fn patch_secret(
                 "scopes apply to Google service accounts and OAuth clients",
             ));
         }
-        let scope = scope.trim();
-        if scope.is_empty() {
+        if scope.trim().is_empty() {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
                 "empty_scope",
                 "scope is empty",
             ));
         }
+    }
+    if let Some(username) = &p.username {
+        if !is_pair(&v, &id)? {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "username_not_applicable",
+                "only keys that come in two parts have a username",
+            ));
+        }
+        let username = username.trim();
+        if username.is_empty() || username.contains([':', '\r', '\n']) {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_username",
+                "a username cannot be empty or hold a colon or a line break",
+            ));
+        }
+    }
+    if let Some(value) = &p.value {
+        let mut fields: BTreeMap<String, SecretBytes> = p
+            .fields
+            .iter()
+            .map(|(k, val)| (k.clone(), SecretBytes::from_slice(val.as_bytes())))
+            .collect();
+        let mut new_value = SecretBytes::from_slice(value.as_bytes());
+        // A new password keeps its username. A colon only splits the value when
+        // nothing is stored yet, or when what precedes it is the stored username:
+        // otherwise it is a password with a colon in it, and its first half must
+        // not end up in a field the scrubber leaves alone. Two lines are both parts.
+        if is_pair(&v, &id)? && !fields.contains_key("username") {
+            let stored = v.reveal(&id)?.fields;
+            let stored_user = ["username", "user", "account_sid"]
+                .iter()
+                .find_map(|k| stored.get(*k).map(|u| (*k, u.clone())));
+            let two_lines = value.trim().contains('\n');
+            match (providers::split_pair(value), stored_user) {
+                (Some((user, pass)), None) => {
+                    new_value = SecretBytes::from_slice(pass.as_bytes());
+                    fields.insert("username".into(), SecretBytes::from_slice(user.as_bytes()));
+                }
+                (Some((user, pass)), Some((k, u)))
+                    if two_lines || u.expose() == user.as_bytes() =>
+                {
+                    new_value = SecretBytes::from_slice(pass.as_bytes());
+                    let _ = u;
+                    fields.insert(k.to_string(), SecretBytes::from_slice(user.as_bytes()));
+                }
+                (_, Some((k, u))) => {
+                    fields.insert(k.to_string(), u);
+                }
+                (None, None) => {}
+            }
+        }
+        v.update_value(&id, new_value, fields)?;
+    }
+    if let Some(username) = &p.username {
+        let username = username.trim();
+        let revealed = v.reveal(&id)?;
+        let mut fields = revealed.fields.clone();
+        fields.insert("username".into(), SecretBytes::from(username));
+        v.update_value(&id, revealed.value.clone(), fields)?;
+    }
+    if let Some(scope) = &p.scope {
+        let scope = scope.trim();
         let revealed = v.reveal(&id)?;
         let mut fields = revealed.fields.clone();
         fields.insert("scope".into(), SecretBytes::from(scope));
@@ -1194,9 +1232,14 @@ pub async fn patch_secret(
     }
     let _ = v.audit(
         kinds::SECRET_UPDATED,
-        serde_json::json!({ "id": id.to_hex(), "value_changed": p.value.is_some(), "scope": p.scope }),
+        serde_json::json!({ "id": id.to_hex(), "value_changed": p.value.is_some(), "scope": p.scope, "username_changed": p.username.is_some() }),
     );
-    if p.value.is_some() || p.no_scrub.is_some() || p.scope.is_some() || p.username.is_some() {
+    if p.value.is_some()
+        || p.no_scrub.is_some()
+        || p.scope.is_some()
+        || p.username.is_some()
+        || p.provider.is_some()
+    {
         s.rebuild_scrubber(&v);
     }
     s.emit(Event::SecretChanged {

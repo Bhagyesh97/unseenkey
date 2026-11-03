@@ -148,7 +148,11 @@ pub fn evaluate(policy: &Policy, req: &Request<'_>, now_unix_ms: i64, usage: Usa
             return Decision::Deny(DenyReason::OutsideSchedule);
         }
     }
-    if let Some(d) = policy.deny.iter().find(|r| r.matches(req.method, req.path)) {
+    if let Some(d) = policy
+        .deny
+        .iter()
+        .find(|r| r.matches_any_case(req.method, req.path))
+    {
         return Decision::Deny(DenyReason::DeniedByRule(d.clone()));
     }
     let Some(rule) = policy

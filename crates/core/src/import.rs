@@ -20,6 +20,32 @@ pub struct DotenvEntry {
     pub looks_secret: bool,
 }
 
+/// A key in two parts is often two variables (`TWILIO_ACCOUNT_SID` and
+/// `TWILIO_AUTH_TOKEN`), and must become one secret. Returns the username for
+/// each secret variable, and the variables that are those usernames.
+pub fn paired_usernames(
+    entries: &[DotenvEntry],
+) -> (
+    alloc::collections::BTreeMap<String, String>,
+    alloc::collections::BTreeSet<String>,
+) {
+    let mut usernames = alloc::collections::BTreeMap::new();
+    let mut joined = alloc::collections::BTreeSet::new();
+    for e in entries {
+        let pair = crate::presets::guess_by_name(&e.key)
+            .filter(|p| p.pair_labels().is_some() && p.env.get("api_key") == Some(&e.key));
+        let Some(var) = pair.and_then(|p| p.env.get("username")) else {
+            continue;
+        };
+        let other = entries.iter().find(|o| o.key == *var);
+        if let Some(user) = other.and_then(|o| core::str::from_utf8(o.value.expose()).ok()) {
+            usernames.insert(e.key.clone(), user.trim().into());
+            joined.insert(var.clone());
+        }
+    }
+    (usernames, joined)
+}
+
 /// Parse `.env` text. Handles `export KEY=`, single/double quotes, `\n` and
 /// `\"` escapes inside double quotes, `#` comments, and blank lines. Unquoted
 /// values stop at ` #`.

@@ -297,7 +297,10 @@ async fn a_key_in_two_parts() {
     let t = test("twilio");
     assert_eq!(t["tested"], false, "{t}");
     assert!(t["message"].as_str().unwrap().contains("--username"), "{t}");
-    let (code, h) = c.post("/v1/handles", json!({ "secret": "twilio", "label": "sdk" }));
+    let (code, h) = c.post(
+        "/v1/handles",
+        json!({ "secret": "twilio", "label": "sdk", "preset_policy": "twilio:full" }),
+    );
     assert_eq!(code, 201, "{h}");
     let handle = h["handle"].as_str().unwrap().to_string();
     // The way an SDK sends it: its own account as the username.
@@ -340,12 +343,67 @@ async fn a_key_in_two_parts() {
     let (code, _) = c.patch("/v1/secrets/twilio", json!({ "value": TWILIO_TOKEN }));
     assert_eq!(code, 200);
     assert_eq!(test("twilio")["ok"], true, "the username survived");
+    let new_pair = format!("{TWILIO_SID}\n{TWILIO_TOKEN}");
+    assert_eq!(
+        c.patch(
+            "/v1/secrets/twilio",
+            json!({ "value": "wrong-abcdefghijklmnopq" })
+        )
+        .0,
+        200
+    );
+    assert_eq!(
+        c.patch("/v1/secrets/twilio", json!({ "value": new_pair }))
+            .0,
+        200
+    );
+    assert_eq!(test("twilio")["ok"], true, "two lines replace both");
+    assert_eq!(
+        c.patch(
+            "/v1/secrets/twilio",
+            json!({ "value": "wrong-abcdefghijklmnopq" })
+        )
+        .0,
+        200
+    );
+    let same_account = format!("{TWILIO_SID}:{TWILIO_TOKEN}");
+    assert_eq!(
+        c.patch("/v1/secrets/twilio", json!({ "value": same_account }))
+            .0,
+        200
+    );
+    assert_eq!(
+        test("twilio")["ok"],
+        true,
+        "its own username can come along"
+    );
+
+    // A colon in a new password does not overwrite the username: what precedes
+    // it would land in a field the scrubber leaves alone.
+    let colon = "half-of-the-secret:other-half-abcdefgh";
+    assert_eq!(
+        c.patch("/v1/secrets/twilio", json!({ "value": colon })).0,
+        200
+    );
+    let (code, shown) = c.post("/v1/secrets/twilio/reveal", json!({ "confirm": true }));
+    assert_eq!(code, 200, "{shown}");
+    assert_eq!(shown["value"], colon);
+    assert_eq!(shown["fields"]["username"], TWILIO_SID);
+    assert_eq!(
+        c.patch("/v1/secrets/twilio", json!({ "value": TWILIO_TOKEN }))
+            .0,
+        200
+    );
+
+    // A refused change changes nothing, however much of it was fine.
     let (code, _) = c.patch(
         "/v1/secrets/twilio",
-        json!({ "value": format!("ACffffffffffffffffffffffffffffffff:{TWILIO_TOKEN}") }),
+        json!({ "value": "not-stored-abcdefghijkl", "username": "" }),
     );
-    assert_eq!(code, 200);
-    assert_eq!(test("twilio")["ok"], false, "a new account was stored");
+    assert_eq!(code, 400);
+    assert_eq!(test("twilio")["ok"], true, "the value stayed");
+    let (code, _) = c.patch("/v1/secrets/twilio", json!({ "username": "with:colon" }));
+    assert_eq!(code, 400);
 
     // Pasted whole, on one line or two, whatever the key is called.
     for (name, value) in [
@@ -379,6 +437,96 @@ async fn a_key_in_two_parts() {
     );
     assert_eq!(code, 201, "{made}");
     assert_eq!(test("plivo")["ok"], true);
+    r.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_key_goes_only_where_it_may() {
+    let (_dir, r, c) = setup().await;
+    let via = |path: &str, handle: &str, upstream: Option<&str>| {
+        let mut req = c
+            .agent
+            .get(&format!("{}{path}", c.base))
+            .set("Authorization", &format!("Bearer {handle}"));
+        if let Some(u) = upstream {
+            req = req.set("X-Usk-Upstream", u);
+        }
+        C::call(req.call())
+    };
+    // A host that only reads as allowed: the URL parser stops at the backslash.
+    assert_eq!(
+        c.post(
+            "/v1/secrets",
+            json!({ "name": "jira", "value": "me@example.com:atlassian-token-abcdefgh" })
+        )
+        .0,
+        201
+    );
+    let (_, h) = c.post("/v1/handles", json!({ "secret": "jira", "label": "a" }));
+    let jira = h["handle"].as_str().unwrap().to_string();
+    for host in [
+        "127.0.0.1\\.atlassian.net",
+        "[127.0.0.1:9\\.atlassian.net]:443",
+    ] {
+        let (code, b) = via("/p/jira/rest/api/3/myself", &jira, Some(host));
+        assert_eq!(
+            (code, b["error"].as_str()),
+            (400, Some("invalid_upstream")),
+            "{host}: {b}"
+        );
+    }
+
+    // Another provider's route would build a Basic header nothing guards.
+    assert_eq!(
+        c.post("/v1/secrets", json!({ "name": "xai", "value": GOOD_XAI }))
+            .0,
+        201
+    );
+    let (_, h) = c.post("/v1/handles", json!({ "secret": "xai", "label": "b" }));
+    let xai = h["handle"].as_str().unwrap().to_string();
+    let (code, b) = via("/p/mailgun/@api.x.ai/v1/models", &xai, None);
+    assert_eq!(
+        (code, b["error"].as_str()),
+        (400, Some("route_mismatch")),
+        "{b}"
+    );
+    assert_eq!(via("/p/xai/v1/models", &xai, None).0, 200);
+
+    // A service account's scopes are no secret: a request may mention them.
+    let file = json!({
+        "type": "service_account",
+        "private_key": include_str!("fixtures/service-account-test-key.txt"),
+        "client_email": "bot@p.iam.gserviceaccount.com",
+        "token_uri": "https://oauth2.googleapis.com/token"
+    });
+    let scope = "https://www.googleapis.com/auth/webmasters.readonly";
+    assert_eq!(
+        c.post(
+            "/v1/secrets",
+            json!({ "name": "gsa", "value": file.to_string(), "fields": { "scope": scope } })
+        )
+        .0,
+        201
+    );
+    let (code, b) = C::call(
+        c.agent
+            .post(&format!("{}/p/xai/v1/models", c.base))
+            .set("Authorization", &format!("Bearer {xai}"))
+            .set("X-Usk-Note", scope)
+            .send_string(scope),
+    );
+    assert_ne!(b["error"].as_str(), Some("egress_blocked"), "{code} {b}");
+
+    // A service account's value is replaced as a whole file, never in place.
+    let (code, b) = c.patch(
+        "/v1/secrets/gsa",
+        json!({ "value": "not-a-key-file-abcdefgh" }),
+    );
+    assert_eq!(
+        (code, b["error"].as_str()),
+        (400, Some("cannot_replace")),
+        "{b}"
+    );
     r.shutdown().await;
 }
 

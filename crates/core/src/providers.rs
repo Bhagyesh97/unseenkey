@@ -379,6 +379,7 @@ pub fn split_pair(text: &str) -> Option<(String, zeroize::Zeroizing<String>)> {
         || pass.is_empty()
         || pass.starts_with("//")
         || user.contains(char::is_whitespace)
+        || user.contains(':')
     {
         return None;
     }
@@ -706,6 +707,7 @@ mod tests {
             "AC12:",
             "https://example.com",
             "two words:tok",
+            "a:b\nc",
             "one\ntwo\nthree",
             "{\"a\":\"b\"}",
             "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----",

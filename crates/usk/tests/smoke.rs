@@ -1096,6 +1096,38 @@ fn a_key_in_two_parts_from_the_cli() {
 }
 
 #[test]
+fn two_variables_become_one_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    let _stop = StopDaemon(&vault);
+    let env = dir.path().join(".env");
+    std::fs::write(
+        &env,
+        "TWILIO_ACCOUNT_SID=AC0123456789abcdef0123456789abcdef\nTWILIO_AUTH_TOKEN=twilio-token-abcdefghijklmnop\n",
+    )
+    .unwrap();
+    assert!(usk(&vault, &["init", "--profile", "light"], PW)
+        .status
+        .success());
+    let o = usk(&vault, &["import", "--from-env", env.to_str().unwrap()], PW);
+    assert!(o.status.success(), "{}", err(&o));
+    let o = usk(&vault, &["--json", "ls"], "");
+    let j: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
+    assert_eq!(j.as_array().unwrap().len(), 1, "one secret: {j}");
+    let o = usk(&vault, &["reveal", "twilio-auth-token", "--yes"], PW);
+    assert!(
+        out(&o).contains("twilio-token-abcdefghijklmnop"),
+        "{}",
+        out(&o)
+    );
+    assert!(
+        out(&o).contains("username=AC0123456789abcdef0123456789abcdef"),
+        "{}",
+        out(&o)
+    );
+}
+
+#[test]
 fn changing_the_password() {
     let dir = tempfile::tempdir().unwrap();
     let vault = dir.path().join("vault.db");

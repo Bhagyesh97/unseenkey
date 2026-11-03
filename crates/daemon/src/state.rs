@@ -12,7 +12,7 @@ use unseenkey_core::policy::Usage;
 use unseenkey_core::presets::{self, Auth};
 use unseenkey_core::storage::sqlite::SqliteStorage;
 use unseenkey_core::time::SystemClock;
-use unseenkey_core::vault::Vault;
+use unseenkey_core::vault::{SecretKind, Vault};
 
 /// The vault type the daemon holds.
 pub type DaemonVault = Vault<SqliteStorage, SystemClock>;
@@ -510,11 +510,16 @@ impl AppState {
                             values.push((format!("{}.basic", meta.name), pair));
                         }
                     }
-                    values.push((meta.name.clone(), r.value));
+                    // A key file is guarded through its `private_key` field; what
+                    // else it holds (an email, a project id) is no secret.
+                    if meta.kind != SecretKind::GcpServiceAccount {
+                        values.push((meta.name.clone(), r.value));
+                    }
                     for (k, v) in r.fields {
                         // An account id or an email: providers put it in their
-                        // answers and paths, and it opens nothing by itself.
-                        if k != "username" {
+                        // answers and paths, and it opens nothing by itself. Nor
+                        // do scopes and token URLs, which requests legitimately hold.
+                        if !matches!(k.as_str(), "username" | "scope" | "token_url") {
                             values.push((format!("{}.{k}", meta.name), v));
                         }
                     }

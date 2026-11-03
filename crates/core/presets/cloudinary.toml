@@ -8,6 +8,7 @@ base_path = "/v1_1"
 
 [env]
 api_key = "CLOUDINARY_API_SECRET"
+username = "CLOUDINARY_API_KEY"
 
 [[policies]]
 id = "read-only"

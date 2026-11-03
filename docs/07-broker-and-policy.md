@@ -72,11 +72,12 @@ Not done: obtaining the first refresh token (the authorization-code dance) and c
 
 A preset with `auth = { kind = "basic", username_label = "…", secret_label = "…" }` wants two values. The stored value is the password and field `username` the other part, with kind `basic_auth`. A preset with `username = "api"` has the same username for everybody and takes one value; `username = ""` sends the key alone.
 
-- Adding: `usk add` asks for each part in the provider's words (from the name or `--provider` before the first prompt, from the shape of the first part otherwise). The app shows a second box. `first:second` or two lines are taken apart by the daemon, on `POST /v1/secrets` and on `PATCH` with `value`; a colon always splits there, at the first one, so a username cannot hold one.
+- Adding: `usk add` asks for each part in the provider's words (from the name or `--provider` before the first prompt, from the shape of the first part otherwise). The app shows a second box. `first:second` or two lines are taken apart by the daemon, at the first colon, so a username cannot hold one. `usk import` and `usk guard fix` join a preset's `env.api_key` and `env.username` variables into one secret.
 - One part stored: allowed, since `usk import` meets them one at a time. Nothing is sent: a call answers 400 `secret_shape` and the key test says what is missing. `usk secret set <name> --username …` (`PATCH` with `username`) adds it.
-- Replacing the password keeps the username. A value with both parts replaces both.
+- Replacing the password keeps the username. Two lines replace both parts. One line with a colon is the whole new password, unless what precedes the colon is the stored username: a password's first half must not land in a field the scrubber leaves alone.
+- A Basic route only serves its own provider's secrets (400 `route_mismatch` otherwise), because the guard for the header is built from the secret's provider.
 - The handle: `Authorization: Bearer <handle>`, or the `Basic` header an SDK builds with the handle as its secret (`base64(account:handle)`) or, where the key is the username, `base64(handle:)`.
-- Scrubbing: the password, and `username:password` in all its encoded forms (so an echoed header is hidden). The username is not guarded: it is an account id or an email that providers put in their answers and paths. MCP's `list_secrets` shows it as `account`, for the paths that need it.
+- Scrubbing: the password, and `username:password` in all its encoded forms (so an echoed header is hidden). The username is not guarded: it is an account id or an email that providers put in their answers and paths. MCP's `list_secrets` shows it as `account`, for the paths that need it. A pair pasted the wrong way round would therefore expose the secret half to AI tools, until it is corrected; the key test reports it as refused.
 - A preset's `[verify]` path may hold `{username}`.
 
 ## Google service accounts
@@ -87,6 +88,8 @@ A secret of kind `gcp_service_account` holds a Google JSON key file (the value, 
 - Scopes are required to sign in but not to store: without them a call answers 400 `scope_required`, naming the fix. `usk secret set <name> --scope …` (`PATCH /v1/secrets/{ref}` with `scope`) replaces them. That widens what tokens may do, so it is owner only; it creates a new version, so the next call gets a new token.
 - `usk secret test` signs in afresh and reports what Google said. That proves the key and scopes, not what the account was added to; each API decides that.
 - Replacing the value takes `usk rm` and `usk add`, as for the other kinds that hold several values.
+
+`read-only` means GET: what a GET can reach depends on the scopes, so a key with `cloud-platform` could read Secret Manager under it. Choose narrow scopes.
 
 Not done: domain-wide delegation (the `sub` claim) and adding scopes in the desktop app, which stores the pasted file and points at the command above.
 
@@ -254,6 +257,8 @@ The policy's own host list is left empty, so the secret's host lock decides wher
 Order of evidence, strongest first: the value's shape (`providers::detect`), a `key_prefixes` entry only one preset claims (`presets::detect_by_prefix`; prefixes under four characters or shared by two presets never decide), then the secret's name (`presets::guess_by_name`: an exact variable from `[env]`/`env_names`, or a word equal to a preset id or display name). Recognition sends nothing anywhere.
 
 A preset's `[verify]` names one read-only request (`method`, `path`, optional `host` and non-secret `headers`). The test sends the key only there, only when that host is within the secret's locked upstreams, with the preset's auth style; 2xx reads as accepted, 401/403 as refused, anything else as unclear. A key is never tried against several providers to find out whose it is: that would hand the key to companies it does not belong to.
+
+Hosts hold only letters, digits, `.`, `-` and `_` (an IPv6 address in brackets), because a URL parser may read anything else as the end of the host; the request goes only to the host the lock judged. Policies judge the path as it will be sent: `..` and `%2e%2e` resolved, `\\` as `/`, characters that never need encoding decoded (`%6Beys` is `keys`). `%2F` stays encoded, a `..` next to one is refused, and deny rules hold in any letter case. `X-HTTP-Method-Override` and its relatives never travel. A `*` inside a path segment (`*.json`) matches within that segment.
 
 Auth styles: `bearer`, `header`, `scheme` (`Authorization: <scheme> <key>`), `basic`, `query`, `template`, `aws_sigv4`.
 

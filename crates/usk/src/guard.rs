@@ -123,9 +123,13 @@ pub fn fix_for(
         .map_err(|e| CliError::general(format!("cannot read {}: {e}", path.display())))?;
     let entries = parse_dotenv(&text);
     let found = findings(&entries);
+    // A key's username stays in the file, where the SDK reads it; the secret
+    // part carries a copy into the vault.
+    let (usernames, joined) = unseenkey_core::import::paired_usernames(&entries);
     let todo: Vec<&Finding<'_>> = found
         .iter()
         .filter(|f| f.preset.is_some() && !already_handle(f.entry))
+        .filter(|f| !joined.contains(&f.entry.key))
         .collect();
     if todo.is_empty() {
         println!("{}: nothing to fix.", path.display());
@@ -158,6 +162,7 @@ pub fn fix_for(
             "/v1/secrets",
             json!({
                 "name": name, "value": value, "provider": preset_id,
+                "fields": usernames.get(&e.key).map_or_else(|| json!({}), |u| json!({ "username": u })),
                 "tags": ["env-guard"], "notes": format!("moved from {} ({})", path.display(), e.key),
             }),
         )?;

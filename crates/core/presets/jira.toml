@@ -5,7 +5,11 @@ upstreams = ["*.atlassian.net"]
 auth = { kind = "basic", username_label = "Atlassian account email", secret_label = "API token" }
 docs = "https://id.atlassian.com/manage-profile/security/api-tokens"
 base_path = ""
-env_names = ["atlassian", "confluence", "JIRA_API_TOKEN", "ATLASSIAN_API_TOKEN"]
+env_names = ["atlassian", "confluence", "ATLASSIAN_API_TOKEN"]
+
+[env]
+api_key = "JIRA_API_TOKEN"
+username = "JIRA_EMAIL"
 
 [[policies]]
 id = "read-only"

@@ -12,6 +12,11 @@ use base64::Engine;
 /// Shortest value we will search for.
 pub const MIN_LEN: usize = 12;
 
+/// A multi-line value longer than this (a PEM key) is guarded line by line. A
+/// stream can only pass on what cannot be the start of a match, so one long
+/// pattern would hold back the start of every streamed reply, for every secret.
+const LONG_VALUE: usize = 256;
+
 /// Redaction marker; the name is appended so owners can tell what leaked.
 pub const MARKER_PREFIX: &str = "[REDACTED:usk:";
 
@@ -84,6 +89,20 @@ impl Scrubber {
         for g in secrets {
             let v = g.value.expose();
             if v.len() < MIN_LEN {
+                continue;
+            }
+            let lines = core::str::from_utf8(v)
+                .ok()
+                .filter(|s| s.len() > LONG_VALUE && s.contains('\n'));
+            if let Some(text) = lines {
+                for line in text.lines().map(str::trim) {
+                    if line.len() >= MIN_LEN && !line.starts_with("-----") {
+                        for variant in variants(line.as_bytes()) {
+                            patterns.push(variant);
+                            names.push(g.name.to_string());
+                        }
+                    }
+                }
                 continue;
             }
             for variant in variants(v) {
@@ -226,6 +245,40 @@ impl StreamScrubber {
 #[cfg(test)]
 mod pem_tests {
     use super::*;
+
+    #[test]
+    fn a_long_key_is_hidden_without_holding_back_streams() {
+        let body: Vec<String> = (0..30)
+            .map(|i| format!("MIIE/abc+def{i:02}ghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012"))
+            .collect();
+        let pem = format!(
+            "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+            body.join("\n")
+        );
+        let value = SecretBytes::from(pem.as_str());
+        let s = Scrubber::new(&[Guarded {
+            name: "k",
+            value: &value,
+        }]);
+        assert!(s.max_len() < 300, "holds back {} bytes", s.max_len());
+        for form in [
+            pem.clone(),
+            pem.replace('\n', "\\n"),
+            pem.replace('\n', "\\n").replace('/', "\\/"),
+            pem.replace('\n', "\r\n"),
+            body.concat(),
+            format!(
+                "{{\"private_key\":{}}}",
+                serde_json::to_string(&pem).unwrap()
+            ),
+        ] {
+            let out = String::from_utf8(s.scrub(form.as_bytes()).0).unwrap();
+            assert!(
+                !out.contains("ghijklmnopqrstuvwxyz"),
+                "survived in {form:.60}: {out:.120}"
+            );
+        }
+    }
 
     #[test]
     fn a_pem_key_is_guarded_as_a_json_string_too() {

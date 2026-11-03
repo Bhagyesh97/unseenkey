@@ -969,9 +969,10 @@ fn import(paths: &VaultPaths, env_path: &Path, all: bool, dry_run: bool) -> Resu
     let text = std::fs::read_to_string(env_path)
         .map_err(|e| CliError::general(format!("cannot read {}: {e}", env_path.display())))?;
     let entries = parse_dotenv(&text);
+    let (usernames, joined) = unseenkey_core::import::paired_usernames(&entries);
     let candidates: Vec<_> = entries
         .into_iter()
-        .filter(|e| all || e.looks_secret)
+        .filter(|e| (all || e.looks_secret) && !joined.contains(&e.key))
         .collect();
     if candidates.is_empty() {
         println!(
@@ -1005,10 +1006,13 @@ fn import(paths: &VaultPaths, env_path: &Path, all: bool, dry_run: bool) -> Resu
                 continue;
             }
         };
+        let username = usernames.get(&e.key);
+        let fields = username.map_or_else(|| json!({}), |u| json!({ "username": u }));
         let body = json!({
             "name": name,
-            "type": e.detection.map(|d| d.kind.as_str()).unwrap_or("note"),
+            "type": if username.is_some() { "basic_auth" } else { e.detection.map(|d| d.kind.as_str()).unwrap_or("note") },
             "value": value,
+            "fields": fields,
             "tags": ["imported"],
             "notes": format!("imported from {} ({})", env_path.display(), e.key),
         });
@@ -1068,10 +1072,12 @@ fn passwd(paths: &VaultPaths, profile: Argon2Profile) -> Result<(), CliError> {
             return Err(CliError::general("passwords do not match"));
         }
     }
-    // The daemon must not hold an unlocked copy while the header changes.
+    // The daemon must not hold an unlocked copy while the header changes. It
+    // may have changed the header during the prompts (a device unlock added).
     if let Some(c) = Client::try_connect(paths) {
         c.post("/v1/lock", json!({}))?;
     }
+    v.reload_header().map_err(map_vault_err)?;
     v.change_password(&pw, profile).map_err(map_vault_err)?;
     println!("Password changed, and the vault is locked. The recovery phrase still works.");
     println!("A copy of the vault file made before now still opens with the old password.");

@@ -8,6 +8,7 @@ base_path = "/v3"
 
 [env]
 api_key = "DATAFORSEO_PASSWORD"
+username = "DATAFORSEO_LOGIN"
 
 [verify]
 method = "GET"

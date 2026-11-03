@@ -9,6 +9,7 @@ env_names = ["nexmo"]
 
 [env]
 api_key = "VONAGE_API_SECRET"
+username = "VONAGE_API_KEY"
 
 [verify]
 method = "GET"

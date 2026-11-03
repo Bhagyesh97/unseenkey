@@ -71,6 +71,39 @@ enum HandleSlot {
     Query(String),
 }
 
+/// The path as it will really be sent, which is what the policy has to judge:
+/// the URL parser resolves `..` (also written `%2e%2e`) and turns `\` into `/`.
+/// `%6Beys` means `keys` to any server, so characters that never need encoding
+/// are decoded for the comparison. An encoded slash stays encoded, since it has
+/// its own meaning (Search Console's `sites/https%3A%2F%2Fexample.com%2F`), but a
+/// `..` next to one has no honest use and some servers would act on it.
+fn policy_path(raw: &str) -> Option<String> {
+    let url = reqwest::Url::parse(&format!("https://policy.invalid{raw}")).ok()?;
+    let path = url.path();
+    let hex = |b: u8| (b as char).to_digit(16).map(|d| d as u8);
+    let (bytes, mut out, mut i) = (path.as_bytes(), Vec::with_capacity(path.len()), 0);
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(a), Some(b)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                let c = a * 16 + b;
+                if c.is_ascii_alphanumeric() || matches!(c, b'-' | b'.' | b'_' | b'~') {
+                    out.push(c);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    let plain = String::from_utf8(out).ok()?;
+    let lower = plain.to_ascii_lowercase();
+    let hidden = ["%2f..", "..%2f", "%5c..", "..%5c"]
+        .iter()
+        .any(|p| lower.contains(p));
+    (!hidden).then_some(plain)
+}
+
 /// An SDK with a handle for its secret sends `base64(account:handle)`, or
 /// `base64(handle:)` where the key is the username.
 fn basic_handle(credentials: &str) -> String {
@@ -524,7 +557,13 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
         Err(e) => return broker_err(e),
     };
     let (pol_path, _) = split_path_query(&call.path);
-    let pol_path = pol_path.to_string();
+    let Some(pol_path) = policy_path(pol_path) else {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "malformed_request",
+            "this path hides a `..` inside an encoded slash; send the plain path",
+        );
+    };
     let now = now_ms();
 
     // Phase 1 (vault lock): handle, secret, host lock, policy.
@@ -919,6 +958,18 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
     // A bearer-kind secret (OAuth token, PAT) is always sent as `Authorization:
     // Bearer`, even for providers whose API keys travel in another header or in
     // the query string. Template and basic styles keep their own shape.
+    // The scrubber guards a Basic header built by the secret's own provider. On
+    // another provider's route it would go out with a username nothing guards.
+    if matches!(preset.auth, Auth::Basic { .. }) && meta.provider.as_deref() != Some(&preset.id) {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "route_mismatch",
+            format!(
+                "{} is not a {} key; if it is, run `usk secret set {} --provider {}`",
+                meta.name, preset.display, meta.name, preset.id
+            ),
+        );
+    }
     let auth = match (&preset.auth, meta.kind) {
         (
             Auth::Header { .. } | Auth::Query { .. } | Auth::Scheme { .. },
@@ -1050,6 +1101,21 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
     if !qparts.is_empty() {
         url.push('?');
         url.push_str(&qparts.join("&"));
+    }
+    // The host lock judged `upstream.host`: go there and nowhere else, whatever
+    // a URL parser makes of the text.
+    let host_sent_to = reqwest::Url::parse(&url).ok().and_then(|u| {
+        u.host_str()
+            .map(|h| h.trim_matches(['[', ']']).to_ascii_lowercase())
+    });
+    if !s.upstream_overrides.contains_key(&upstream.host)
+        && host_sent_to.as_deref() != Some(upstream.host.as_str())
+    {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "malformed_request",
+            "this request would not go to the host named in it",
+        );
     }
 
     let method =
@@ -1293,6 +1359,16 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
             }
         }
         let audit = vault.audit(kinds::USE, event);
+        // Locked while the request was out: the log cannot be written without the
+        // key. It may have reached the provider, so at least the daemon log says so.
+        if audit.is_err() && vault.is_locked() {
+            tracing::warn!(secret = %meta.secret_id, "vault locked during a request: it is not in the audit log");
+            return err(
+                StatusCode::UNAUTHORIZED,
+                "vault_locked",
+                "the vault was locked while this request was out; its answer was withheld",
+            );
+        }
         if audit.is_err() {
             return err(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1321,4 +1397,32 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
         HeaderValue::from_str(&handle.handle_id.to_hex()).unwrap_or(HeaderValue::from_static("")),
     );
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_policy_judges_the_path_that_is_sent() {
+        for (raw, sent) in [
+            ("/v1/keys", "/v1/keys"),
+            ("/x/../v1/keys", "/v1/keys"),
+            ("/x/%2e%2e/v1/keys", "/v1/keys"),
+            ("/x/%2E%2E/v1/keys", "/v1/keys"),
+            ("/v1\\keys", "/v1/keys"),
+            ("/v1/./keys", "/v1/keys"),
+            ("/v1/%6Beys", "/v1/keys"),
+            ("/v1/%6beys", "/v1/keys"),
+            (
+                "/webmasters/v3/sites/https%3A%2F%2Fexample.com%2F/x",
+                "/webmasters/v3/sites/https%3A%2F%2Fexample.com%2F/x",
+            ),
+        ] {
+            assert_eq!(policy_path(raw).as_deref(), Some(sent), "{raw}");
+        }
+        for raw in ["/a%2f..%2fb", "/a%2F..%2Fb", "/a%5c..%5cb", "/..%2fb"] {
+            assert_eq!(policy_path(raw), None, "{raw}");
+        }
+    }
 }

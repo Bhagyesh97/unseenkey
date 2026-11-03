@@ -75,6 +75,13 @@ pub const STRIP_REQUEST_HEADERS: &[&str] = &[
     "x-usk-upstream",
     "x-usk-handle",
     "x-usk-caller",
+    // These ask a server to treat the request as another method or path than
+    // the one the policy judged.
+    "x-http-method-override",
+    "x-http-method",
+    "x-method-override",
+    "x-original-url",
+    "x-rewrite-url",
 ];
 
 /// Response headers not passed back to the caller.
@@ -123,6 +130,7 @@ impl Upstream {
         if rest.is_empty() || rest.contains('@') || rest.contains(' ') {
             return Err(BrokerError::InvalidUpstream(spec.into()));
         }
+        let bracketed = rest.starts_with('[');
         let (host, port) = match rest.rsplit_once(':') {
             Some((h, p)) if !h.contains(':') || h.starts_with('[') => {
                 let port: u16 = p
@@ -133,7 +141,17 @@ impl Upstream {
             _ => (rest.trim_matches(['[', ']']).to_string(), None),
         };
         let host = host.to_ascii_lowercase();
-        if host.is_empty() {
+        // The host lock reads this text and a URL parser reads it again. Anything
+        // a parser may take for the end of the host (`\` is `/` to it) would pass
+        // the lock under one name and connect to another.
+        let fits = |c: char| {
+            if bracketed {
+                c.is_ascii_hexdigit() || c == ':' || c == '.'
+            } else {
+                c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_'
+            }
+        };
+        if host.is_empty() || !host.chars().all(fits) {
             return Err(BrokerError::InvalidUpstream(spec.into()));
         }
         if scheme == "http" && !is_loopback_host(&host) {
@@ -258,6 +276,26 @@ mod tests {
 
     #[test]
     fn header_lists() {
+        for bad in [
+            "evil.example\\.atlassian.net",
+            "https://evil.example\\.atlassian.net",
+            "[127.0.0.1:9\\.atlassian.net]:443",
+            "evil.example%2f.atlassian.net",
+            "evil.example\t.atlassian.net",
+            "\u{2024}evil.atlassian.net",
+            "a@b.atlassian.net",
+        ] {
+            assert!(Upstream::parse(bad).is_err(), "{bad:?}");
+        }
+        for good in [
+            "api.example.com",
+            "a_b-c.example.com:8443",
+            "[::1]:80",
+            "127.0.0.1",
+        ] {
+            assert!(Upstream::parse(good).is_ok(), "{good:?}");
+        }
+        assert!(is_stripped("X-HTTP-Method-Override", STRIP_REQUEST_HEADERS));
         assert!(is_stripped("Authorization", STRIP_REQUEST_HEADERS));
         assert!(is_stripped("X-USK-Upstream", STRIP_REQUEST_HEADERS));
         assert!(!is_stripped("Content-Type", STRIP_REQUEST_HEADERS));

@@ -75,6 +75,8 @@ enum Seg {
     Lit(String),
     One,
     Many,
+    /// `*.json`, `SM*`: one segment with this start and end.
+    Part(String, String),
 }
 
 /// A path pattern.
@@ -104,6 +106,10 @@ impl PathGlob {
             .map(|s| match s {
                 "*" => Seg::One,
                 "**" => Seg::Many,
+                part if part.contains('*') => {
+                    let (start, end) = part.split_once('*').unwrap_or((part, ""));
+                    Seg::Part(start.to_string(), end.to_string())
+                }
                 lit => Seg::Lit(lit.to_string()),
             })
             .collect();
@@ -113,11 +119,16 @@ impl PathGlob {
             let mut t = String::new();
             for s in &segs {
                 t.push('/');
-                t.push_str(match s {
-                    Seg::Lit(l) => l,
-                    Seg::One => "*",
-                    Seg::Many => "**",
-                });
+                match s {
+                    Seg::Lit(l) => t.push_str(l),
+                    Seg::One => t.push('*'),
+                    Seg::Many => t.push_str("**"),
+                    Seg::Part(start, end) => {
+                        t.push_str(start);
+                        t.push('*');
+                        t.push_str(end);
+                    }
+                }
             }
             t
         };
@@ -143,6 +154,16 @@ impl PathGlob {
             },
             Some((Seg::Lit(l), rest)) => match parts.split_first() {
                 Some((p, tail)) if p == l => Self::match_from(rest, tail),
+                _ => false,
+            },
+            Some((Seg::Part(start, end), rest)) => match parts.split_first() {
+                Some((p, tail))
+                    if p.len() > start.len() + end.len()
+                        && p.starts_with(start.as_str())
+                        && p.ends_with(end.as_str()) =>
+                {
+                    Self::match_from(rest, tail)
+                }
                 _ => false,
             },
         }
@@ -230,6 +251,14 @@ impl Rule {
     pub fn matches(&self, method: &str, path: &str) -> bool {
         self.method.matches(method) && self.path.matches(path)
     }
+
+    /// The same, with upper and lower case alike. For deny rules: a provider
+    /// may well treat `/V1/Keys` as `/v1/keys`.
+    pub fn matches_any_case(&self, method: &str, path: &str) -> bool {
+        self.method.matches(method)
+            && PathGlob::parse(&self.path.as_str().to_ascii_lowercase())
+                .is_ok_and(|p| p.matches(&path.to_ascii_lowercase()))
+    }
 }
 
 impl fmt::Display for Rule {
@@ -248,6 +277,28 @@ impl<'de> Deserialize<'de> for Rule {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let s = String::deserialize(d)?;
         Rule::parse(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(test)]
+mod part_tests {
+    use super::*;
+
+    #[test]
+    fn a_wildcard_inside_a_segment() {
+        let g = PathGlob::parse("/Accounts/*/Keys/*.json").unwrap();
+        assert!(g.matches("/Accounts/AC1/Keys/SK1.json"));
+        assert!(!g.matches("/Accounts/AC1/Keys/.json"));
+        assert!(!g.matches("/Accounts/AC1/Keys/SK1.xml"));
+        assert!(!g.matches("/Accounts/AC1/Keys/a/b.json"));
+        assert_eq!(g.as_str(), "/Accounts/*/Keys/*.json");
+    }
+
+    #[test]
+    fn a_deny_holds_in_any_case() {
+        let r = Rule::parse("* /v1/keys/**").unwrap();
+        assert!(r.matches_any_case("GET", "/V1/KEYS/k1"));
+        assert!(!r.matches("GET", "/V1/KEYS/k1"));
     }
 }
 

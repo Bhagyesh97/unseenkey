@@ -10,6 +10,14 @@ The top section of this file becomes the release notes when a `v*` tag is pushed
 - **`usk passwd` changes the vault password** with the current one, instead of needing the recovery phrase. The vault locks when it is done. The recovery phrase keeps working, and a copy of the vault file made earlier still opens with the old password.
 - **Claude Desktop bundle and MCP registry.** Each release now builds an `.mcpb` bundle for Claude Desktop, and the server can be listed in the MCP registry.
 
+**Security fixes, for every earlier version.** Found by testing this release; please update.
+
+- **A handle could send the real key to another host.** Where a key is allowed on a wildcard (`*.supabase.co`, `*.googleapis.com`, `*.atlassian.net`, or any you set yourself), a host written `evil.example\.supabase.co` passed the host lock, and the URL parser then connected to `evil.example`. A program holding only a handle could use this to collect the key. Hosts now hold only what a host name can hold, and the request goes only to the host the lock judged. Keys locked to exact host names were not affected.
+- **`..` got past policies.** A policy judged the path as written, and the path was tidied afterwards, so `POST /search/../issue` under a read-only policy reached `/issue`, and `/x/../v1/keys` got past a deny rule. Policies now judge the path as it will be sent. `%6Beys` counts as `keys`, a deny rule holds in any letter case, a `..` beside an encoded slash is refused, and `X-HTTP-Method-Override` and its relatives are no longer passed on.
+- **`*` inside a path segment now works.** In a rule, `Accounts/*.json` was taken literally and never matched, so some of Twilio's deny rules did nothing. Twilio's read-only and messaging policies now also keep account tokens and API keys out of reach.
+
+Also fixed: a long multi-line key (a Google key file, an SSH key) held back the first 2.5 KB of every streamed reply, for every secret; they are now guarded line by line, so streams flow, and re-wrapped copies of the key are hidden too. A refused `PATCH` no longer stores part of the change. Changing a key's provider refreshes what is hidden. A key file starting with a byte order mark is recognised. `usk import` and `usk guard fix` join `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` (and the like) into one secret.
+
 Two things behave differently. The username of a two-part key (an account SID, an email) counts as an account name, not a secret: it is no longer hidden in replies, and `list_secrets` shows it as `account`, because providers put it in their URLs. And a preset of your own with `kind = "basic"` used to send an empty username when none was stored; add `username = ""` to keep that.
 
 ## 0.1.8 — 2026-11-01

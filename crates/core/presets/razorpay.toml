@@ -9,6 +9,7 @@ key_prefixes = ["rzp_live_", "rzp_test_"]
 
 [env]
 api_key = "RAZORPAY_KEY_SECRET"
+username = "RAZORPAY_KEY_ID"
 
 [verify]
 method = "GET"
@@ -16,7 +17,7 @@ path = "/v1/payments?count=1"
 
 [[policies]]
 id = "read-only"
-display = "Read payments and orders only"
+display = "Read only"
 recommended = true
 allow = ["GET /**"]
 

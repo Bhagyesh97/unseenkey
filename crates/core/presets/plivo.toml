@@ -8,6 +8,7 @@ base_path = "/v1"
 
 [env]
 api_key = "PLIVO_AUTH_TOKEN"
+username = "PLIVO_AUTH_ID"
 
 [verify]
 method = "GET"
@@ -15,16 +16,17 @@ path = "/v1/Account/{username}/"
 
 [[policies]]
 id = "read-only"
-display = "Read logs and account details only"
+display = "Read logs and account details only; not subaccounts, which hold tokens"
 recommended = true
 allow = ["GET /**"]
+deny = ["* /v1/Account/*/Subaccount", "* /v1/Account/*/Subaccount/**"]
 
 [[policies]]
 id = "messaging"
 display = "Send SMS and read; no calls, numbers or deletes"
 recommended = true
 allow = ["GET /**", "POST /v1/Account/*/Message", "POST /v1/Account/*/Message/"]
-deny = ["DELETE /**", "* /v1/Account/*/Call/**", "* /v1/Account/*/Number/**", "* /v1/Account/*/PhoneNumber/**"]
+deny = ["DELETE /**", "* /v1/Account/*/Subaccount", "* /v1/Account/*/Subaccount/**", "* /v1/Account/*/Call/**", "* /v1/Account/*/Number/**", "* /v1/Account/*/PhoneNumber/**"]
 
 [[policies]]
 id = "full"

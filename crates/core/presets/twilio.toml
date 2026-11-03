@@ -8,6 +8,7 @@ category = "messaging"
 
 [env]
 api_key = "TWILIO_AUTH_TOKEN"
+username = "TWILIO_ACCOUNT_SID"
 
 [verify]
 method = "GET"
@@ -15,16 +16,17 @@ path = "/2010-04-01/Accounts.json"
 
 [[policies]]
 id = "read-only"
-display = "Read logs and resources only"
+display = "Read logs and resources only; not account tokens or API keys"
 recommended = true
 allow = ["GET /**"]
+deny = ["* /2010-04-01/Accounts.json", "* /2010-04-01/Accounts/*.json", "* /2010-04-01/Accounts/*/Keys.json", "* /2010-04-01/Accounts/*/Keys/**"]
 
 [[policies]]
 id = "messaging"
 display = "Send SMS and read logs; no calls, numbers or account changes"
 recommended = true
 allow = ["GET /**", "POST /2010-04-01/Accounts/*/Messages.json", "POST /2010-04-01/Accounts/*/Messages/*.json"]
-deny = ["* /2010-04-01/Accounts/*/Calls/**", "* /2010-04-01/Accounts/*/IncomingPhoneNumbers/**", "* /2010-04-01/Accounts/*/Keys/**", "POST /2010-04-01/Accounts/*.json", "DELETE /**"]
+deny = ["* /2010-04-01/Accounts.json", "* /2010-04-01/Accounts/*.json", "* /2010-04-01/Accounts/*/Calls.json", "* /2010-04-01/Accounts/*/Calls/**", "* /2010-04-01/Accounts/*/IncomingPhoneNumbers.json", "* /2010-04-01/Accounts/*/IncomingPhoneNumbers/**", "* /2010-04-01/Accounts/*/Keys.json", "* /2010-04-01/Accounts/*/Keys/**", "DELETE /**"]
 
 [[policies]]
 id = "full"
