@@ -233,6 +233,198 @@ async fn setup() -> T {
     t
 }
 
+/// Generated for these tests with `openssl genpkey`; it signs nothing real.
+const TEST_KEY: &str = include_str!("fixtures/service-account-test-key.txt");
+
+fn key_file() -> String {
+    json!({
+        "type": "service_account", "project_id": "p", "private_key_id": "kid-1",
+        "private_key": TEST_KEY, "client_email": "bot@p.iam.gserviceaccount.com",
+        "client_id": "1234", "token_uri": TOKEN_URL
+    })
+    .to_string()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn service_account_signs_in_and_keeps_the_file_to_itself() {
+    let t = setup().await;
+    let (code, c) = t.mgmt(
+        "POST",
+        "/v1/secrets",
+        Some(json!({ "name": "gsc", "value": key_file(), "upstreams": [API] })),
+    );
+    assert_eq!(code, 201, "{c}");
+    assert_eq!(c["type"], "gcp_service_account");
+    assert_eq!(
+        c["upstreams"],
+        json!([API, AUTH]),
+        "token host joins the list"
+    );
+    let handle = t.handle(json!({ "secret": "gsc", "label": "t" }));
+
+    // Without scopes nothing is sent, and the answer says what to do.
+    let (code, b) = t.call(&handle);
+    assert_eq!(
+        (code, b["error"].as_str()),
+        (400, Some("scope_required")),
+        "{b}"
+    );
+    assert_eq!(t.token_calls(), 0);
+    let (code, b) = t.mgmt("POST", "/v1/secrets/gsc/test", Some(json!({})));
+    assert_eq!((code, b["tested"].as_bool()), (200, Some(false)), "{b}");
+
+    // Scopes are the owner's to set.
+    let owner = t.owner.lock().unwrap().take();
+    let (code, b) = t.mgmt(
+        "PATCH",
+        "/v1/secrets/gsc",
+        Some(json!({ "scope": "s.one s.two" })),
+    );
+    assert_eq!(code, 403, "{b}");
+    *t.owner.lock().unwrap() = owner;
+    let (code, b) = t.mgmt(
+        "PATCH",
+        "/v1/secrets/gsc",
+        Some(json!({ "scope": "s.one s.two" })),
+    );
+    assert_eq!(code, 200, "{b}");
+
+    // A call: the broker signs in, the upstream gets the access token.
+    t.script(json!({ "access_token": "ya29.first-abcdefghij", "expires_in": 3600 }));
+    let (code, b) = t.call(&handle);
+    assert_eq!(code, 200, "{b}");
+    assert_eq!(
+        t.api_calls(),
+        vec!["Bearer ya29.first-abcdefghij".to_string()]
+    );
+    assert!(!b.to_string().contains("ya29"), "token echoed back: {b}");
+
+    // The token request is a correctly signed JWT and nothing else.
+    let (form, authz) = t.last_token_call();
+    assert_eq!(authz, None);
+    assert_eq!(
+        form["grant_type"],
+        "urn:ietf:params:oauth:grant-type:jwt-bearer"
+    );
+    assert_eq!(form.len(), 2, "{form:?}");
+    let jwt = &form["assertion"];
+    let (signed, signature) = jwt.rsplit_once('.').unwrap();
+    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let der = base64::engine::general_purpose::STANDARD
+        .decode(
+            TEST_KEY
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.starts_with("-----"))
+                .collect::<String>(),
+        )
+        .unwrap();
+    let key = ring::rsa::KeyPair::from_pkcs8(&der).unwrap();
+    ring::signature::UnparsedPublicKey::new(
+        &ring::signature::RSA_PKCS1_2048_8192_SHA256,
+        key.public().as_ref(),
+    )
+    .verify(signed.as_bytes(), &b64.decode(signature).unwrap())
+    .expect("signature checks out");
+    let (header, claims) = signed.split_once('.').unwrap();
+    let part = |p: &str| -> Value { serde_json::from_slice(&b64.decode(p).unwrap()).unwrap() };
+    let (header, claims) = (part(header), part(claims));
+    assert_eq!(
+        (&header["alg"], &header["kid"]),
+        (&json!("RS256"), &json!("kid-1"))
+    );
+    assert_eq!(claims["iss"], "bot@p.iam.gserviceaccount.com");
+    assert_eq!(claims["aud"], TOKEN_URL);
+    assert_eq!(claims["scope"], "s.one s.two");
+    assert_eq!(
+        claims["exp"].as_i64().unwrap() - claims["iat"].as_i64().unwrap(),
+        3600
+    );
+
+    // Cached: no second sign-in. A new scope takes effect at once.
+    assert_eq!(t.call(&handle).0, 200);
+    assert_eq!(t.token_calls(), 1);
+    let (code, _) = t.mgmt(
+        "PATCH",
+        "/v1/secrets/gsc",
+        Some(json!({ "scope": "s.three" })),
+    );
+    assert_eq!(code, 200);
+    assert_eq!(t.call(&handle).0, 200);
+    assert_eq!(t.token_calls(), 2);
+
+    // The key file never left, in a request or in a reply.
+    let sent = format!("{:?}", t.mock.lock().unwrap().token_calls);
+    assert!(!sent.contains("PRIVATE KEY") && !sent.contains("private_key"));
+    assert!(t
+        .api_calls()
+        .iter()
+        .all(|a| a.starts_with("Bearer at-") || a.starts_with("Bearer ya29")));
+
+    // The key test signs in afresh, and a refusal is reported as one.
+    let (code, b) = t.mgmt("POST", "/v1/secrets/gsc/test", Some(json!({})));
+    assert_eq!((code, b["ok"].as_bool()), (200, Some(true)), "{b}");
+    t.script(json!({ "__status": 400, "error": "invalid_grant", "error_description": "Invalid JWT Signature." }));
+    let (code, b) = t.mgmt("POST", "/v1/secrets/gsc/test", Some(json!({})));
+    assert_eq!((code, b["ok"].as_bool()), (200, Some(false)), "{b}");
+    assert!(
+        b["message"].as_str().unwrap().contains("invalid_grant"),
+        "{b}"
+    );
+
+    t.daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn service_account_files_are_checked_when_added() {
+    let t = setup().await;
+    let (code, b) = t.mgmt(
+        "POST",
+        "/v1/secrets",
+        Some(json!({ "name": "a", "value": r#"{"type":"service_account","project_id":"p"}"# })),
+    );
+    assert_eq!(
+        (code, b["error"].as_str()),
+        (400, Some("service_account_incomplete")),
+        "{b}"
+    );
+    let bad_key = json!({ "type": "service_account", "client_email": "a@b.test", "private_key": "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n" }).to_string();
+    let (code, b) = t.mgmt(
+        "POST",
+        "/v1/secrets",
+        Some(json!({ "name": "b", "value": bad_key })),
+    );
+    assert_eq!(
+        (code, b["error"].as_str()),
+        (400, Some("invalid_private_key")),
+        "{b}"
+    );
+
+    // Scopes given with the file; Google's hosts come from the provider.
+    let (code, c) = t.mgmt(
+        "POST",
+        "/v1/secrets",
+        Some(json!({ "name": "c", "value": key_file(), "fields": { "scope": "s.one" } })),
+    );
+    assert_eq!(code, 201, "{c}");
+    assert_eq!(c["provider"], "gcp");
+    assert_eq!(c["upstreams"], json!(["*.googleapis.com", AUTH]));
+    // Scopes mean nothing on an ordinary key.
+    let (code, c) = t.mgmt(
+        "POST",
+        "/v1/secrets",
+        Some(json!({ "name": "d", "value": "plain-value-abcdefghij", "upstreams": [API] })),
+    );
+    assert_eq!(code, 201, "{c}");
+    let (code, b) = t.mgmt("PATCH", "/v1/secrets/d", Some(json!({ "scope": "s.one" })));
+    assert_eq!(
+        (code, b["error"].as_str()),
+        (400, Some("scope_not_applicable")),
+        "{b}"
+    );
+    t.daemon.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn refresh_cache_rotation_and_failure() {
     let t = setup().await;

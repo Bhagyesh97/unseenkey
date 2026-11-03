@@ -50,6 +50,20 @@ fn variants(value: &[u8]) -> Vec<Vec<u8>> {
         if enc.as_bytes() != value && enc.len() >= MIN_LEN {
             out.push(enc.into_bytes());
         }
+        // A PEM key inside a JSON string has its line breaks escaped, and its
+        // slashes perhaps.
+        if s.contains('\n') {
+            let lines = s
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\r', "\\r")
+                .replace('\n', "\\n");
+            for v in [lines.replace('/', "\\/"), lines] {
+                if !out.iter().any(|o| *o == v.as_bytes()) {
+                    out.push(v.into_bytes());
+                }
+            }
+        }
         // JSON string escaping of the characters that commonly appear in keys.
         let json = s
             .replace('\\', "\\\\")
@@ -206,6 +220,24 @@ impl StreamScrubber {
         self.replaced += n;
         self.carry.clear();
         out
+    }
+}
+
+#[cfg(test)]
+mod pem_tests {
+    use super::*;
+
+    #[test]
+    fn a_pem_key_is_guarded_as_a_json_string_too() {
+        let pem = "-----BEGIN PRIVATE KEY-----\nMIIE/abc+def\nghij\n-----END PRIVATE KEY-----\n";
+        let found = variants(pem.as_bytes());
+        for form in [
+            pem.to_string(),
+            pem.replace('\n', "\\n"),
+            pem.replace('\n', "\\n").replace('/', "\\/"),
+        ] {
+            assert!(found.iter().any(|v| v == form.as_bytes()), "{form}");
+        }
     }
 }
 

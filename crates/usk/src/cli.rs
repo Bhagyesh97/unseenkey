@@ -73,6 +73,13 @@ enum Command {
         /// Read the value from stdin (after the password line when not a terminal).
         #[arg(long)]
         stdin: bool,
+        /// Read the value from a file, such as a Google service account's JSON key.
+        #[arg(long, conflicts_with = "stdin")]
+        file: Option<std::path::PathBuf>,
+        /// Scope a service account's or OAuth client's tokens get; repeatable.
+        /// Short names work: `webmasters.readonly`.
+        #[arg(long = "scope")]
+        scopes: Vec<String>,
         /// Do not send the one read-only request that checks the key works.
         #[arg(long)]
         no_test: bool,
@@ -315,6 +322,8 @@ pub fn run() -> Result<(), CliError> {
             tags,
             notes,
             stdin,
+            file,
+            scopes,
             no_test,
         } => add(
             &paths,
@@ -325,6 +334,8 @@ pub fn run() -> Result<(), CliError> {
             tags,
             notes,
             stdin,
+            file,
+            scopes,
             !no_test,
         ),
         Command::Ls => ls(&paths, cli.json),
@@ -384,6 +395,7 @@ pub fn run() -> Result<(), CliError> {
                 tags,
                 upstreams,
                 provider,
+                scopes,
             } => secret_set(
                 &paths,
                 &name,
@@ -393,6 +405,7 @@ pub fn run() -> Result<(), CliError> {
                 tags,
                 upstreams,
                 provider,
+                scopes,
             ),
         },
         Command::Handle { action } => match action {
@@ -586,12 +599,15 @@ fn add(
     tags: Vec<String>,
     notes: Option<String>,
     stdin: bool,
+    file: Option<std::path::PathBuf>,
+    scopes: Vec<String>,
     test: bool,
 ) -> Result<(), CliError> {
     let c = unlocked(paths)?;
+    let scope = unseenkey_core::providers::google_scopes(&scopes);
     // An OAuth client is four values; ask for each. (Piped with --stdin, the
     // JSON your OAuth tooling wrote is taken apart by the daemon instead.)
-    if kind == Some(SecretKind::Oauth2Client) && !stdin {
+    if kind == Some(SecretKind::Oauth2Client) && !stdin && file.is_none() {
         let ask = |prompt: &str| -> Result<String, CliError> {
             let v = uio::read_secret_line(prompt)?;
             Ok(std::str::from_utf8(v.expose())
@@ -614,6 +630,9 @@ fn add(
         if !client_secret.is_empty() {
             fields.insert("client_secret".into(), json!(client_secret));
         }
+        if !scope.is_empty() {
+            fields.insert("scope".into(), json!(scope));
+        }
         let created = c.post(
             "/v1/secrets",
             json!({
@@ -633,7 +652,13 @@ fn add(
         );
         return Ok(());
     }
-    let value = if stdin {
+    let value = if let Some(path) = &file {
+        let bytes =
+            zeroize::Zeroizing::new(std::fs::read(path).map_err(|e| {
+                CliError::general(format!("could not read {}: {e}", path.display()))
+            })?);
+        unseenkey_core::crypto::SecretBytes::from_slice(&bytes)
+    } else if stdin {
         uio::read_secret_rest()?
     } else {
         uio::read_secret_line(&format!("Value for {name} (hidden): "))?
@@ -654,6 +679,9 @@ fn add(
     // (Both halves can also be given at once: two lines, a ~/.aws/credentials
     // section or `aws sts` JSON; the daemon takes those apart.)
     let mut fields = serde_json::Map::new();
+    if !scope.is_empty() {
+        fields.insert("scope".into(), json!(scope));
+    }
     let (mut kind, mut provider) = (kind, provider);
     let other_half;
     let value_str = if unseenkey_core::providers::is_aws_access_key_id(value_str.trim()) {
@@ -715,6 +743,12 @@ fn add(
         created["name"].as_str().unwrap_or(""),
         created["id"].as_str().unwrap_or("")
     );
+    if let Some(path) = &file {
+        println!(
+            "The vault has its own copy now. Delete {} once nothing reads it.",
+            path.display()
+        );
+    }
     // USK_NO_KEY_TEST: scripts and test suites that store made-up keys.
     let test = test && std::env::var_os("USK_NO_KEY_TEST").is_none();
     if test && created["provider"].is_string() {
@@ -731,6 +765,8 @@ fn print_test(t: &Value) {
     let msg = t["message"].as_str().unwrap_or("");
     match (t["tested"].as_bool(), t["ok"].as_bool()) {
         (Some(true), Some(true)) => println!("Tested: works. {msg}"),
+        // A message that names a command has already said what to do.
+        (Some(true), Some(false)) if msg.contains("`usk ") => println!("Tested: REFUSED. {msg}"),
         (Some(true), Some(false)) => {
             println!("Tested: REFUSED. {msg} Replace it with `usk secret replace <name>`.")
         }
@@ -1807,6 +1843,10 @@ enum SecretAction {
         /// Change the provider preset (brings its hosts unless --upstream is given).
         #[arg(long)]
         provider: Option<String>,
+        /// Replace the scopes of a service account's or OAuth client's tokens;
+        /// repeatable. Short names work: `webmasters.readonly`.
+        #[arg(long = "scope")]
+        scopes: Vec<String>,
     },
 }
 
@@ -1847,7 +1887,7 @@ fn secret_replace(paths: &VaultPaths, name: &str, stdin: bool) -> Result<(), Cli
     let meta = c.get(&format!("/v1/secrets/{name}"))?;
     if matches!(
         meta["kind"].as_str(),
-        Some("aws_credentials" | "oauth2_client")
+        Some("aws_credentials" | "oauth2_client" | "gcp_service_account")
     ) {
         return Err(CliError::general(format!(
             "{name} holds several values; remove it with `usk rm {name}` and add it again"
@@ -1894,9 +1934,16 @@ fn secret_set(
     tags: Vec<String>,
     upstreams: Vec<String>,
     provider: Option<String>,
+    scopes: Vec<String>,
 ) -> Result<(), CliError> {
     let c = unlocked(paths)?;
     let mut body = serde_json::Map::new();
+    if !scopes.is_empty() {
+        body.insert(
+            "scope".into(),
+            json!(unseenkey_core::providers::google_scopes(&scopes)),
+        );
+    }
     if let Some(p) = provider {
         body.insert("provider".into(), json!(p));
     }
@@ -1917,13 +1964,19 @@ fn secret_set(
     }
     if body.is_empty() {
         return Err(CliError::general(
-            "nothing to change; pass --allow-injection, --no-scrub, --notes, --tag or --upstream",
+            "nothing to change; pass --allow-injection, --no-scrub, --notes, --tag, --upstream or --scope",
         ));
     }
     // Where a key may go and how it may leave the vault are the owner's to change.
-    if ["provider", "allow_injection", "no_scrub", "upstreams"]
-        .iter()
-        .any(|k| body.contains_key(*k))
+    if [
+        "provider",
+        "allow_injection",
+        "no_scrub",
+        "upstreams",
+        "scope",
+    ]
+    .iter()
+    .any(|k| body.contains_key(*k))
     {
         c.ensure_owner()?;
     }

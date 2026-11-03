@@ -157,6 +157,42 @@ pub fn oauth2_client(secret: &Revealed) -> Result<Oauth2Client, BrokerError> {
     })
 }
 
+/// A Google service account taken out of a revealed secret: the key file is
+/// the value and the scopes are the field `scope`.
+pub struct ServiceAccount {
+    /// Who the token request is from.
+    pub client_email: String,
+    /// The signing key, PEM.
+    pub private_key: Zeroizing<String>,
+    /// Id of the signing key, when the file gives one.
+    pub private_key_id: Option<String>,
+    /// Token endpoint.
+    pub token_url: String,
+    /// Space-separated scopes, when set.
+    pub scope: Option<String>,
+}
+
+/// Read a service account from a secret.
+pub fn service_account(secret: &Revealed) -> Result<ServiceAccount, BrokerError> {
+    let file = crate::providers::parse_service_account(&text(&secret.value)?).ok_or_else(|| {
+        BrokerError::MissingField("value (must be a service account key file)".into())
+    })?;
+    let scope = secret
+        .fields
+        .get("scope")
+        .map(text)
+        .transpose()?
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    Ok(ServiceAccount {
+        client_email: file.client_email,
+        private_key: file.private_key,
+        private_key_id: file.private_key_id,
+        token_url: file.token_url,
+        scope,
+    })
+}
+
 /// Placeholder opener for template injection.
 pub const TEMPLATE_OPEN: &[u8] = b"{{usk:";
 /// Placeholder closer.

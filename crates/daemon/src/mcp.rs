@@ -237,6 +237,11 @@ fn refused_hint(secret: &str, preset: &str, status: u16, templated: bool) -> Str
             "{secret:?} has no provider, so Unseenkey sent no credentials. Ask the owner to set its provider (Unseenkey app: Keys > {secret} > Edit settings > Provider, or `usk secret set {secret} --provider <id>`; `usk presets` lists them), or send the header yourself with the placeholder {{{{usk:{secret}}}}}."
         );
     }
+    if preset == "gcp" {
+        return format!(
+            "Google refused the call (HTTP {status}). Retrying will not help. The usual causes: the service account was not added to this property or account, the API is not enabled in its Google Cloud project, or its scopes do not cover this call. The owner can change scopes with `usk secret set {secret} --scope <scope>`."
+        );
+    }
     let why = if status == 401 {
         "the stored key is wrong, expired or revoked"
     } else {

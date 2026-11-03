@@ -1,4 +1,6 @@
-//! OAuth2 refresh: trading a stored refresh token for short-lived access tokens.
+//! OAuth2: trading a stored credential for short-lived access tokens.
+//!
+//! Two kinds of secret work this way.
 //!
 //! A secret of kind `oauth2_client` holds a refresh token, a client id, an
 //! optional client secret and the provider's token URL. Callers present a
@@ -6,6 +8,10 @@
 //! token in memory, fetches a new one when it is about to expire, and sends
 //! that upstream. Neither the refresh token nor the access token is ever
 //! returned to the caller.
+//!
+//! A secret of kind `gcp_service_account` holds a Google key file and its
+//! scopes. There is no refresh token: the broker signs a short JWT with the
+//! file's key and trades that (RFC 7523). The key itself never travels.
 //!
 //! The token endpoint is a second place the secret travels to, so it is held
 //! to the same host lock as any other destination: its host must be in the
@@ -23,7 +29,7 @@ use unseenkey_core::broker::adapters;
 use unseenkey_core::broker::{check_host, Upstream};
 use unseenkey_core::crypto::SecretBytes;
 use unseenkey_core::ids::Id;
-use unseenkey_core::vault::{Revealed, SecretMeta};
+use unseenkey_core::vault::{Revealed, SecretKind, SecretMeta};
 use zeroize::Zeroizing;
 
 /// Refresh this long before the stated expiry.
@@ -32,6 +38,9 @@ const SKEW_MS: i64 = 60_000;
 const DEFAULT_LIFETIME_S: i64 = 3600;
 /// Largest token response we read.
 const MAX_RESPONSE: usize = 64 * 1024;
+/// Lifetime requested for a service account's signed token request; Google's limit.
+const ASSERTION_LIFETIME_S: i64 = 3600;
+const JWT_BEARER_GRANT: &str = "urn:ietf:params:oauth:grant-type:jwt-bearer";
 
 struct Cached {
     /// Value version of the secret the token was obtained with.
@@ -51,6 +60,11 @@ impl TokenCache {
     pub fn clear(&mut self) {
         self.tokens.clear();
     }
+
+    /// Forget one secret's token, so the next use asks the provider again.
+    pub fn forget(&mut self, secret: &Id) {
+        self.tokens.remove(secret);
+    }
 }
 
 /// Why no access token could be produced.
@@ -61,6 +75,8 @@ pub struct OauthError {
     pub code: &'static str,
     /// Message for the caller (never contains secret material).
     pub message: String,
+    /// The provider answered and said no (as opposed to not being reached).
+    pub refused: bool,
 }
 
 fn fail(status: StatusCode, code: &'static str, message: impl Into<String>) -> OauthError {
@@ -68,6 +84,7 @@ fn fail(status: StatusCode, code: &'static str, message: impl Into<String>) -> O
         status,
         code,
         message: message.into(),
+        refused: false,
     }
 }
 
@@ -84,6 +101,108 @@ fn form(pairs: &[(&str, &str)]) -> String {
         .join("&")
 }
 
+/// Read a PEM private key. Google's key files hold PKCS#8 RSA keys.
+fn rsa_key(pem: &str) -> Option<ring::rsa::KeyPair> {
+    let body: Zeroizing<String> = Zeroizing::new(
+        pem.lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with("-----"))
+            .collect(),
+    );
+    let der = Zeroizing::new(
+        base64::engine::general_purpose::STANDARD
+            .decode(body.as_bytes())
+            .ok()?,
+    );
+    ring::rsa::KeyPair::from_pkcs8(&der).ok()
+}
+
+/// Whether `pem` is a key the broker can sign with.
+pub fn is_signing_key(pem: &str) -> bool {
+    rsa_key(pem).is_some()
+}
+
+/// The signed request for an access token (RFC 7523, RS256).
+fn assertion(
+    account: &adapters::ServiceAccount,
+    scope: &str,
+    now: i64,
+) -> Result<Zeroizing<String>, OauthError> {
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+    let Some(key) = rsa_key(&account.private_key) else {
+        return Err(fail(
+            StatusCode::BAD_REQUEST,
+            "secret_shape",
+            "the key file's private_key is not a PKCS#8 RSA key",
+        ));
+    };
+    let mut header = serde_json::json!({ "alg": "RS256", "typ": "JWT" });
+    if let Some(id) = &account.private_key_id {
+        header["kid"] = serde_json::json!(id);
+    }
+    let issued = now / 1000;
+    let claims = serde_json::json!({
+        "iss": account.client_email,
+        "scope": scope,
+        "aud": account.token_url,
+        "iat": issued,
+        "exp": issued + ASSERTION_LIFETIME_S,
+    });
+    let signing_input = format!(
+        "{}.{}",
+        b64(header.to_string().as_bytes()),
+        b64(claims.to_string().as_bytes())
+    );
+    let mut signature = vec![0; key.public().modulus_len()];
+    key.sign(
+        &ring::signature::RSA_PKCS1_SHA256,
+        &ring::rand::SystemRandom::new(),
+        signing_input.as_bytes(),
+        &mut signature,
+    )
+    .map_err(|_| {
+        fail(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "signing_failed",
+            "could not sign the token request",
+        )
+    })?;
+    Ok(Zeroizing::new(format!(
+        "{signing_input}.{}",
+        b64(&signature)
+    )))
+}
+
+/// What a secret trades for an access token.
+enum Grant {
+    Refresh(adapters::Oauth2Client),
+    ServiceAccount(adapters::ServiceAccount, String),
+}
+
+/// Read the grant out of a secret.
+fn grant(meta: &SecretMeta, revealed: &Revealed) -> Result<Grant, OauthError> {
+    let shape = |e: unseenkey_core::broker::BrokerError| {
+        fail(StatusCode::BAD_REQUEST, "secret_shape", e.to_string())
+    };
+    if meta.kind != SecretKind::GcpServiceAccount {
+        return adapters::oauth2_client(revealed)
+            .map(Grant::Refresh)
+            .map_err(shape);
+    }
+    let account = adapters::service_account(revealed).map_err(shape)?;
+    let Some(scope) = account.scope.clone() else {
+        return Err(fail(
+            StatusCode::BAD_REQUEST,
+            "scope_required",
+            format!(
+                "{name} has no scopes yet, so it cannot sign in to Google. Ask the owner to set the ones it needs: `usk secret set {name} --scope <scope>`, for example webmasters.readonly",
+                name = meta.name
+            ),
+        ));
+    };
+    Ok(Grant::ServiceAccount(account, scope))
+}
+
 /// A current access token for `meta`, from the cache or freshly obtained.
 pub async fn access_token(
     s: &Arc<AppState>,
@@ -91,8 +210,8 @@ pub async fn access_token(
     revealed: &Revealed,
     now: i64,
 ) -> Result<Zeroizing<String>, OauthError> {
-    // One refresh at a time: holding the cache also keeps a burst of requests
-    // from each spending the (possibly single-use) refresh token.
+    // One at a time: holding the cache also keeps a burst of requests from
+    // each spending the (possibly single-use) refresh token.
     let mut cache = s.oauth.lock().await;
     if let Some(c) = cache.tokens.get(&meta.secret_id) {
         if c.version == meta.value_version && now < c.expires_at - SKEW_MS {
@@ -100,8 +219,11 @@ pub async fn access_token(
         }
     }
 
-    let client = adapters::oauth2_client(revealed)
-        .map_err(|e| fail(StatusCode::BAD_REQUEST, "secret_shape", e.to_string()))?;
+    let grant = grant(meta, revealed)?;
+    let token_url = match &grant {
+        Grant::Refresh(client) => client.token_url.as_str(),
+        Grant::ServiceAccount(account, _) => account.token_url.as_str(),
+    };
     let invalid = || {
         fail(
             StatusCode::BAD_REQUEST,
@@ -109,8 +231,8 @@ pub async fn access_token(
             "the secret's token_url is not a valid https URL",
         )
     };
-    let url = reqwest::Url::parse(&client.token_url).map_err(|_| invalid())?;
-    let upstream = Upstream::parse(&client.token_url).map_err(|_| invalid())?;
+    let url = reqwest::Url::parse(token_url).map_err(|_| invalid())?;
+    let upstream = Upstream::parse(token_url).map_err(|_| invalid())?;
     if check_host(&meta.upstreams, &[], &upstream.host).is_err() {
         return Err(fail(
             StatusCode::FORBIDDEN,
@@ -132,13 +254,6 @@ pub async fn access_token(
         target.push_str(q);
     }
 
-    let mut pairs: Vec<(&str, &str)> = vec![
-        ("grant_type", "refresh_token"),
-        ("refresh_token", client.refresh_token.as_str()),
-    ];
-    if let Some(scope) = &client.scope {
-        pairs.push(("scope", scope));
-    }
     let mut request = s
         .http
         .post(&target)
@@ -148,27 +263,45 @@ pub async fn access_token(
             "application/x-www-form-urlencoded",
         )
         .header(reqwest::header::ACCEPT, "application/json");
-    let basic;
-    match (&client.client_secret, client.basic_auth) {
-        (Some(secret), true) => {
-            basic = Zeroizing::new(format!(
-                "Basic {}",
-                base64::engine::general_purpose::STANDARD.encode(format!(
-                    "{}:{}",
-                    client.client_id.as_str(),
-                    secret.as_str()
-                ))
-            ));
-            request = request.header(reqwest::header::AUTHORIZATION, basic.as_str());
-        }
-        (secret, _) => {
-            pairs.push(("client_id", client.client_id.as_str()));
-            if let Some(secret) = secret {
-                pairs.push(("client_secret", secret.as_str()));
+    let body = match &grant {
+        Grant::Refresh(client) => {
+            let mut pairs: Vec<(&str, &str)> = vec![
+                ("grant_type", "refresh_token"),
+                ("refresh_token", client.refresh_token.as_str()),
+            ];
+            if let Some(scope) = &client.scope {
+                pairs.push(("scope", scope));
             }
+            let basic;
+            match (&client.client_secret, client.basic_auth) {
+                (Some(secret), true) => {
+                    basic = Zeroizing::new(format!(
+                        "Basic {}",
+                        base64::engine::general_purpose::STANDARD.encode(format!(
+                            "{}:{}",
+                            client.client_id.as_str(),
+                            secret.as_str()
+                        ))
+                    ));
+                    request = request.header(reqwest::header::AUTHORIZATION, basic.as_str());
+                }
+                (secret, _) => {
+                    pairs.push(("client_id", client.client_id.as_str()));
+                    if let Some(secret) = secret {
+                        pairs.push(("client_secret", secret.as_str()));
+                    }
+                }
+            }
+            Zeroizing::new(form(&pairs))
         }
-    }
-    let body = Zeroizing::new(form(&pairs));
+        Grant::ServiceAccount(account, scope) => {
+            let jwt = assertion(account, scope, now)?;
+            Zeroizing::new(form(&[
+                ("grant_type", JWT_BEARER_GRANT),
+                ("assertion", jwt.as_str()),
+            ]))
+        }
+    };
 
     let unreachable = |what: &str| {
         fail(
@@ -209,18 +342,21 @@ pub async fn access_token(
         let (clean, _) = s.scrubber_snapshot().scrub(said.as_bytes());
         let said = String::from_utf8_lossy(&clean).into_owned();
         tracing::warn!(secret = %meta.secret_id, status = status.as_u16(), "oauth refresh refused");
-        return Err(fail(
-            StatusCode::BAD_GATEWAY,
-            "oauth_refresh_failed",
-            if said.is_empty() {
-                format!(
-                    "the provider refused to refresh the access token (HTTP {})",
-                    status.as_u16()
-                )
-            } else {
-                format!("the provider refused to refresh the access token ({said})")
-            },
-        ));
+        return Err(OauthError {
+            refused: true,
+            ..fail(
+                StatusCode::BAD_GATEWAY,
+                "oauth_refresh_failed",
+                if said.is_empty() {
+                    format!(
+                        "the provider refused to refresh the access token (HTTP {})",
+                        status.as_u16()
+                    )
+                } else {
+                    format!("the provider refused to refresh the access token ({said})")
+                },
+            )
+        });
     };
     let token = Zeroizing::new(token);
     let lifetime_s = json
@@ -237,8 +373,12 @@ pub async fn access_token(
     let mut version = meta.value_version;
     {
         let mut vault = s.vault.lock().await;
-        if let Some(rotated) =
-            text("refresh_token").filter(|t| !t.is_empty() && *t != *client.refresh_token)
+        let current = match &grant {
+            Grant::Refresh(client) => Some(client.refresh_token.as_str()),
+            Grant::ServiceAccount(..) => None,
+        };
+        if let Some(rotated) = current
+            .and_then(|old| text("refresh_token").filter(|t| !t.is_empty() && t.as_str() != old))
         {
             let rotated = SecretBytes::from(rotated.as_str());
             let mut fields = revealed.fields.clone();

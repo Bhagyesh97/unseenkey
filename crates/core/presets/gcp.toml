@@ -1,0 +1,23 @@
+id = "gcp"
+display = "Google APIs (service account)"
+upstreams = ["*.googleapis.com"]
+auth = { kind = "bearer" }
+docs = "https://console.cloud.google.com/iam-admin/serviceaccounts"
+base_path = ""
+category = "hosting"
+
+# The secret is a service account's JSON key file. The broker signs in with it
+# and sends the short-lived access token; the file itself never leaves the
+# machine. What the token may do is decided by the scopes set on the secret and
+# by what the service account was added to on Google's side.
+
+[[policies]]
+id = "read-only"
+display = "GET requests only (some read APIs, like Search Console queries, use POST: choose full for those)"
+recommended = true
+allow = ["GET /**", "HEAD /**"]
+
+[[policies]]
+id = "full"
+display = "Every call the key's scopes allow"
+allow = ["* /**"]

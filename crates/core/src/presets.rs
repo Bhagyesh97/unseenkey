@@ -367,6 +367,7 @@ pub const EMBEDDED: &[(&str, &str)] = embedded![
     "discord",
     "telnyx",
     "aws",
+    "gcp",
     "generic",
 ];
 
@@ -797,7 +798,7 @@ mod tests {
     #[test]
     fn every_embedded_preset_parses_and_explains() {
         let ids: Vec<&str> = EMBEDDED.iter().map(|(id, _)| *id).collect();
-        assert_eq!(ids.len(), 66);
+        assert_eq!(ids.len(), 67);
         for id in ids {
             let p = get(id).unwrap_or_else(|| panic!("missing {id}"));
             assert!(!p.policies.is_empty(), "{id} has no policies");

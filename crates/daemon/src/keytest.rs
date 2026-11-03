@@ -18,7 +18,7 @@ use unseenkey_core::audit::kinds;
 use unseenkey_core::broker::adapters;
 use unseenkey_core::presets::{self, Auth, Preset};
 use unseenkey_core::providers;
-use unseenkey_core::vault::SecretKind;
+use unseenkey_core::vault::{Revealed, SecretKind, SecretMeta};
 use zeroize::Zeroizing;
 
 /// What a pasted key looks like.
@@ -112,6 +112,56 @@ fn not_tested(provider: Option<&Preset>, message: impl Into<String>) -> Json<Tes
     })
 }
 
+/// A service account is tested by signing in: Google checks the key and the
+/// scopes. It does not show what the account was added to; each API decides that.
+async fn test_service_account(
+    s: &Arc<AppState>,
+    meta: &SecretMeta,
+    revealed: &Revealed,
+) -> Json<TestResult> {
+    let display = meta
+        .provider
+        .as_deref()
+        .and_then(presets::get)
+        .map(|p| p.display.clone());
+    let attempt = {
+        s.oauth.lock().await.forget(&meta.secret_id);
+        crate::oauth::access_token(s, meta, revealed, crate::proxy::now_ms()).await
+    };
+    let (ok, message) = match attempt {
+        Ok(_) => (
+            Some(true),
+            "Google accepted the key and these scopes. Each API still checks what the service account was added to.".to_string(),
+        ),
+        Err(e) if e.code == "scope_required" => {
+            return Json(TestResult {
+                tested: false,
+                ok: None,
+                status: None,
+                provider: display,
+                message: e.message,
+            })
+        }
+        Err(e) if e.refused => (Some(false), format!("Google refused it: {}. A key deleted in Google Cloud needs a new file: `usk rm {name}`, then `usk add {name} --file <key.json> --scope <scope>`.", e.message, name = meta.name)),
+        Err(e) => (None, e.message),
+    };
+    {
+        let mut v = s.vault.lock().await;
+        let _ = v.audit(
+            kinds::KEY_TESTED,
+            json!({ "id": meta.secret_id.to_hex(), "secret": meta.name, "provider": meta.provider, "ok": ok }),
+        );
+    }
+    tracing::info!(secret = %meta.secret_id, ok = ?ok, "key tested");
+    Json(TestResult {
+        tested: true,
+        ok,
+        status: None,
+        provider: display,
+        message,
+    })
+}
+
 /// `POST /v1/secrets/{ref}/test`: one read-only request with the real key.
 pub async fn test_secret(
     State(s): State<Arc<AppState>>,
@@ -122,6 +172,9 @@ pub async fn test_secret(
         let id = resolve_secret(&v, &r)?;
         (v.get(&id)?.clone(), v.reveal(&id)?)
     };
+    if meta.kind == SecretKind::GcpServiceAccount {
+        return Ok(test_service_account(&s, &meta, &revealed).await);
+    }
     let Some(preset) = meta.provider.as_deref().and_then(presets::get) else {
         return Ok(not_tested(
             None,

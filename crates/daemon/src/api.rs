@@ -823,6 +823,47 @@ pub async fn create_secret(
             upstreams.push(token_host);
         }
     }
+    // A Google key file stays whole, so `usk run` can hand it to a tool that
+    // wants the file. Its signing key is also a field, so the scrubber guards
+    // the key on its own. Scopes may come later: without them the key can still
+    // be stored and injected, and the broker says what is missing when used.
+    if kind == SecretKind::GcpServiceAccount {
+        let account = providers::parse_service_account(&req.value).ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "service_account_incomplete",
+                "a Google service account needs its whole JSON key file, with client_email and private_key",
+            )
+        })?;
+        if !crate::oauth::is_signing_key(&account.private_key) {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_private_key",
+                "the key file's private_key is not a PKCS#8 RSA key; download a new JSON key from Google Cloud",
+            ));
+        }
+        fields.insert(
+            "private_key".into(),
+            SecretBytes::from_slice(account.private_key.as_bytes()),
+        );
+        let token_host = unseenkey_core::broker::Upstream::parse(&account.token_url)
+            .ok()
+            .filter(|_| {
+                account.token_url.contains("://") && reqwest::Url::parse(&account.token_url).is_ok()
+            })
+            .map(|u| u.host)
+            .ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_token_url",
+                    "the key file's token_uri must be an https URL",
+                )
+            })?;
+        // The token endpoint is somewhere the signed request is sent.
+        if !unseenkey_core::policy::eval::host_allowed(&upstreams, &token_host) {
+            upstreams.push(token_host);
+        }
+    }
     let new = NewSecret {
         name: req.name.clone(),
         kind,
@@ -973,11 +1014,14 @@ pub struct PatchSecret {
     /// New fields, used with `value`.
     #[serde(default)]
     pub fields: BTreeMap<String, Zeroizing<String>>,
+    /// New scopes for a service account or OAuth client (creates a new version).
+    pub scope: Option<String>,
 }
 
 /// `PATCH /v1/secrets/{ref}`. Changing where a secret may go (`upstreams`,
-/// `provider`) or how it may leave the vault (`allow_injection`, `no_scrub`)
-/// widens access and is owner only; a rename, tags, notes or a new value are not.
+/// `provider`), how it may leave the vault (`allow_injection`, `no_scrub`) or
+/// what its access tokens may do (`scope`) widens access and is owner only; a
+/// rename, tags, notes or a new value are not.
 pub async fn patch_secret(
     State(s): State<Arc<AppState>>,
     Path(r): Path<String>,
@@ -987,7 +1031,8 @@ pub async fn patch_secret(
     let widens = p.allow_injection.is_some()
         || p.no_scrub.is_some()
         || p.upstreams.is_some()
-        || p.provider.is_some();
+        || p.provider.is_some()
+        || p.scope.is_some();
     if widens {
         require_owner(&s, &headers)?;
     }
@@ -1010,6 +1055,31 @@ pub async fn patch_secret(
             .map(|(k, val)| (k.clone(), SecretBytes::from_slice(val.as_bytes())))
             .collect();
         v.update_value(&id, SecretBytes::from_slice(value.as_bytes()), fields)?;
+    }
+    if let Some(scope) = &p.scope {
+        let kind = v.get(&id)?.kind;
+        if !matches!(
+            kind,
+            SecretKind::GcpServiceAccount | SecretKind::Oauth2Client
+        ) {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "scope_not_applicable",
+                "scopes apply to Google service accounts and OAuth clients",
+            ));
+        }
+        let scope = scope.trim();
+        if scope.is_empty() {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "empty_scope",
+                "scope is empty",
+            ));
+        }
+        let revealed = v.reveal(&id)?;
+        let mut fields = revealed.fields.clone();
+        fields.insert("scope".into(), SecretBytes::from(scope));
+        v.update_value(&id, revealed.value.clone(), fields)?;
     }
     let has_meta = p.name.is_some()
         || p.tags.is_some()
@@ -1063,9 +1133,9 @@ pub async fn patch_secret(
     }
     let _ = v.audit(
         kinds::SECRET_UPDATED,
-        serde_json::json!({ "id": id.to_hex(), "value_changed": p.value.is_some() }),
+        serde_json::json!({ "id": id.to_hex(), "value_changed": p.value.is_some(), "scope": p.scope }),
     );
-    if p.value.is_some() || p.no_scrub.is_some() {
+    if p.value.is_some() || p.no_scrub.is_some() || p.scope.is_some() {
         s.rebuild_scrubber(&v);
     }
     s.emit(Event::SecretChanged {

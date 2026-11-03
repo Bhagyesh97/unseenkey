@@ -343,7 +343,7 @@ function SecretDetail({ secret, onChange }: { secret: SecretMeta; onChange: () =
         <div className="actions">
           <button onClick={() => setEditing(true)}>Edit settings</button>
           {secret.provider && <button disabled={testing} onClick={() => void runTest()}>{testing ? "Testing…" : "Test key"}</button>}
-          {secret.kind !== "aws_credentials" && secret.kind !== "oauth2_client" && (
+          {secret.kind !== "aws_credentials" && secret.kind !== "oauth2_client" && secret.kind !== "gcp_service_account" && (
             <button onClick={() => setReplacing(true)}>Replace value</button>
           )}
         </div>

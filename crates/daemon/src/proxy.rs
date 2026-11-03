@@ -473,7 +473,7 @@ pub async fn proxy(State(s): State<Arc<AppState>>, req: Request) -> Response {
     execute(s, HandleRef::Presented(handle_str), call).await
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     unseenkey_core::time::Clock::now_unix_ms(&unseenkey_core::time::SystemClock)
 }
 
@@ -905,16 +905,20 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
         ) => Auth::Bearer {
             also_headers: Vec::new(),
         },
-        // An OAuth client's handle stands where an access token goes.
-        (_, SecretKind::Oauth2Client) => Auth::Bearer {
+        // An OAuth client's or service account's handle stands where an access
+        // token goes. A service account's key file is never sent, on any route.
+        (_, SecretKind::Oauth2Client | SecretKind::GcpServiceAccount) => Auth::Bearer {
             also_headers: Vec::new(),
         },
         (a, _) => a.clone(),
     };
 
     // OAuth: what travels upstream is a short-lived access token, obtained
-    // with the stored refresh token and kept in memory.
-    let oauth_access = if meta.kind == SecretKind::Oauth2Client {
+    // with the stored credential and kept in memory.
+    let oauth_access = if matches!(
+        meta.kind,
+        SecretKind::Oauth2Client | SecretKind::GcpServiceAccount
+    ) {
         match crate::oauth::access_token(&s, &meta, &revealed, now_ms()).await {
             Ok(token) => Some(token),
             Err(e) => {

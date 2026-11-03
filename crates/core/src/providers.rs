@@ -459,6 +459,59 @@ pub struct Oauth2ClientText {
 /// Google's token endpoint, implied by its `authorized_user` credential files.
 pub const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 
+/// A Google service account's JSON key file, taken apart.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ServiceAccountText {
+    /// The account's address: who the signed token request is from.
+    pub client_email: String,
+    /// The signing key, PEM.
+    pub private_key: zeroize::Zeroizing<String>,
+    /// Id of the signing key, when given.
+    pub private_key_id: Option<String>,
+    /// Token endpoint: the file's `token_uri`, else Google's.
+    pub token_url: String,
+}
+
+/// Recognise a Google service account's key file: JSON with `"type":
+/// "service_account"`, `client_email` and `private_key`.
+pub fn parse_service_account(text: &str) -> Option<ServiceAccountText> {
+    let text = text.trim().trim_start_matches('\u{feff}');
+    let json: serde_json::Value = serde_json::from_str(text).ok()?;
+    let field = |name: &str| {
+        json.get(name)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+    };
+    if field("type") != Some("service_account") {
+        return None;
+    }
+    Some(ServiceAccountText {
+        client_email: field("client_email")?.to_string(),
+        private_key: zeroize::Zeroizing::new(field("private_key")?.to_string()),
+        private_key_id: field("private_key_id").map(str::to_string),
+        token_url: field("token_uri").unwrap_or(GOOGLE_TOKEN_URL).to_string(),
+    })
+}
+
+/// Scopes as Google's token request wants them: space separated, full URLs. A
+/// bare name such as `webmasters.readonly` is short for Google's auth URL.
+pub fn google_scopes(scopes: &[String]) -> String {
+    scopes
+        .iter()
+        .flat_map(|s| s.split([' ', ',']))
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            if s.contains("://") {
+                s.to_string()
+            } else {
+                format!("https://www.googleapis.com/auth/{s}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Recognise an OAuth2 client with a refresh token: a JSON object with
 /// `client_id`, `refresh_token` and optionally `client_secret`, `token_uri` or
 /// `token_url`, `scope` or `scopes`. That is the shape of gcloud's
@@ -705,5 +758,43 @@ mod tests {
         ] {
             assert_eq!(parse_oauth2_client(bad), None, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn service_account_files_are_taken_apart() {
+        let file = r#"{"type":"service_account","project_id":"p","private_key_id":"k1",
+            "private_key":"-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n",
+            "client_email":"bot@p.iam.gserviceaccount.com","token_uri":"https://oauth2.googleapis.com/token"}"#;
+        let sa = parse_service_account(file).unwrap();
+        assert_eq!(sa.client_email, "bot@p.iam.gserviceaccount.com");
+        assert_eq!(sa.private_key_id.as_deref(), Some("k1"));
+        assert_eq!(sa.token_url, GOOGLE_TOKEN_URL);
+        assert!(sa.private_key.contains("\nAAAA\n"));
+        // A token endpoint is implied; the rest is not.
+        let no_uri = r#"{"type":"service_account","private_key":"x","client_email":"a@b"}"#;
+        assert_eq!(
+            parse_service_account(no_uri).unwrap().token_url,
+            GOOGLE_TOKEN_URL
+        );
+        for bad in [
+            r#"{"type":"service_account","client_email":"a@b"}"#,
+            r#"{"type":"service_account","private_key":"x"}"#,
+            r#"{"type":"authorized_user","private_key":"x","client_email":"a@b"}"#,
+            "{not json",
+        ] {
+            assert_eq!(parse_service_account(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn google_scopes_expand_short_names() {
+        let scopes = [
+            "webmasters.readonly".to_string(),
+            "tagmanager.readonly, https://example.test/full".to_string(),
+        ];
+        assert_eq!(
+            google_scopes(&scopes),
+            "https://www.googleapis.com/auth/webmasters.readonly https://www.googleapis.com/auth/tagmanager.readonly https://example.test/full"
+        );
     }
 }

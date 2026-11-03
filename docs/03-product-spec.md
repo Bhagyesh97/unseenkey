@@ -22,7 +22,7 @@ Unseenkey stores API keys, OAuth credentials, tokens, passwords and other secret
 | `basic_auth` | username + password for HTTP | Proxy (builds `Authorization: Basic`) |
 | `oauth2_client` | client_id + client_secret + refresh token | Proxy with automatic token refresh (Phase 2) |
 | `aws_credentials` | access key + secret + optional session token | SigV4 signing in broker (Phase 2); injection |
-| `gcp_service_account` | JSON key file | Token exchange in broker (Phase 2); injection |
+| `gcp_service_account` | JSON key file | Token exchange in broker ([07](07-broker-and-policy.md#google-service-accounts)); injection |
 | `connection_string` | Postgres/MySQL/Redis URLs | Injection (Phase 1), protocol proxy (Phase 4) |
 | `ssh_key` | private key | Injection via agent socket (Phase 4) |
 | `password` | website logins | Store, reveal-with-approval only |

@@ -66,7 +66,18 @@ A secret of kind `oauth2_client` holds a refresh token (the value) with fields `
 - Access tokens are forgotten on lock and when the secret's value changes.
 - Adding: paste or pipe the JSON OAuth tooling writes (`client_id`, `client_secret`, `refresh_token`, `token_uri`); gcloud's `application_default_credentials.json` needs nothing more, its token endpoint and `*.googleapis.com` are implied. `usk add <name> --type oauth2_client --upstream <api host>` asks for the four values instead.
 
-Not done: obtaining the first refresh token (the authorization-code dance), service-account JWT exchange (GCP), and client-credentials grants.
+Not done: obtaining the first refresh token (the authorization-code dance) and client-credentials grants.
+
+## Google service accounts
+
+A secret of kind `gcp_service_account` holds a Google JSON key file (the value, whole, so `usk run` can still hand it to a tool that wants the file) with the fields `private_key` (so the scrubber guards the key by itself, including as a JSON string) and `scope` (space-separated). The caller presents a handle where an access token would go, on `/p/gcp/@<api host>/…` or `/p/generic/@<api host>/…`. There is no refresh token: the broker signs a one-hour JWT with the file's key (RS256, RFC 7523), trades it at the file's `token_uri` and handles the access token exactly as under *OAuth2*: one at a time, cached in memory, forgotten on lock and when the secret changes, guarded by the scrubber. The key file itself never travels, on any route.
+
+- Adding: `usk add <name> --file key.json --scope webmasters.readonly` (`--scope` is repeatable; a bare name is short for `https://www.googleapis.com/auth/<name>`). The file is checked when added: `service_account_incomplete` without `client_email` and `private_key`, `invalid_private_key` if the key cannot sign. Hosts default to `*.googleapis.com`; the token endpoint's host joins the secret's list.
+- Scopes are required to sign in but not to store: without them a call answers 400 `scope_required`, naming the fix. `usk secret set <name> --scope …` (`PATCH /v1/secrets/{ref}` with `scope`) replaces them. That widens what tokens may do, so it is owner only; it creates a new version, so the next call gets a new token.
+- `usk secret test` signs in afresh and reports what Google said. That proves the key and scopes, not what the account was added to; each API decides that.
+- Replacing the value takes `usk rm` and `usk add`, as for the other kinds that hold several values.
+
+Not done: domain-wide delegation (the `sub` claim) and adding scopes in the desktop app, which stores the pasted file and points at the command above.
 
 ## Header hygiene
 
