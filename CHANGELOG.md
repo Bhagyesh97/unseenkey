@@ -2,6 +2,16 @@
 
 The top section of this file becomes the release notes when a `v*` tag is pushed.
 
+## 0.1.9 — 2026-11-03
+
+- **Google service account keys.** `usk add gsc --file key.json --scope webmasters.readonly`: the broker signs in with the key file and sends Google a short-lived access token, so the file itself never leaves the vault. Search Console, Tag Manager, Analytics and the other Google APIs work through handles and through AI tools. Scopes can be changed with `usk secret set <name> --scope …`; the key test signs in and reports what Google said.
+- **Keys that come in two parts work.** Twilio was listed but could not be used: `usk add` and the app took one value, and the broker sent it with an empty username. `usk add` now asks for both parts in the provider's words, the app shows a second box, and both can be pasted at once as `first:second` or on two lines. A key stored with one part (`usk import` meets them one at a time) is not sent; the test and any call say what is missing, and `usk secret set <name> --username …` adds it. Replacing the password keeps the username. An SDK's own `Basic` header with a handle in it now works, and if a provider echoes the header it is hidden like any other secret.
+- **Seven new providers:** Razorpay, Mailgun (US and EU), Plivo, Vonage, Cloudinary, Jira and Confluence, DataForSEO. That makes 73. Twilio, Razorpay, Mailgun, Plivo, Vonage and DataForSEO keys are tested when added; Cloudinary and Jira are not, because their addresses are specific to your account.
+- **`usk passwd` changes the vault password** with the current one, instead of needing the recovery phrase. The vault locks when it is done. The recovery phrase keeps working, and a copy of the vault file made earlier still opens with the old password.
+- **Claude Desktop bundle and MCP registry.** Each release now builds an `.mcpb` bundle for Claude Desktop, and the server can be listed in the MCP registry.
+
+Two things behave differently. The username of a two-part key (an account SID, an email) counts as an account name, not a secret: it is no longer hidden in replies, and `list_secrets` shows it as `account`, because providers put it in their URLs. And a preset of your own with `kind = "basic"` used to send an empty username when none was stored; add `username = ""` to keep that.
+
 ## 0.1.8 — 2026-11-01
 
 Desktop app updates; nothing else changes.
