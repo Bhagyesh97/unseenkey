@@ -96,6 +96,7 @@ function TestBanner({ t }: { t: TestResult }) {
 /** Paste a key; Unseenkey works out the rest. Everything stays editable under "More options". */
 function AddSecret({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
   const [value, setValue] = useState("");
+  const [second, setSecond] = useState("");
   const [name, setName] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
   const [picked, setPicked] = useState<string>("");
@@ -140,18 +141,25 @@ function AddSecret({ onDone, onCancel }: { onDone: () => void; onCancel: () => v
   })();
   const effectiveName = (nameTouched ? name : "").trim() || defaultName;
   const needHosts = picked === "other";
-  const canSave = !!value.trim() && !!effectiveName && (!!provider || (needHosts && splitHosts(hosts).length > 0));
+  // A key in two parts, unless both were pasted at once (`first:second` or two lines).
+  const needSecond = !!preset?.pair && !/[:\n]/.test(value.trim());
+  const canSave = !!value.trim() && (!needSecond || !!second.trim()) && !!effectiveName && (!!provider || (needHosts && splitHosts(hosts).length > 0));
 
   const save = async () => {
     setErr(null);
     setBusy(true);
     try {
       const body: Record<string, unknown> = { name: effectiveName, value: value.includes("\n") ? value : value.trim(), notes: notes || null };
+      if (needSecond) {
+        body.value = second.trim();
+        body.fields = { username: value.trim() };
+      }
       if (provider) body.provider = provider;
       const list = splitHosts(hosts);
       if (list.length) body.upstreams = list;
       const r = await api.call<{ id: string; name: string; upstreams: string[] }>("POST", "/v1/secrets", body);
       setValue("");
+      setSecond("");
       let test: TestResult | null = null;
       if (provider) {
         try {
@@ -193,7 +201,7 @@ function AddSecret({ onDone, onCancel }: { onDone: () => void; onCancel: () => v
   return (
     <div className="form">
       <h2>Add a key</h2>
-      <label>Paste your key
+      <label>{preset?.pair ? preset.pair.username : "Paste your key"}
         <textarea rows={2} autoFocus spellCheck={false} autoComplete="off" placeholder="Paste it here. It is encrypted on this computer and never shown again." value={value} onChange={(e) => setValue(e.target.value)} />
       </label>
 
@@ -233,6 +241,12 @@ function AddSecret({ onDone, onCancel }: { onDone: () => void; onCancel: () => v
           <span className="muted small">The key will only ever be sent there. <button className="link" onClick={() => setPicked("__choose")}>Back to the list</button></span>
         </label>
       ))}
+
+      {value.trim() && needSecond && (
+        <label>{preset?.pair?.secret}
+          <input type="password" spellCheck={false} autoComplete="off" value={second} onChange={(e) => setSecond(e.target.value)} />
+        </label>
+      )}
 
       <button className="link" onClick={() => setMore(!more)}>{more ? "Fewer options" : "More options"}</button>
       {more && (

@@ -15,7 +15,7 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 use unseenkey_core::audit::kinds;
-use unseenkey_core::broker::adapters;
+use unseenkey_core::broker::{adapters, BrokerError};
 use unseenkey_core::presets::{self, Auth, Preset};
 use unseenkey_core::providers;
 use unseenkey_core::vault::{Revealed, SecretKind, SecretMeta};
@@ -228,14 +228,44 @@ pub async fn test_secret(
             ),
         ));
     }
-    let injection = adapters::inject(&auth, &revealed)
-        .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, "cannot_test", e.to_string()))?;
+    let injection = match adapters::inject(&auth, &revealed) {
+        Ok(i) => i,
+        Err(BrokerError::MissingUsername) => {
+            let (user, _) = preset.pair_labels().unwrap_or(("Username", ""));
+            return Ok(not_tested(
+                Some(preset),
+                format!(
+                    "{} keys come in two parts and the {user} is missing. Add it with `usk secret set {} --username <value>`.",
+                    preset.display, meta.name
+                ),
+            ));
+        }
+        Err(e) => {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "cannot_test",
+                e.to_string(),
+            ))
+        }
+    };
     let origin = s
         .upstream_overrides
         .get(&host)
         .cloned()
         .unwrap_or_else(|| format!("https://{host}"));
-    let mut url = format!("{origin}{}", verify.path);
+    // Some providers put the account in the path.
+    let path = match &auth {
+        Auth::Basic { username, .. } if verify.path.contains("{username}") => {
+            let user = adapters::basic_username(username.as_deref(), &revealed).map_err(|e| {
+                ApiError::new(StatusCode::BAD_REQUEST, "cannot_test", e.to_string())
+            })?;
+            let user =
+                percent_encoding::utf8_percent_encode(&user, percent_encoding::NON_ALPHANUMERIC);
+            verify.path.replace("{username}", &user.to_string())
+        }
+        _ => verify.path.clone(),
+    };
+    let mut url = format!("{origin}{path}");
     for (k, v) in &injection.query {
         let enc = percent_encoding::utf8_percent_encode(v, percent_encoding::NON_ALPHANUMERIC);
         url.push(if url.contains('?') { '&' } else { '?' });

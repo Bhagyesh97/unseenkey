@@ -1,0 +1,26 @@
+id = "jira"
+display = "Jira and Confluence"
+category = "productivity"
+upstreams = ["*.atlassian.net"]
+auth = { kind = "basic", username_label = "Atlassian account email", secret_label = "API token" }
+docs = "https://id.atlassian.com/manage-profile/security/api-tokens"
+base_path = ""
+env_names = ["atlassian", "confluence", "JIRA_API_TOKEN", "ATLASSIAN_API_TOKEN"]
+
+[[policies]]
+id = "read-only"
+display = "Read and search only"
+recommended = true
+allow = ["GET /**", "POST /rest/api/*/search/**"]
+
+[[policies]]
+id = "issues"
+display = "Create and edit issues and comments; no deletes or admin"
+recommended = true
+allow = ["GET /**", "POST /rest/api/*/search/**", "POST /rest/api/*/issue", "PUT /rest/api/*/issue/*", "POST /rest/api/*/issue/*/comment", "POST /rest/api/*/issue/*/transitions"]
+deny = ["DELETE /**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

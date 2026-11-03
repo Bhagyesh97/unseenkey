@@ -129,6 +129,8 @@ export interface Preset {
   camouflage: boolean;
   category?: string;
   testable?: boolean;
+  /** What the provider calls each part, when its keys come in two parts. */
+  pair?: { username: string; secret: string } | null;
   policies: { id: string; display: string; recommended: boolean; explanation: string }[];
 }
 

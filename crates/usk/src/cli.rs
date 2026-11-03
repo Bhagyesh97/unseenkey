@@ -121,6 +121,11 @@ enum Command {
         #[arg(long, value_enum, default_value = "desktop")]
         profile: Profile,
     },
+    /// Change the password. Needs the current one.
+    Passwd {
+        #[arg(long, value_enum, default_value = "desktop")]
+        profile: Profile,
+    },
     /// Show vault and daemon status.
     Status,
     /// Diagnose common problems.
@@ -348,6 +353,7 @@ pub fn run() -> Result<(), CliError> {
             dry_run,
         } => import(&paths, &from_env, all, dry_run),
         Command::Recover { profile: p } => recover(&paths, profile(p)),
+        Command::Passwd { profile: p } => passwd(&paths, profile(p)),
         Command::Status => status(&paths, cli.json),
         Command::Doctor => doctor(&paths),
         Command::Presets => presets(cli.json),
@@ -396,6 +402,7 @@ pub fn run() -> Result<(), CliError> {
                 upstreams,
                 provider,
                 scopes,
+                username,
             } => secret_set(
                 &paths,
                 &name,
@@ -406,6 +413,7 @@ pub fn run() -> Result<(), CliError> {
                 upstreams,
                 provider,
                 scopes,
+                username,
             ),
         },
         Command::Handle { action } => match action {
@@ -652,6 +660,14 @@ fn add(
         );
         return Ok(());
     }
+    // A key in two parts: ask for each by the provider's own words.
+    let named_pair = provider
+        .as_deref()
+        .map_or_else(
+            || unseenkey_core::presets::guess_by_name(&name),
+            unseenkey_core::presets::get,
+        )
+        .filter(|p| p.pair_labels().is_some());
     let value = if let Some(path) = &file {
         let bytes =
             zeroize::Zeroizing::new(std::fs::read(path).map_err(|e| {
@@ -661,7 +677,10 @@ fn add(
     } else if stdin {
         uio::read_secret_rest()?
     } else {
-        uio::read_secret_line(&format!("Value for {name} (hidden): "))?
+        let what = named_pair
+            .and_then(|p| p.pair_labels())
+            .map_or("Value", |(user, _)| user);
+        uio::read_secret_line(&format!("{what} for {name} (hidden): "))?
     };
     if value.is_empty() {
         return Err(CliError::general("empty value"));
@@ -695,6 +714,42 @@ fn add(
         kind = kind.or(Some(SecretKind::AwsCredentials));
         provider = provider.or_else(|| Some("aws".into()));
         std::str::from_utf8(other_half.expose())
+            .map_err(|_| CliError::general("value must be UTF-8 text"))?
+            .trim()
+    } else {
+        value_str
+    };
+    // The first part of a pair on its own: ask for the rest. (Both can also be
+    // given at once as `first:second` or two lines; the daemon takes those apart.)
+    let pair = named_pair
+        .or_else(|| {
+            unseenkey_core::providers::detect(value_str.as_bytes())
+                .and_then(|d| unseenkey_core::presets::get(d.provider))
+                .filter(|p| p.pair_labels().is_some())
+        })
+        .or_else(|| {
+            unseenkey_core::presets::detect_by_prefix(value_str)
+                .filter(|p| p.pair_labels().is_some())
+        })
+        .filter(|_| {
+            !stdin
+                && file.is_none()
+                && !fields.contains_key("access_key_id")
+                && unseenkey_core::providers::split_pair(value_str).is_none()
+        });
+    let second_part;
+    let value_str = if let Some(p) = pair {
+        let (_, secret_label) = p.pair_labels().unwrap_or(("", "Password"));
+        second_part = uio::read_secret_line(&format!("{secret_label} (hidden): "))?;
+        if second_part.is_empty() {
+            return Err(CliError::general(format!(
+                "{} keys come in two parts; the {secret_label} is needed as well",
+                p.display
+            )));
+        }
+        fields.insert("username".into(), json!(value_str.trim()));
+        provider = provider.or_else(|| Some(p.id.clone()));
+        std::str::from_utf8(second_part.expose())
             .map_err(|_| CliError::general("value must be UTF-8 text"))?
             .trim()
     } else {
@@ -991,6 +1046,35 @@ fn recover(paths: &VaultPaths, profile: Argon2Profile) -> Result<(), CliError> {
     }
     v.change_password(&pw, profile).map_err(map_vault_err)?;
     println!("Password changed. The recovery phrase still works; keep it safe.");
+    Ok(())
+}
+
+fn passwd(paths: &VaultPaths, profile: Argon2Profile) -> Result<(), CliError> {
+    let storage =
+        SqliteStorage::open(&paths.vault).map_err(|e| CliError::general(e.to_string()))?;
+    let mut v = Vault::open(storage, SystemClock).map_err(map_vault_err)?;
+    let current = uio::read_secret_line("Current password: ")?;
+    v.unlock_with_password(&current).map_err(map_vault_err)?;
+    let pw = uio::read_secret_line("New password: ")?;
+    if pw.len() < 12 {
+        return Err(CliError::general("password must be at least 12 characters"));
+    }
+    if pw == current {
+        return Err(CliError::general("that is the current password"));
+    }
+    if uio::is_tty() {
+        let again = uio::read_secret_line("Repeat new password: ")?;
+        if again != pw {
+            return Err(CliError::general("passwords do not match"));
+        }
+    }
+    // The daemon must not hold an unlocked copy while the header changes.
+    if let Some(c) = Client::try_connect(paths) {
+        c.post("/v1/lock", json!({}))?;
+    }
+    v.change_password(&pw, profile).map_err(map_vault_err)?;
+    println!("Password changed, and the vault is locked. The recovery phrase still works.");
+    println!("A copy of the vault file made before now still opens with the old password.");
     Ok(())
 }
 
@@ -1847,6 +1931,10 @@ enum SecretAction {
         /// repeatable. Short names work: `webmasters.readonly`.
         #[arg(long = "scope")]
         scopes: Vec<String>,
+        /// Set the other part of a key in two parts: Twilio's Account SID,
+        /// Razorpay's key ID.
+        #[arg(long)]
+        username: Option<String>,
     },
 }
 
@@ -1896,7 +1984,12 @@ fn secret_replace(paths: &VaultPaths, name: &str, stdin: bool) -> Result<(), Cli
     let value = if stdin {
         uio::read_secret_rest()?
     } else {
-        uio::read_secret_line(&format!("New value for {name} (hidden): "))?
+        let what = meta["provider"]
+            .as_str()
+            .and_then(unseenkey_core::presets::get)
+            .and_then(|p| p.pair_labels())
+            .map_or("New value", |(_, secret)| secret);
+        uio::read_secret_line(&format!("{what} for {name} (hidden): "))?
     };
     let text = std::str::from_utf8(value.expose())
         .map_err(|_| CliError::general("value must be UTF-8 text"))?;
@@ -1935,9 +2028,13 @@ fn secret_set(
     upstreams: Vec<String>,
     provider: Option<String>,
     scopes: Vec<String>,
+    username: Option<String>,
 ) -> Result<(), CliError> {
     let c = unlocked(paths)?;
     let mut body = serde_json::Map::new();
+    if let Some(u) = username {
+        body.insert("username".into(), json!(u));
+    }
     if !scopes.is_empty() {
         body.insert(
             "scope".into(),
@@ -1964,7 +2061,7 @@ fn secret_set(
     }
     if body.is_empty() {
         return Err(CliError::general(
-            "nothing to change; pass --allow-injection, --no-scrub, --notes, --tag, --upstream or --scope",
+            "nothing to change; pass --allow-injection, --no-scrub, --notes, --tag, --upstream, --scope or --username",
         ));
     }
     // Where a key may go and how it may leave the vault are the owner's to change.

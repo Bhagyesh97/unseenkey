@@ -287,8 +287,21 @@ async fn list_secrets(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args: 
                 None => (default_policy(m.provider.as_deref(), s.care()), false),
             };
             let policy = with_hosts(policy, &m.upstreams);
+            // Some providers want the account in the path. It is not the secret.
+            let account = m
+                .provider
+                .as_deref()
+                .and_then(presets::get)
+                .filter(|p| p.pair_labels().is_some())
+                .and_then(|_| v.reveal(&m.secret_id).ok())
+                .and_then(|r| {
+                    r.fields
+                        .get("username")
+                        .and_then(|u| String::from_utf8(u.expose().to_vec()).ok())
+                });
             json!({
                 "name": m.name, "type": m.kind.as_str(), "provider": m.provider,
+                "account": account,
                 "upstreams": m.upstreams, "tags": m.tags,
                 "mcp": policy.mcp,
                 "policy": explain(&policy),

@@ -1,13 +1,17 @@
 id = "twilio"
 display = "Twilio"
 upstreams = ["api.twilio.com"]
-auth = { kind = "basic" }
+auth = { kind = "basic", username_label = "Account SID or API key SID", secret_label = "Auth token or API key secret" }
 docs = "https://console.twilio.com/"
 base_path = "/2010-04-01"
 category = "messaging"
 
 [env]
 api_key = "TWILIO_AUTH_TOKEN"
+
+[verify]
+method = "GET"
+path = "/2010-04-01/Accounts.json"
 
 [[policies]]
 id = "read-only"

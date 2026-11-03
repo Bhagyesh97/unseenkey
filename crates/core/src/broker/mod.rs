@@ -26,6 +26,9 @@ pub enum BrokerError {
     /// The secret's shape does not fit the preset's auth style.
     #[error("secret is missing field {0:?} required by this provider")]
     MissingField(String),
+    /// The provider's keys come in two parts and only one is stored.
+    #[error("this provider needs a username as well as the stored value; add it with `usk secret set <name> --username <value>`")]
+    MissingUsername,
     /// A template placeholder named a secret that does not exist or is not allowed.
     #[error("unknown or disallowed secret in placeholder {0:?}")]
     UnknownPlaceholder(String),
@@ -41,7 +44,7 @@ impl BrokerError {
             BrokerError::HostNotAllowed(_) => "host_not_allowed",
             BrokerError::InsecureUpstream => "insecure_upstream",
             BrokerError::InvalidUpstream(_) => "invalid_upstream",
-            BrokerError::MissingField(_) => "secret_shape",
+            BrokerError::MissingField(_) | BrokerError::MissingUsername => "secret_shape",
             BrokerError::UnknownPlaceholder(_) => "unknown_placeholder",
             BrokerError::Malformed(_) => "malformed_request",
         }

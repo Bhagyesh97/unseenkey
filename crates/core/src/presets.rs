@@ -31,8 +31,21 @@ pub enum Auth {
         /// The word before the secret.
         scheme: String,
     },
-    /// `Authorization: Basic base64(username:password)` from the secret's fields.
-    Basic,
+    /// `Authorization: Basic base64(username:password)`: the stored value is the
+    /// password. The username is stored with it (field `username`), unless the
+    /// provider has one for everybody.
+    Basic {
+        /// The username all this provider's keys share (`api` for Mailgun);
+        /// empty for keys that go alone.
+        #[serde(default)]
+        username: Option<String>,
+        /// What the provider calls the username, for prompts.
+        #[serde(default)]
+        username_label: Option<String>,
+        /// What the provider calls the password, for prompts.
+        #[serde(default)]
+        secret_label: Option<String>,
+    },
     /// `?<param>=<secret>` on the URL.
     Query {
         /// Parameter name.
@@ -368,8 +381,32 @@ pub const EMBEDDED: &[(&str, &str)] = embedded![
     "telnyx",
     "aws",
     "gcp",
+    "razorpay",
+    "mailgun",
+    "plivo",
+    "vonage",
+    "cloudinary",
+    "jira",
+    "dataforseo",
     "generic",
 ];
+
+impl Preset {
+    /// For a provider whose keys come in two parts, what it calls each part.
+    pub fn pair_labels(&self) -> Option<(&str, &str)> {
+        match &self.auth {
+            Auth::Basic {
+                username: None,
+                username_label,
+                secret_label,
+            } => Some((
+                username_label.as_deref().unwrap_or("Username"),
+                secret_label.as_deref().unwrap_or("Password"),
+            )),
+            _ => None,
+        }
+    }
+}
 
 fn parse(id: &str, text: &str) -> Result<Preset, PolicyError> {
     let p: Preset =
@@ -798,7 +835,7 @@ mod tests {
     #[test]
     fn every_embedded_preset_parses_and_explains() {
         let ids: Vec<&str> = EMBEDDED.iter().map(|(id, _)| *id).collect();
-        assert_eq!(ids.len(), 67);
+        assert_eq!(ids.len(), 74);
         for id in ids {
             let p = get(id).unwrap_or_else(|| panic!("missing {id}"));
             assert!(!p.policies.is_empty(), "{id} has no policies");

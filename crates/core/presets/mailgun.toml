@@ -1,0 +1,33 @@
+id = "mailgun"
+display = "Mailgun"
+category = "email"
+upstreams = ["api.mailgun.net", "api.eu.mailgun.net"]
+auth = { kind = "basic", username = "api" }
+docs = "https://app.mailgun.com/settings/api_security"
+base_path = ""
+
+[env]
+api_key = "MAILGUN_API_KEY"
+
+[verify]
+method = "GET"
+path = "/v4/domains?limit=1"
+
+[[policies]]
+id = "read-only"
+display = "Read domains, events and stats only"
+recommended = true
+allow = ["GET /**"]
+deny = ["* /v1/keys", "* /v1/keys/**"]
+
+[[policies]]
+id = "send"
+display = "Send mail and read; no key or domain changes"
+recommended = true
+allow = ["GET /**", "POST /v3/*/messages", "POST /v3/*/messages.mime"]
+deny = ["DELETE /**", "* /v1/keys", "* /v1/keys/**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

@@ -47,24 +47,9 @@ pub fn inject(auth: &Auth, secret: &Revealed) -> Result<Injection, BrokerError> 
                 Zeroizing::new(format!("{scheme} {}", *v)),
             ));
         }
-        Auth::Basic => {
-            // username/password fields, falling back to value as password with an empty user.
-            let user = secret
-                .fields
-                .get("username")
-                .or_else(|| secret.fields.get("user"))
-                .or_else(|| secret.fields.get("account_sid"))
-                .map(text)
-                .transpose()?
-                .unwrap_or_else(|| Zeroizing::new(String::new()));
-            let pass = secret
-                .fields
-                .get("password")
-                .map(text)
-                .transpose()?
-                .unwrap_or(text(&secret.value)?);
-            let raw = Zeroizing::new(format!("{}:{}", *user, *pass));
-            let enc = base64::engine::general_purpose::STANDARD.encode(raw.as_bytes());
+        Auth::Basic { username, .. } => {
+            let raw = basic_credentials(username.as_deref(), secret)?;
+            let enc = base64::engine::general_purpose::STANDARD.encode(raw.expose());
             inj.headers.push((
                 "authorization".into(),
                 Zeroizing::new(format!("Basic {enc}")),
@@ -78,6 +63,43 @@ pub fn inject(auth: &Auth, secret: &Revealed) -> Result<Injection, BrokerError> 
         Auth::Template | Auth::AwsSigv4 => {}
     }
     Ok(inj)
+}
+
+/// The username of a secret sent with HTTP Basic: the provider's own if it has
+/// one, else the one stored with the key.
+pub fn basic_username(
+    fixed: Option<&str>,
+    secret: &Revealed,
+) -> Result<Zeroizing<String>, BrokerError> {
+    if let Some(user) = fixed {
+        return Ok(Zeroizing::new(user.to_string()));
+    }
+    secret
+        .fields
+        .get("username")
+        .or_else(|| secret.fields.get("user"))
+        .or_else(|| secret.fields.get("account_sid"))
+        .map(text)
+        .transpose()?
+        .filter(|u| !u.is_empty())
+        .ok_or(BrokerError::MissingUsername)
+}
+
+/// `username:password` as it goes into a Basic header.
+pub fn basic_credentials(
+    fixed: Option<&str>,
+    secret: &Revealed,
+) -> Result<SecretBytes, BrokerError> {
+    let user = basic_username(fixed, secret)?;
+    let pass = secret
+        .fields
+        .get("password")
+        .map(text)
+        .transpose()?
+        .unwrap_or(text(&secret.value)?);
+    Ok(SecretBytes::from_slice(
+        format!("{}:{}", *user, *pass).as_bytes(),
+    ))
 }
 
 /// AWS credentials taken out of a revealed secret.
@@ -304,9 +326,25 @@ mod tests {
         assert_eq!(*i.query[0].1, "sk-abc");
 
         let r = revealed("tok", &[("username", "AC123"), ("password", "tok")]);
-        let i = inject(&Auth::Basic, &r).unwrap();
-        let expected = base64::engine::general_purpose::STANDARD.encode("AC123:tok");
-        assert_eq!(*i.headers[0].1, format!("Basic {expected}"));
+        let basic = |username: Option<&str>| Auth::Basic {
+            username: username.map(str::to_string),
+            username_label: None,
+            secret_label: None,
+        };
+        let b64 = |s: &str| base64::engine::general_purpose::STANDARD.encode(s);
+        let i = inject(&basic(None), &r).unwrap();
+        assert_eq!(*i.headers[0].1, format!("Basic {}", b64("AC123:tok")));
+        // A provider's own username; an empty one for keys that go alone.
+        let alone = revealed("key", &[]);
+        let i = inject(&basic(Some("api")), &alone).unwrap();
+        assert_eq!(*i.headers[0].1, format!("Basic {}", b64("api:key")));
+        let i = inject(&basic(Some("")), &alone).unwrap();
+        assert_eq!(*i.headers[0].1, format!("Basic {}", b64(":key")));
+        // Half a pair is refused rather than sent with an empty username.
+        assert!(matches!(
+            inject(&basic(None), &alone),
+            Err(BrokerError::MissingUsername)
+        ));
 
         let i = inject(&Auth::Template, &r).unwrap();
         assert!(i.headers.is_empty() && i.query.is_empty());

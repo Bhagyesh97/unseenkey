@@ -19,6 +19,19 @@ const PW: &str = "keytest-password";
 const GOOD_XAI: &str = "xai-goodgoodgoodgoodgoodgoodgoodgoodgoodgoodgood";
 const BAD_XAI: &str = "xai-badbadbadbadbadbadbadbadbadbadbadbadbadbadb";
 const DEEPGRAM: &str = "0123456789abcdef0123456789abcdef01234567";
+const TWILIO_SID: &str = "AC0123456789abcdef0123456789abcdef";
+const TWILIO_TOKEN: &str = "twilio-token-abcdefghijklmnop";
+const MAILGUN_KEY: &str = "mailgun-key-abcdefghijklmnop";
+const PLIVO_ID: &str = "MAPLIVOID01234567890";
+const PLIVO_TOKEN: &str = "plivo-token-abcdefghijklmnop";
+
+fn basic(pair: &str) -> String {
+    use base64::Engine;
+    format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD.encode(pair)
+    )
+}
 
 /// Plays both providers: 200 for the right credential in the right place, 401 otherwise.
 async fn provider(req: Request) -> axum::response::Response {
@@ -31,6 +44,17 @@ async fn provider(req: Request) -> axum::response::Response {
     let ok = match req.uri().path() {
         "/v1/models" => auth == format!("Bearer {GOOD_XAI}"),
         "/v1/projects" => auth == format!("Token {DEEPGRAM}"),
+        "/2010-04-01/Accounts.json" => auth == basic(&format!("{TWILIO_SID}:{TWILIO_TOKEN}")),
+        "/v4/domains" => auth == basic(&format!("api:{MAILGUN_KEY}")),
+        "/v1/Account/MAPLIVOID01234567890/" => auth == basic(&format!("{PLIVO_ID}:{PLIVO_TOKEN}")),
+        // Answers with what it was sent, as a careless provider might.
+        "/2010-04-01/echo.json" => {
+            return (
+                [("content-type", "application/json")],
+                json!({ "auth": auth, "account_sid": TWILIO_SID }).to_string(),
+            )
+                .into_response()
+        }
         _ => false,
     };
     let code = if ok {
@@ -78,6 +102,16 @@ impl C {
         }
         (code, v)
     }
+    fn patch(&self, path: &str, body: Value) -> (u16, Value) {
+        let mut req = self
+            .agent
+            .request("PATCH", &format!("{}{}", self.base, path))
+            .set("Authorization", &format!("Bearer {}", self.token));
+        if let Some(o) = self.owner.lock().unwrap().as_ref() {
+            req = req.set("X-Usk-Owner", o);
+        }
+        Self::call(req.send_json(body))
+    }
     fn get(&self, path: &str) -> (u16, Value) {
         Self::call(
             self.agent
@@ -115,6 +149,9 @@ async fn setup() -> (tempfile::TempDir, Running, C) {
         upstream_overrides: vec![
             ("api.x.ai".into(), format!("http://{mock}")),
             ("api.deepgram.com".into(), format!("http://{mock}")),
+            ("api.twilio.com".into(), format!("http://{mock}")),
+            ("api.mailgun.net".into(), format!("http://{mock}")),
+            ("api.plivo.com".into(), format!("http://{mock}")),
         ],
         mcp_allow_store: false,
         lock_on_sleep: false,
@@ -243,6 +280,108 @@ async fn paste_save_and_test() {
 
 /// A provider with its own Authorization scheme also works through the broker:
 /// the SDK sends `Token <handle>`, the provider receives `Token <key>`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_key_in_two_parts() {
+    let (_dir, r, c) = setup().await;
+    let test = |name: &str| c.post(&format!("/v1/secrets/{name}/test"), json!({})).1;
+
+    // Half of it can be stored (an import meets them one at a time). It is not
+    // sent, and both the test and a call say what is missing.
+    let (code, made) = c.post(
+        "/v1/secrets",
+        json!({ "name": "twilio", "value": TWILIO_TOKEN }),
+    );
+    assert_eq!(code, 201, "{made}");
+    assert_eq!(made["provider"], "twilio");
+    assert_eq!(made["type"], "basic_auth");
+    let t = test("twilio");
+    assert_eq!(t["tested"], false, "{t}");
+    assert!(t["message"].as_str().unwrap().contains("--username"), "{t}");
+    let (code, h) = c.post("/v1/handles", json!({ "secret": "twilio", "label": "sdk" }));
+    assert_eq!(code, 201, "{h}");
+    let handle = h["handle"].as_str().unwrap().to_string();
+    // The way an SDK sends it: its own account as the username.
+    let sdk = basic(&format!("{TWILIO_SID}:{handle}"));
+    let call = |path: &str| {
+        C::call(
+            c.agent
+                .get(&format!("{}/p/twilio{path}", c.base))
+                .set("Authorization", &sdk)
+                .call(),
+        )
+    };
+    let (code, b) = call("/2010-04-01/Accounts.json");
+    assert_eq!(
+        (code, b["error"].as_str()),
+        (400, Some("secret_shape")),
+        "{b}"
+    );
+
+    // The other half arrives: it tests, and works through the broker.
+    let (code, m) = c.patch("/v1/secrets/twilio", json!({ "username": TWILIO_SID }));
+    assert_eq!(code, 200, "{m}");
+    assert_eq!(test("twilio")["ok"], true);
+    let (code, b) = call("/2010-04-01/Accounts.json");
+    assert_eq!(code, 200, "{b}");
+
+    // The pair stays hidden if a provider echoes it; the account does not need to.
+    let (code, b) = call("/2010-04-01/echo.json");
+    assert_eq!(code, 200, "{b}");
+    assert!(b["auth"].as_str().unwrap().contains("REDACTED"), "{b}");
+    assert_eq!(b["account_sid"], TWILIO_SID);
+
+    // A new password keeps the username; both at once replace both.
+    let (code, _) = c.patch(
+        "/v1/secrets/twilio",
+        json!({ "value": "wrong-token-abcdefghijkl" }),
+    );
+    assert_eq!(code, 200);
+    assert_eq!(test("twilio")["ok"], false);
+    let (code, _) = c.patch("/v1/secrets/twilio", json!({ "value": TWILIO_TOKEN }));
+    assert_eq!(code, 200);
+    assert_eq!(test("twilio")["ok"], true, "the username survived");
+    let (code, _) = c.patch(
+        "/v1/secrets/twilio",
+        json!({ "value": format!("ACffffffffffffffffffffffffffffffff:{TWILIO_TOKEN}") }),
+    );
+    assert_eq!(code, 200);
+    assert_eq!(test("twilio")["ok"], false, "a new account was stored");
+
+    // Pasted whole, on one line or two, whatever the key is called.
+    for (name, value) in [
+        ("sms", format!("{TWILIO_SID}:{TWILIO_TOKEN}")),
+        ("sms-2", format!("{TWILIO_SID}\n{TWILIO_TOKEN}\n")),
+    ] {
+        let (code, made) = c.post("/v1/secrets", json!({ "name": name, "value": value }));
+        assert_eq!(code, 201, "{made}");
+        assert_eq!(made["provider"], "twilio", "{made}");
+        assert_eq!(test(name)["ok"], true, "{name}");
+    }
+
+    // A provider that has the username for everybody needs only the key.
+    let (code, made) = c.post(
+        "/v1/secrets",
+        json!({ "name": "mailgun", "value": MAILGUN_KEY }),
+    );
+    assert_eq!(code, 201, "{made}");
+    assert_eq!(test("mailgun")["ok"], true);
+    let (code, b) = c.patch("/v1/secrets/mailgun", json!({ "username": "someone" }));
+    assert_eq!(
+        (code, b["error"].as_str()),
+        (400, Some("username_not_applicable")),
+        "{b}"
+    );
+
+    // The account can be part of the test's path.
+    let (code, made) = c.post(
+        "/v1/secrets",
+        json!({ "name": "plivo", "value": format!("{PLIVO_ID}:{PLIVO_TOKEN}") }),
+    );
+    assert_eq!(code, 201, "{made}");
+    assert_eq!(test("plivo")["ok"], true);
+    r.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_custom_scheme_works_through_the_broker() {
     let (_dir, r, c) = setup().await;

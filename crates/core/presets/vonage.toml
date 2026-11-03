@@ -1,0 +1,34 @@
+id = "vonage"
+display = "Vonage"
+category = "messaging"
+upstreams = ["api.nexmo.com", "rest.nexmo.com"]
+auth = { kind = "basic", username_label = "API key", secret_label = "API secret" }
+docs = "https://dashboard.nexmo.com/settings"
+base_path = ""
+env_names = ["nexmo"]
+
+[env]
+api_key = "VONAGE_API_SECRET"
+
+[verify]
+method = "GET"
+path = "/accounts/{username}/secrets"
+
+[[policies]]
+id = "read-only"
+display = "Read reports and account details only"
+recommended = true
+allow = ["GET /**"]
+deny = ["* /accounts/*/secrets", "* /accounts/*/secrets/**"]
+
+[[policies]]
+id = "messaging"
+display = "Send messages and read; no secret changes or deletes"
+recommended = true
+allow = ["GET /**", "POST /v1/messages", "POST /sms/json"]
+deny = ["DELETE /**", "* /accounts/*/secrets", "* /accounts/*/secrets/**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

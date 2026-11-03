@@ -1,0 +1,25 @@
+id = "dataforseo"
+display = "DataForSEO"
+category = "other"
+upstreams = ["api.dataforseo.com"]
+auth = { kind = "basic", username_label = "API login", secret_label = "API password" }
+docs = "https://app.dataforseo.com/api-access"
+base_path = "/v3"
+
+[env]
+api_key = "DATAFORSEO_PASSWORD"
+
+[verify]
+method = "GET"
+path = "/v3/appendix/user_data"
+
+[[policies]]
+id = "read-only"
+display = "Read account details and finished tasks; nothing new is charged for most calls"
+recommended = true
+allow = ["GET /**"]
+
+[[policies]]
+id = "full"
+display = "Full access: every query costs money (not recommended for delegation)"
+allow = ["* /**"]

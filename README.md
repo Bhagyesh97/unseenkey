@@ -87,6 +87,8 @@ usk handle create stripe --policy payments --expires-days 7 --cap 500/day   # fo
 usk handle create stripe --canary                                            # a tripwire for .env.example
 usk add aws-dev && usk env aws-dev                                           # boto3 and the AWS CLI through the broker
 usk add google-oauth                                                         # paste a refresh token or gcloud's ADC file
+usk add gsc --file key.json --scope webmasters.readonly                      # a Google service account; the file stays in the vault
+usk add twilio                                                               # keys in two parts: asks for each, or paste first:second
 usk run --with DATABASE_URL=prod-db -- ./app                                 # for what cannot be proxied (audited, scrubbed)
 ```
 
@@ -96,7 +98,7 @@ usk run --with DATABASE_URL=prod-db -- ./app                                 # f
 |---|---|---|---|---|
 | Your AI tool never sees the real key | No | No, it is injected into the process | Yes | **Yes** |
 | Works offline, no account | Yes | Usually needs an account or a server | Yes | **Yes** |
-| Rules per call: host, path, method | No | No | If you build them | **Presets for 65 providers** |
+| Rules per call: host, path, method | No | No | If you build them | **Presets for 73 providers** |
 | Asks you before risky calls | No | At most for reading a secret, not per call | If you build it | **Yes, confirmed with Windows Hello or your password** |
 | Removes the key from responses | No | No | If you build it | **Yes, streamed and compressed too** |
 | Spending limits | No | No | If you build them | **Per handle and per project** |
@@ -128,9 +130,9 @@ Archives and installers for every platform are on the [Releases](https://github.
 | AWS | s3-read-only, s3, full | | SendGrid, Resend | read-only, write, full |
 | Supabase | read-only, data, full | | Twilio | read-only, messaging, full |
 
-Plus 47 more with a safe default, read-only and full each: xAI, Together, Fireworks, Deepgram, ElevenLabs, AssemblyAI, Cohere, DeepSeek, Replicate, Perplexity, Cerebras; Paddle, Polar, Paystack, Mollie, Mercado Pago, Lemon Squeezy, Square; DigitalOcean, Linode, Vultr, Hetzner, Netlify, Render, Heroku, Neon, Supabase management, Hostinger; Postmark, Brevo, Loops, beehiiv, Vapi, Telnyx, Discord bots; Figma, Airtable, ClickUp, Coda, Calendly, Tally, HubSpot, Clerk, CircleCI, Mapbox, YouTube, OpenWeatherMap and Alpha Vantage.
+Plus 55 more with a safe default or read-only, and full: xAI, Together, Fireworks, Deepgram, ElevenLabs, AssemblyAI, Cohere, DeepSeek, Replicate, Perplexity, Cerebras; Paddle, Polar, Paystack, Mollie, Mercado Pago, Lemon Squeezy, Square; DigitalOcean, Linode, Vultr, Hetzner, Netlify, Render, Heroku, Neon, Supabase management, Hostinger; Postmark, Brevo, Mailgun, Loops, beehiiv, Vapi, Telnyx, Plivo, Vonage, Discord bots; Razorpay, Google service accounts, Cloudinary, Jira and Confluence, DataForSEO; Figma, Airtable, ClickUp, Coda, Calendly, Tally, HubSpot, Clerk, CircleCI, Mapbox, YouTube, OpenWeatherMap and Alpha Vantage.
 
-Paste a key and the provider, its allowed websites and a safe default fill in, from the key's shape or, failing that, its name; then one read-only request checks the key works. `generic` covers any other host, OAuth2 refresh-token clients cover Google and anything RFC 6749, and `usk presets` lists everything with plain-English explanations. The [provider research](docs/research/provider-catalogue.md) covers 247 services and is where new presets come from.
+Paste a key and the provider, its allowed websites and a safe default fill in, from the key's shape or, failing that, its name; then one read-only request checks the key works. `generic` covers any other host, Google service account key files sign in by themselves, OAuth2 refresh-token clients cover Google and anything RFC 6749, and `usk presets` lists everything with plain-English explanations. The [provider research](docs/research/provider-catalogue.md) covers 247 services and is where new presets come from.
 
 ## Security
 

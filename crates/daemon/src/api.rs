@@ -724,6 +724,15 @@ pub async fn create_secret(
     } else {
         kind
     };
+    let is_pair = provider
+        .as_deref()
+        .and_then(presets::get)
+        .is_some_and(|p| p.pair_labels().is_some());
+    let kind = if is_pair && req.kind.is_none() {
+        SecretKind::BasicAuth
+    } else {
+        kind
+    };
     let mut upstreams: Vec<String> = if req.upstreams.is_empty() {
         provider_hosts(provider.as_deref())
     } else {
@@ -756,6 +765,16 @@ pub async fn create_secret(
                 "session_token".into(),
                 SecretBytes::from_slice(token.as_bytes()),
             );
+        }
+    }
+    // Stored shape for a key in two parts: the password is the value, the
+    // username a field. With only one part given the key is still stored
+    // (`usk import` meets them one at a time); the test and any call say what
+    // is missing.
+    if is_pair && !fields.contains_key("username") {
+        if let Some((user, pass)) = providers::split_pair(&req.value) {
+            value = SecretBytes::from_slice(pass.as_bytes());
+            fields.insert("username".into(), SecretBytes::from_slice(user.as_bytes()));
         }
     }
     // Stored shape for an OAuth client: the refresh token is the value; client
@@ -1016,6 +1035,17 @@ pub struct PatchSecret {
     pub fields: BTreeMap<String, Zeroizing<String>>,
     /// New scopes for a service account or OAuth client (creates a new version).
     pub scope: Option<String>,
+    /// The other part of a key in two parts (creates a new version).
+    pub username: Option<String>,
+}
+
+/// Whether this secret's provider wants its keys in two parts.
+fn is_pair(v: &crate::state::DaemonVault, id: &Id) -> Result<bool, ApiError> {
+    Ok(v.get(id)?
+        .provider
+        .as_deref()
+        .and_then(presets::get)
+        .is_some_and(|p| p.pair_labels().is_some()))
 }
 
 /// `PATCH /v1/secrets/{ref}`. Changing where a secret may go (`upstreams`,
@@ -1049,12 +1079,43 @@ pub async fn patch_secret(
                 "value is empty",
             ));
         }
-        let fields = p
+        let mut fields: BTreeMap<String, SecretBytes> = p
             .fields
             .iter()
             .map(|(k, val)| (k.clone(), SecretBytes::from_slice(val.as_bytes())))
             .collect();
-        v.update_value(&id, SecretBytes::from_slice(value.as_bytes()), fields)?;
+        let mut new_value = SecretBytes::from_slice(value.as_bytes());
+        // A new password keeps its username; both given at once replace both.
+        if is_pair(&v, &id)? && !fields.contains_key("username") {
+            if let Some((user, pass)) = providers::split_pair(value) {
+                new_value = SecretBytes::from_slice(pass.as_bytes());
+                fields.insert("username".into(), SecretBytes::from_slice(user.as_bytes()));
+            } else if let Some(user) = v.reveal(&id)?.fields.get("username") {
+                fields.insert("username".into(), user.clone());
+            }
+        }
+        v.update_value(&id, new_value, fields)?;
+    }
+    if let Some(username) = &p.username {
+        if !is_pair(&v, &id)? {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "username_not_applicable",
+                "only keys that come in two parts have a username",
+            ));
+        }
+        let username = username.trim();
+        if username.is_empty() {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "empty_username",
+                "username is empty",
+            ));
+        }
+        let revealed = v.reveal(&id)?;
+        let mut fields = revealed.fields.clone();
+        fields.insert("username".into(), SecretBytes::from(username));
+        v.update_value(&id, revealed.value.clone(), fields)?;
     }
     if let Some(scope) = &p.scope {
         let kind = v.get(&id)?.kind;
@@ -1135,7 +1196,7 @@ pub async fn patch_secret(
         kinds::SECRET_UPDATED,
         serde_json::json!({ "id": id.to_hex(), "value_changed": p.value.is_some(), "scope": p.scope }),
     );
-    if p.value.is_some() || p.no_scrub.is_some() || p.scope.is_some() {
+    if p.value.is_some() || p.no_scrub.is_some() || p.scope.is_some() || p.username.is_some() {
         s.rebuild_scrubber(&v);
     }
     s.emit(Event::SecretChanged {

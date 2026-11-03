@@ -1026,6 +1026,129 @@ fn replacing_a_value_keeps_the_handles() {
 }
 
 #[test]
+fn a_key_in_two_parts_from_the_cli() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    let _stop = StopDaemon(&vault);
+    assert!(usk(&vault, &["init", "--profile", "light"], PW)
+        .status
+        .success());
+    // Asked for each part, because of the name.
+    let o = usk(
+        &vault,
+        &["add", "twilio"],
+        &format!("{PW}AC0123456789abcdef0123456789abcdef\ntwilio-token-abcdefghijklmnop\n"),
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let o = usk(&vault, &["reveal", "twilio", "--yes"], PW);
+    let shown = out(&o);
+    assert!(shown.contains("twilio-token-abcdefghijklmnop"), "{shown}");
+    assert!(shown.contains("username"), "{shown}");
+    assert!(
+        shown.contains("AC0123456789abcdef0123456789abcdef"),
+        "{shown}"
+    );
+
+    // Asked for the rest, because of the shape of the first part.
+    let o = usk(
+        &vault,
+        &["add", "payments"],
+        "rzp_test_abcdefghijklmn\nrazorpay-secret-abcdefghijkl\n",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let o = usk(&vault, &["reveal", "payments", "--yes"], PW);
+    assert!(out(&o).contains("rzp_test_abcdefghijklmn"), "{}", out(&o));
+    assert!(
+        out(&o).contains("razorpay-secret-abcdefghijkl"),
+        "{}",
+        out(&o)
+    );
+
+    // Piped, one part is stored as given and the other can follow.
+    let o = usk(
+        &vault,
+        &["add", "plivo", "--stdin"],
+        "plivo-token-abcdefghijklmnop",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let o = usk(
+        &vault,
+        &[
+            "secret",
+            "set",
+            "plivo",
+            "--username",
+            "MAPLIVOID01234567890",
+        ],
+        "",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let o = usk(&vault, &["reveal", "plivo", "--yes"], PW);
+    assert!(out(&o).contains("MAPLIVOID01234567890"), "{}", out(&o));
+
+    // Nothing to split or ask for on a provider with one value.
+    let o = usk(
+        &vault,
+        &["add", "openai", "--provider", "openai"],
+        "sk-abcdefghijklmnopqrstuvwxyz0123456789\n",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+}
+
+#[test]
+fn changing_the_password() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    let _stop = StopDaemon(&vault);
+    assert!(usk(&vault, &["init", "--profile", "light"], PW)
+        .status
+        .success());
+    let o = usk(
+        &vault,
+        &["add", "deploy", "--stdin"],
+        &format!("{PW}qwertyuiopasdfghjklzxcvbnm123456"),
+    );
+    assert!(o.status.success(), "{}", err(&o));
+
+    // Refused: wrong current password, too short, unchanged. None of them
+    // locks the vault or changes anything.
+    const NEW: &str = "a-different-long-password\n";
+    for (input, why) in [
+        (format!("wrong-password-here\n{NEW}"), "wrong"),
+        (format!("{PW}short\n"), "12 characters"),
+        (format!("{PW}{PW}"), "current password"),
+    ] {
+        let o = usk(&vault, &["passwd", "--profile", "light"], &input);
+        assert!(!o.status.success(), "{input}");
+        assert!(err(&o).to_lowercase().contains(why), "{}", err(&o));
+    }
+    let o = usk(&vault, &["--json", "status"], "");
+    let s: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
+    assert_eq!(s["daemon"]["locked"], false, "still unlocked");
+
+    let o = usk(
+        &vault,
+        &["passwd", "--profile", "light"],
+        &format!("{PW}{NEW}"),
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let o = usk(&vault, &["--json", "status"], "");
+    let s: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
+    assert_eq!(s["daemon"]["locked"], true, "locked by the change");
+
+    // The running daemon takes the new password, not the old one.
+    assert!(!usk(&vault, &["unlock"], PW).status.success());
+    let o = usk(&vault, &["unlock"], NEW);
+    assert!(o.status.success(), "{}", err(&o));
+    let o = usk(&vault, &["reveal", "deploy", "--yes"], NEW);
+    assert!(
+        out(&o).contains("qwertyuiopasdfghjklzxcvbnm123456"),
+        "{}",
+        out(&o)
+    );
+}
+
+#[test]
 fn a_name_fills_in_the_provider() {
     let dir = tempfile::tempdir().unwrap();
     let vault = dir.path().join("vault.db");

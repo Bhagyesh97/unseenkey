@@ -71,6 +71,21 @@ enum HandleSlot {
     Query(String),
 }
 
+/// An SDK with a handle for its secret sends `base64(account:handle)`, or
+/// `base64(handle:)` where the key is the username.
+fn basic_handle(credentials: &str) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(credentials)
+        .ok()
+        .and_then(|raw| String::from_utf8(raw).ok())
+        .and_then(|text| {
+            let (user, pass) = text.split_once(':')?;
+            Some(if pass.is_empty() { user } else { pass }.to_string())
+        })
+        .unwrap_or_else(|| credentials.to_string())
+}
+
 /// Find the handle in the place the preset's SDK would put its key.
 fn extract_handle(
     preset: &Preset,
@@ -88,8 +103,14 @@ fn extract_handle(
     let bearer = || {
         header("authorization").and_then(|v| {
             let (scheme, rest) = v.split_once(' ')?;
-            (scheme.eq_ignore_ascii_case("bearer") || scheme.eq_ignore_ascii_case("basic"))
-                .then(|| (rest.trim().to_string(), HandleSlot::Authorization))
+            let rest = rest.trim();
+            if scheme.eq_ignore_ascii_case("basic") {
+                Some((basic_handle(rest), HandleSlot::Authorization))
+            } else {
+                scheme
+                    .eq_ignore_ascii_case("bearer")
+                    .then(|| (rest.to_string(), HandleSlot::Authorization))
+            }
         })
     };
     let from_query = |param: &str| {
@@ -105,7 +126,7 @@ fn extract_handle(
         return Some(h);
     }
     let primary = match &preset.auth {
-        Auth::Bearer { .. } | Auth::Basic => bearer(),
+        Auth::Bearer { .. } | Auth::Basic { .. } => bearer(),
         Auth::Header { name } => named(name),
         // `Authorization: Token <handle>`: what follows the scheme.
         Auth::Scheme { scheme } => header("authorization").and_then(|v| {

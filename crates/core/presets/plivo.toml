@@ -1,0 +1,32 @@
+id = "plivo"
+display = "Plivo"
+category = "messaging"
+upstreams = ["api.plivo.com", "lookup.plivo.com"]
+auth = { kind = "basic", username_label = "Auth ID", secret_label = "Auth token" }
+docs = "https://console.plivo.com/dashboard/"
+base_path = "/v1"
+
+[env]
+api_key = "PLIVO_AUTH_TOKEN"
+
+[verify]
+method = "GET"
+path = "/v1/Account/{username}/"
+
+[[policies]]
+id = "read-only"
+display = "Read logs and account details only"
+recommended = true
+allow = ["GET /**"]
+
+[[policies]]
+id = "messaging"
+display = "Send SMS and read; no calls, numbers or deletes"
+recommended = true
+allow = ["GET /**", "POST /v1/Account/*/Message", "POST /v1/Account/*/Message/"]
+deny = ["DELETE /**", "* /v1/Account/*/Call/**", "* /v1/Account/*/Number/**", "* /v1/Account/*/PhoneNumber/**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

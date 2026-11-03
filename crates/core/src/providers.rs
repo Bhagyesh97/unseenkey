@@ -253,7 +253,12 @@ pub fn detect(value: &[u8]) -> Option<Detection> {
     if s.starts_with("AIza") && s.len() == 39 && is_token_charset(s, "_-") {
         return Some(p("google-ai"));
     }
-    if s.starts_with("SK") && s.len() == 34 && s[2..].bytes().all(|b| b.is_ascii_hexdigit()) {
+    // An account SID or API key SID, alone or with its secret after it.
+    let sid = s.split([':', '\n']).next().unwrap_or(s).trim_end();
+    if (sid.starts_with("SK") || sid.starts_with("AC"))
+        && sid.len() == 34
+        && sid[2..].bytes().all(|b| b.is_ascii_hexdigit())
+    {
         return Some(p("twilio"));
     }
     if s.starts_with('{') && s.contains("\"type\"") && s.contains("service_account") {
@@ -349,6 +354,35 @@ fn unquote(v: &str) -> &str {
         .and_then(|x| x.strip_suffix('"'))
         .or_else(|| v.strip_prefix('\'').and_then(|x| x.strip_suffix('\'')))
         .unwrap_or(v)
+}
+
+/// A key in two parts given at once: `username:password`, or two lines.
+/// A password may contain colons, a username may not.
+pub fn split_pair(text: &str) -> Option<(String, zeroize::Zeroizing<String>)> {
+    let text = text.trim();
+    if text.starts_with('{') || text.starts_with("-----") {
+        return None;
+    }
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    let (user, pass) = match lines.as_slice() {
+        [one] => one.split_once(':')?,
+        [user, pass] => (*user, *pass),
+        _ => return None,
+    };
+    let (user, pass) = (user.trim(), pass.trim());
+    // `https://…` is a URL, not a pair.
+    if user.is_empty()
+        || pass.is_empty()
+        || pass.starts_with("//")
+        || user.contains(char::is_whitespace)
+    {
+        return None;
+    }
+    Some((user.to_string(), zeroize::Zeroizing::new(pass.to_string())))
 }
 
 /// Recognise AWS credentials in the shapes people actually have them:
@@ -649,6 +683,38 @@ mod tests {
     fn every_provider_has_upstreams() {
         for d in PROVIDERS {
             assert!(!d.upstreams.is_empty(), "{}", d.provider);
+        }
+    }
+
+    #[test]
+    fn a_key_in_two_parts() {
+        for text in [
+            "AC12:tok",
+            "  AC12:tok \n",
+            "AC12\ntok",
+            "AC12\r\ntok\r\n",
+            "\nAC12\n\n  tok\n",
+        ] {
+            let (user, pass) = split_pair(text).unwrap_or_else(|| panic!("{text:?}"));
+            assert_eq!((user.as_str(), pass.as_str()), ("AC12", "tok"), "{text:?}");
+        }
+        let (user, pass) = split_pair("me@example.com:a:b:c").unwrap();
+        assert_eq!((user.as_str(), pass.as_str()), ("me@example.com", "a:b:c"));
+        for text in [
+            "just-a-key",
+            ":tok",
+            "AC12:",
+            "https://example.com",
+            "two words:tok",
+            "one\ntwo\nthree",
+            "{\"a\":\"b\"}",
+            "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----",
+        ] {
+            assert_eq!(split_pair(text), None, "{text:?}");
+        }
+        let sid = format!("AC{}", "0123456789abcdef".repeat(2));
+        for text in [sid.clone(), format!("{sid}:tok"), format!("{sid}\ntok")] {
+            assert_eq!(detect(text.as_bytes()).map(|d| d.provider), Some("twilio"));
         }
     }
 

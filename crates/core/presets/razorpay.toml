@@ -1,0 +1,33 @@
+id = "razorpay"
+display = "Razorpay"
+category = "payments"
+upstreams = ["api.razorpay.com"]
+auth = { kind = "basic", username_label = "Key ID", secret_label = "Key secret" }
+docs = "https://dashboard.razorpay.com/app/keys"
+base_path = "/v1"
+key_prefixes = ["rzp_live_", "rzp_test_"]
+
+[env]
+api_key = "RAZORPAY_KEY_SECRET"
+
+[verify]
+method = "GET"
+path = "/v1/payments?count=1"
+
+[[policies]]
+id = "read-only"
+display = "Read payments and orders only"
+recommended = true
+allow = ["GET /**"]
+
+[[policies]]
+id = "orders"
+display = "Create orders and read; no refunds, payouts or deletes"
+recommended = true
+allow = ["GET /**", "POST /v1/orders"]
+deny = ["DELETE /**", "POST /v1/payments/*/refund", "* /v1/refunds/**", "* /v1/payouts/**"]
+
+[[policies]]
+id = "full"
+display = "Full access (not recommended for delegation)"
+allow = ["* /**"]

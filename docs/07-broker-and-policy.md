@@ -26,7 +26,7 @@ The broker is the heart of the product. It is the only component that turns a ha
 6. **Credential materialization**: decrypt secret (or take from hosted cache), build upstream request per preset adapter:
    - `bearer`: `Authorization: Bearer <secret>`
    - `header`: `<name>: <secret>` (e.g. `x-api-key` for Anthropic)
-   - `basic`: `Authorization: Basic base64(user:pass)`
+   - `basic`: `Authorization: Basic base64(user:pass)` (see *Keys in two parts* below)
    - `query`: `?key=<secret>` (Google AI); logged as `query_auth` risk in the audit
    - `aws_sigv4`: sign the whole request with the secret access key (see *AWS* below)
    - `oauth2_client` secrets (any route): send a cached access token as `Authorization: Bearer`; refresh it with the stored refresh token when it is about to expire (see *OAuth2* below)
@@ -67,6 +67,17 @@ A secret of kind `oauth2_client` holds a refresh token (the value) with fields `
 - Adding: paste or pipe the JSON OAuth tooling writes (`client_id`, `client_secret`, `refresh_token`, `token_uri`); gcloud's `application_default_credentials.json` needs nothing more, its token endpoint and `*.googleapis.com` are implied. `usk add <name> --type oauth2_client --upstream <api host>` asks for the four values instead.
 
 Not done: obtaining the first refresh token (the authorization-code dance) and client-credentials grants.
+
+## Keys in two parts
+
+A preset with `auth = { kind = "basic", username_label = "…", secret_label = "…" }` wants two values. The stored value is the password and field `username` the other part, with kind `basic_auth`. A preset with `username = "api"` has the same username for everybody and takes one value; `username = ""` sends the key alone.
+
+- Adding: `usk add` asks for each part in the provider's words (from the name or `--provider` before the first prompt, from the shape of the first part otherwise). The app shows a second box. `first:second` or two lines are taken apart by the daemon, on `POST /v1/secrets` and on `PATCH` with `value`; a colon always splits there, at the first one, so a username cannot hold one.
+- One part stored: allowed, since `usk import` meets them one at a time. Nothing is sent: a call answers 400 `secret_shape` and the key test says what is missing. `usk secret set <name> --username …` (`PATCH` with `username`) adds it.
+- Replacing the password keeps the username. A value with both parts replaces both.
+- The handle: `Authorization: Bearer <handle>`, or the `Basic` header an SDK builds with the handle as its secret (`base64(account:handle)`) or, where the key is the username, `base64(handle:)`.
+- Scrubbing: the password, and `username:password` in all its encoded forms (so an echoed header is hidden). The username is not guarded: it is an account id or an email that providers put in their answers and paths. MCP's `list_secrets` shows it as `account`, for the paths that need it.
+- A preset's `[verify]` path may hold `{username}`.
 
 ## Google service accounts
 

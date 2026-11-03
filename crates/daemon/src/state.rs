@@ -4,10 +4,12 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{OnceLock, RwLock};
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, oneshot, watch, Mutex};
+use unseenkey_core::broker::adapters;
 use unseenkey_core::broker::scrub::{Guarded, Scrubber};
 use unseenkey_core::crypto::hash::Digest;
 use unseenkey_core::ids::Id;
 use unseenkey_core::policy::Usage;
+use unseenkey_core::presets::{self, Auth};
 use unseenkey_core::storage::sqlite::SqliteStorage;
 use unseenkey_core::time::SystemClock;
 use unseenkey_core::vault::Vault;
@@ -501,9 +503,20 @@ impl AppState {
                     continue;
                 }
                 if let Ok(r) = vault.reveal(&meta.secret_id) {
+                    // The pair as it goes in a Basic header, should a provider echo it.
+                    let preset = meta.provider.as_deref().and_then(presets::get);
+                    if let Some(Auth::Basic { username, .. }) = preset.map(|p| &p.auth) {
+                        if let Ok(pair) = adapters::basic_credentials(username.as_deref(), &r) {
+                            values.push((format!("{}.basic", meta.name), pair));
+                        }
+                    }
                     values.push((meta.name.clone(), r.value));
                     for (k, v) in r.fields {
-                        values.push((format!("{}.{k}", meta.name), v));
+                        // An account id or an email: providers put it in their
+                        // answers and paths, and it opens nothing by itself.
+                        if k != "username" {
+                            values.push((format!("{}.{k}", meta.name), v));
+                        }
                     }
                 }
             }
