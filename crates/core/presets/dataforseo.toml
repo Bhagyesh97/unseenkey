@@ -2,7 +2,7 @@ id = "dataforseo"
 display = "DataForSEO"
 category = "other"
 upstreams = ["api.dataforseo.com"]
-auth = { kind = "basic", username_label = "API login", secret_label = "API password" }
+auth = { kind = "basic", username_label = "API login", secret_label = "API password", username_like = ["*@*"] }
 docs = "https://app.dataforseo.com/api-access"
 base_path = "/v3"
 

@@ -518,7 +518,7 @@ async fn refresh_cache_rotation_and_failure() {
     );
 
     // The provider refuses: the caller gets the provider's reason, the API is
-    // not called, and the refusal is not cached.
+    // not called, and the provider is not asked again for a moment.
     tokio::time::sleep(Duration::from_millis(1300)).await;
     let api_before = t.api_calls().len();
     t.script(json!({ "__status": 400, "error": "invalid_grant", "error_description": "Token has been expired or revoked." }));
@@ -535,6 +535,11 @@ async fn refresh_cache_rotation_and_failure() {
         "the rotated token is the one in use"
     );
     assert_eq!(t.api_calls().len(), api_before);
+    let (code, again) = t.call(&handle);
+    assert_eq!(code, 502, "{again}");
+    assert_eq!(again["message"], body["message"]);
+    assert_eq!(t.token_calls(), 4, "not asked twice in a row");
+    tokio::time::sleep(Duration::from_millis(5100)).await;
     assert_eq!(t.call(&handle).0, 200);
     assert_eq!(t.token_calls(), 5);
 
@@ -575,6 +580,45 @@ async fn refresh_cache_rotation_and_failure() {
         5,
         "nothing was sent to a host off the list"
     );
+    t.daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_sign_in_is_not_repeated_by_every_caller() {
+    let t = setup().await;
+    let pasted = json!({
+        "type": "authorized_user", "client_id": "cid-123", "client_secret": "csecret-abcdefghijkl",
+        "refresh_token": "rt-1-abcdefghijklmnop", "token_uri": TOKEN_URL
+    })
+    .to_string();
+    let (code, c) = t.mgmt(
+        "POST",
+        "/v1/secrets",
+        Some(json!({ "name": "drive", "value": pasted, "upstreams": [API] })),
+    );
+    assert_eq!(code, 201, "{c}");
+    let handle =
+        t.handle(json!({ "secret": "drive", "label": "h", "policy": { "allow": ["GET /**"] } }));
+    for _ in 0..60 {
+        t.script(json!({ "__status": 400, "error": "invalid_grant" }));
+    }
+    let codes: Vec<u16> = std::thread::scope(|scope| {
+        let calls: Vec<_> = (0..50).map(|_| scope.spawn(|| t.call(&handle).0)).collect();
+        calls.into_iter().map(|c| c.join().unwrap()).collect()
+    });
+    assert!(codes.iter().all(|c| *c == 502), "{codes:?}");
+    assert_eq!(t.token_calls(), 1, "50 callers, one attempt");
+
+    // A new value is tried at once, and works.
+    t.mock.lock().unwrap().script.clear();
+    let (code, b) = t.mgmt(
+        "PATCH",
+        "/v1/secrets/drive",
+        Some(json!({ "value": "rt-2-abcdefghijklmnop" })),
+    );
+    assert_eq!(code, 200, "{b}");
+    assert_eq!(t.call(&handle).0, 200);
+    assert_eq!(t.token_calls(), 2);
     t.daemon.shutdown().await;
 }
 

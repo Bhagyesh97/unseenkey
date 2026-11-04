@@ -1,7 +1,7 @@
 id = "twilio"
 display = "Twilio"
 upstreams = ["api.twilio.com"]
-auth = { kind = "basic", username_label = "Account SID or API key SID", secret_label = "Auth token or API key secret" }
+auth = { kind = "basic", username_label = "Account SID or API key SID", secret_label = "Auth token or API key secret", username_like = ["AC*", "SK*"] }
 docs = "https://console.twilio.com/"
 base_path = "/2010-04-01"
 category = "messaging"

@@ -24,6 +24,11 @@ const TWILIO_TOKEN: &str = "twilio-token-abcdefghijklmnop";
 const MAILGUN_KEY: &str = "mailgun-key-abcdefghijklmnop";
 const PLIVO_ID: &str = "MAPLIVOID01234567890";
 const PLIVO_TOKEN: &str = "plivo-token-abcdefghijklmnop";
+const SUPABASE: &str = "sb_secret_abcdefghijklmnopqrstuvwxyz";
+const OLD_TOKEN: &str = "twilio-old-token-abcdefghijklmnop";
+
+/// Calls that reached a Supabase host.
+static SUPABASE_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 fn basic(pair: &str) -> String {
     use base64::Engine;
@@ -42,6 +47,27 @@ async fn provider(req: Request) -> axum::response::Response {
         .unwrap_or("")
         .to_string();
     let ok = match req.uri().path() {
+        p if p.starts_with("/rest/v1/") => {
+            SUPABASE_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            auth == format!("Bearer {SUPABASE}")
+        }
+        // A reply already on its way when the key was replaced.
+        "/2010-04-01/old.json" => {
+            return (
+                [("content-type", "application/json")],
+                json!({ "said": OLD_TOKEN, "pair": basic(&format!("{TWILIO_SID}:{OLD_TOKEN}")) })
+                    .to_string(),
+            )
+                .into_response()
+        }
+        "/2010-04-01/slow.json" => {
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            true
+        }
+        "/2010-04-01/hangs.json" => {
+            tokio::time::sleep(Duration::from_secs(120)).await;
+            true
+        }
         "/v1/models" => auth == format!("Bearer {GOOD_XAI}"),
         "/v1/projects" => auth == format!("Token {DEEPGRAM}"),
         "/2010-04-01/Accounts.json" => auth == basic(&format!("{TWILIO_SID}:{TWILIO_TOKEN}")),
@@ -112,6 +138,14 @@ impl C {
         }
         Self::call(req.send_json(body))
     }
+    fn delete(&self, path: &str) -> (u16, Value) {
+        Self::call(
+            self.agent
+                .delete(&format!("{}{}", self.base, path))
+                .set("Authorization", &format!("Bearer {}", self.token))
+                .call(),
+        )
+    }
     fn get(&self, path: &str) -> (u16, Value) {
         Self::call(
             self.agent
@@ -152,6 +186,13 @@ async fn setup() -> (tempfile::TempDir, Running, C) {
             ("api.twilio.com".into(), format!("http://{mock}")),
             ("api.mailgun.net".into(), format!("http://{mock}")),
             ("api.plivo.com".into(), format!("http://{mock}")),
+            ("mine.supabase.co".into(), format!("http://{mock}")),
+            ("evil.supabase.co".into(), format!("http://{mock}")),
+            // Nothing listens here.
+            (
+                "generativelanguage.googleapis.com".into(),
+                "http://127.0.0.1:1".into(),
+            ),
         ],
         mcp_allow_store: false,
         lock_on_sleep: false,
@@ -438,6 +479,466 @@ async fn a_key_in_two_parts() {
     assert_eq!(code, 201, "{made}");
     assert_eq!(test("plivo")["ok"], true);
     r.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_key_goes_only_to_the_owners_own_host() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let (_dir, r, c) = setup().await;
+    let calls = || SUPABASE_CALLS.load(SeqCst);
+    let via = |handle: &str, upstream: Option<&str>| {
+        let mut req = c
+            .agent
+            .get(&format!("{}/p/supabase/rest/v1/items", c.base))
+            .set("Authorization", &format!("Bearer {handle}"));
+        if let Some(u) = upstream {
+            req = req.set("X-Usk-Upstream", u);
+        }
+        C::call(req.call())
+    };
+
+    // Anyone can have a host under *.supabase.co: until the owner says which is
+    // theirs, the key goes nowhere, with or without a host named by the caller.
+    let (code, b) = c.post(
+        "/v1/secrets",
+        json!({ "name": "supabase", "value": SUPABASE }),
+    );
+    assert_eq!(code, 201, "{b}");
+    assert_eq!(b["needs_host"], "<project-ref>.supabase.co", "{b}");
+    let (_, h) = c.post("/v1/handles", json!({ "secret": "supabase", "label": "a" }));
+    let handle = h["handle"].as_str().unwrap().to_string();
+    for upstream in [None, Some("evil.supabase.co"), Some("mine.supabase.co")] {
+        let (code, b) = via(&handle, upstream);
+        assert_eq!(
+            (code, b["error"].as_str()),
+            (403, Some("host_not_pinned")),
+            "{upstream:?}: {b}"
+        );
+        assert!(b["message"]
+            .as_str()
+            .unwrap()
+            .contains("usk secret set supabase --upstream"));
+    }
+    assert_eq!(calls(), 0, "nothing was sent");
+    let (_, t) = c.post("/v1/secrets/supabase/test", json!({}));
+    assert_eq!(t["tested"], false, "{t}");
+    assert_eq!(calls(), 0, "nothing was sent by the test either");
+
+    // Named: calls go there without saying so, and nowhere else.
+    let (code, b) = c.patch(
+        "/v1/secrets/supabase",
+        json!({ "upstreams": ["https://Mine.supabase.co/"] }),
+    );
+    assert_eq!(code, 200, "{b}");
+    assert_eq!(b["upstreams"], json!(["mine.supabase.co"]));
+    let (code, b) = via(&handle, None);
+    assert_eq!(code, 200, "{b}");
+    assert_eq!(calls(), 1);
+    assert_eq!(via(&handle, Some("mine.supabase.co")).0, 200);
+    assert_eq!(calls(), 2);
+    let (code, b) = via(&handle, Some("evil.supabase.co"));
+    assert_eq!(
+        (code, b["error"].as_str()),
+        (403, Some("host_not_allowed")),
+        "{b}"
+    );
+    assert_eq!(calls(), 2, "the stranger's host got nothing");
+    let (_, t) = c.post("/v1/secrets/supabase/test", json!({}));
+    assert_eq!(
+        (t["tested"].as_bool(), t["ok"].as_bool()),
+        (Some(true), Some(true)),
+        "{t}"
+    );
+
+    // A policy written for the provider's wildcard allows the owner's host only.
+    let (code, h) = c.post(
+        "/v1/handles",
+        json!({ "secret": "supabase", "label": "wide", "policy": {
+            "allow": ["GET /rest/v1/**"], "upstreams": ["*.supabase.co"]
+        } }),
+    );
+    assert_eq!(code, 201, "{h}");
+    let wide = h["handle"].as_str().unwrap().to_string();
+    assert_eq!(via(&wide, None).0, 200);
+    let (code, b) = via(&wide, Some("evil.supabase.co"));
+    assert_eq!(
+        (code, b["error"].as_str()),
+        (403, Some("host_not_allowed")),
+        "{b}"
+    );
+
+    // Going back to the wildcard is the same as never naming one.
+    let (code, _) = c.patch(
+        "/v1/secrets/supabase",
+        json!({ "upstreams": ["*.supabase.co"] }),
+    );
+    assert_eq!(code, 200);
+    assert_eq!(via(&handle, None).1["error"], "host_not_pinned");
+    r.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pair_pasted_the_wrong_way_round() {
+    let (_dir, r, c) = setup().await;
+    let reversed = format!("{TWILIO_TOKEN}:{TWILIO_SID}");
+    let (code, b) = c.post(
+        "/v1/secrets",
+        json!({ "name": "twilio", "value": reversed }),
+    );
+    assert_eq!(code, 201, "{b}");
+    let (_, t) = c.post("/v1/secrets/twilio/test", json!({}));
+    assert_eq!(t["ok"], true, "put right, so it works: {t}");
+    let (_, s) = c.post("/v1/secrets/twilio/reveal", json!({ "confirm": true }));
+    assert_eq!(
+        (s["value"].as_str(), s["fields"]["username"].as_str()),
+        (Some(TWILIO_TOKEN), Some(TWILIO_SID))
+    );
+
+    // Two lines, replacing both.
+    let (code, b) = c.patch(
+        "/v1/secrets/twilio",
+        json!({ "value": format!("{TWILIO_TOKEN}\n{TWILIO_SID}") }),
+    );
+    assert_eq!(code, 200, "{b}");
+    let (_, s) = c.post("/v1/secrets/twilio/reveal", json!({ "confirm": true }));
+    assert_eq!(
+        (s["value"].as_str(), s["fields"]["username"].as_str()),
+        (Some(TWILIO_TOKEN), Some(TWILIO_SID))
+    );
+
+    // Neither part looks like an account: kept as given, and the username is
+    // guarded, since it may be the secret half.
+    let (code, b) = c.post(
+        "/v1/secrets",
+        json!({ "name": "odd", "provider": "twilio", "value": "unknown-shape-part-one:unknown-shape-part-two" }),
+    );
+    assert_eq!(code, 201, "{b}");
+    let (_, h) = c.post(
+        "/v1/handles",
+        json!({ "secret": "odd", "label": "o", "policy": { "allow": ["* /**"] } }),
+    );
+    let (code, b) = C::call(
+        c.agent
+            .post(&format!("{}/p/twilio/2010-04-01/Accounts.json", c.base))
+            .set(
+                "Authorization",
+                &format!("Bearer {}", h["handle"].as_str().unwrap()),
+            )
+            .send_string("note=unknown-shape-part-one"),
+    );
+    assert_eq!(
+        (code, b["error"].as_str()),
+        (403, Some("egress_blocked")),
+        "{b}"
+    );
+    r.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn replacing_half_of_an_aws_key_is_refused() {
+    let (_dir, r, c) = setup().await;
+    let (code, b) = c.post(
+        "/v1/secrets",
+        json!({ "name": "aws", "value": "AKIAIOSFODNN7EXAMPLE\nwJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" }),
+    );
+    assert_eq!(code, 201, "{b}");
+    let (code, b) = c.patch(
+        "/v1/secrets/aws",
+        json!({ "value": "a-new-secret-access-key-abcdefgh" }),
+    );
+    assert_eq!(
+        (code, b["error"].as_str()),
+        (400, Some("cannot_replace")),
+        "{b}"
+    );
+    let (_, s) = c.post("/v1/secrets/aws/reveal", json!({ "confirm": true }));
+    assert_eq!(s["value"], "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
+    assert_eq!(s["fields"]["access_key_id"], "AKIAIOSFODNN7EXAMPLE");
+    r.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_replaced_key_stays_guarded() {
+    let (_dir, r, c) = setup().await;
+    let (code, b) = c.post(
+        "/v1/secrets",
+        json!({ "name": "twilio", "value": format!("{TWILIO_SID}:{OLD_TOKEN}") }),
+    );
+    assert_eq!(code, 201, "{b}");
+    let (_, h) = c.post("/v1/handles", json!({ "secret": "twilio", "label": "a" }));
+    let handle = format!("Bearer {}", h["handle"].as_str().unwrap());
+    assert_eq!(
+        c.patch("/v1/secrets/twilio", json!({ "value": TWILIO_TOKEN }))
+            .0,
+        200
+    );
+    let body = c
+        .agent
+        .get(&format!("{}/p/twilio/2010-04-01/old.json", c.base))
+        .set("Authorization", &handle)
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
+    assert!(!body.contains(OLD_TOKEN), "{body}");
+    assert!(
+        !body.contains(&basic(&format!("{TWILIO_SID}:{OLD_TOKEN}"))[6..]),
+        "{body}"
+    );
+    // And after it is removed altogether.
+    assert_eq!(c.delete("/v1/secrets/twilio").0, 200);
+    let (code, b) = c.post(
+        "/v1/secrets",
+        json!({ "name": "again", "provider": "twilio", "value": format!("{TWILIO_SID}:other-token-abcdefghijklmnop") }),
+    );
+    assert_eq!(code, 201, "{b}");
+    let (_, h) = c.post("/v1/handles", json!({ "secret": "again", "label": "b" }));
+    let body = c
+        .agent
+        .get(&format!("{}/p/twilio/2010-04-01/old.json", c.base))
+        .set(
+            "Authorization",
+            &format!("Bearer {}", h["handle"].as_str().unwrap()),
+        )
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
+    assert!(!body.contains(TWILIO_TOKEN), "{body}");
+    assert!(!body.contains(OLD_TOKEN), "{body}");
+    r.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_request_cut_off_by_the_lock_is_in_the_log() {
+    let (_dir, r, c) = setup().await;
+    let (code, b) = c.post(
+        "/v1/secrets",
+        json!({ "name": "twilio", "value": format!("{TWILIO_SID}:{TWILIO_TOKEN}") }),
+    );
+    assert_eq!(code, 201, "{b}");
+    let (_, h) = c.post("/v1/handles", json!({ "secret": "twilio", "label": "a" }));
+    let handle = format!("Bearer {}", h["handle"].as_str().unwrap());
+    let (code, b) = std::thread::scope(|scope| {
+        let out = scope.spawn(|| {
+            C::call(
+                c.agent
+                    .get(&format!("{}/p/twilio/2010-04-01/slow.json", c.base))
+                    .set("Authorization", &handle)
+                    .call(),
+            )
+        });
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(c.post("/v1/lock", json!({})).0, 200);
+        out.join().unwrap()
+    });
+    assert_eq!(
+        (code, b["error"].as_str()),
+        (401, Some("vault_locked")),
+        "{b}"
+    );
+    assert_eq!(c.post("/v1/unlock", json!({ "password": PW })).0, 200);
+    let (_, events) = c.get("/v1/audit?since=1&kind=use_unfinished");
+    let events = events.as_array().unwrap();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["body"]["secret"], "twilio");
+    assert_eq!(events[0]["body"]["why"], "locked");
+    // Written once, and an ordinary request leaves nothing behind.
+    assert_eq!(c.post("/v1/lock", json!({})).0, 200);
+    assert_eq!(c.post("/v1/unlock", json!({ "password": PW })).0, 200);
+    assert_eq!(
+        c.get("/v1/audit?since=1&kind=use_unfinished")
+            .1
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    r.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_caller_who_leaves_is_in_the_log() {
+    let (_dir, r, c) = setup().await;
+    let (code, b) = c.post(
+        "/v1/secrets",
+        json!({ "name": "twilio", "value": format!("{TWILIO_SID}:{TWILIO_TOKEN}") }),
+    );
+    assert_eq!(code, 201, "{b}");
+    let (_, h) = c.post("/v1/handles", json!({ "secret": "twilio", "label": "a" }));
+    let handle = format!("Bearer {}", h["handle"].as_str().unwrap());
+    let impatient = ureq::AgentBuilder::new()
+        .max_idle_connections(0)
+        .timeout_read(Duration::from_millis(300))
+        .build();
+    assert!(impatient
+        .get(&format!("{}/p/twilio/2010-04-01/slow.json", c.base))
+        .set("Authorization", &handle)
+        .call()
+        .is_err());
+    // The call took effect or not; either way the log tells of it, once.
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    let (_, unfinished) = c.get("/v1/audit?since=1&kind=use_unfinished");
+    let (_, finished) = c.get("/v1/audit?since=1&kind=use");
+    let total = unfinished.as_array().unwrap().len() + finished.as_array().unwrap().len();
+    assert_eq!(total, 1, "{unfinished} {finished}");
+    r.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_key_test_does_not_say_the_key() {
+    let (_dir, r, c) = setup().await;
+    const KEY: &str = "AIzaSyTESTabcdefghijklmnopqrstuvwxyz012345";
+    let (code, b) = c.post(
+        "/v1/secrets",
+        json!({ "name": "gemini", "provider": "google-ai", "value": KEY }),
+    );
+    assert_eq!(code, 201, "{b}");
+    let (_, t) = c.post("/v1/secrets/gemini/test", json!({}));
+    assert!(
+        t["message"].as_str().unwrap().contains("could not reach"),
+        "{t}"
+    );
+    assert!(!t.to_string().contains(KEY), "{t}");
+    r.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn other_fields_of_a_key_need_the_owner() {
+    let (_dir, r, c) = setup().await;
+    let (code, b) = c.post(
+        "/v1/secrets",
+        json!({ "name": "drive", "value": json!({
+            "type": "authorized_user", "client_id": "cid-123", "client_secret": "csecret-abcdefghijkl",
+            "refresh_token": "rt-1-abcdefghijklmnop", "token_uri": "https://oauth2.googleapis.com/token"
+        }).to_string() }),
+    );
+    assert_eq!(code, 201, "{b}");
+    let owner = c.owner.lock().unwrap().take();
+    let (code, b) = c.patch(
+        "/v1/secrets/drive",
+        json!({ "value": "rt-2-abcdefghijklmnop", "fields": { "token_url": "https://storage.googleapis.com/mine" } }),
+    );
+    assert_eq!(
+        (code, b["error"].as_str()),
+        (403, Some("owner_required")),
+        "{b}"
+    );
+    *c.owner.lock().unwrap() = owner;
+    let (_, s) = c.post("/v1/secrets/drive/reveal", json!({ "confirm": true }));
+    assert_eq!(
+        s["fields"]["token_url"],
+        "https://oauth2.googleapis.com/token"
+    );
+    assert_eq!(s["value"], "rt-1-abcdefghijklmnop");
+    r.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_change_stores_nothing() {
+    let (_dir, r, c) = setup().await;
+    for name in ["one", "two"] {
+        let (code, b) = c.post(
+            "/v1/secrets",
+            json!({ "name": name, "provider": "twilio", "value": format!("{TWILIO_SID}:{TWILIO_TOKEN}") }),
+        );
+        assert_eq!(code, 201, "{b}");
+    }
+    for bad in [
+        json!({ "value": "changed-token-abcdefghijklmnop", "name": "two" }),
+        json!({ "value": "changed-token-abcdefghijklmnop", "upstreams": ["not a host"] }),
+        json!({ "username": "ACchanged", "provider": "no-such-provider" }),
+    ] {
+        let (code, b) = c.patch("/v1/secrets/one", bad.clone());
+        assert!(code == 400 || code == 409, "{bad}: {code} {b}");
+        let (_, s) = c.post("/v1/secrets/one/reveal", json!({ "confirm": true }));
+        assert_eq!(s["value"], TWILIO_TOKEN, "{bad}");
+        assert_eq!(s["fields"]["username"], TWILIO_SID, "{bad}");
+    }
+    r.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn putting_a_pair_right_afterwards() {
+    let (_dir, r, c) = setup().await;
+    // Typed into the two boxes the wrong way round: put right all the same.
+    let (code, b) = c.post(
+        "/v1/secrets",
+        json!({ "name": "boxes", "provider": "twilio", "value": TWILIO_SID, "fields": { "username": TWILIO_TOKEN } }),
+    );
+    assert_eq!(code, 201, "{b}");
+    let (_, s) = c.post("/v1/secrets/boxes/reveal", json!({ "confirm": true }));
+    assert_eq!(
+        (s["value"].as_str(), s["fields"]["username"].as_str()),
+        (Some(TWILIO_TOKEN), Some(TWILIO_SID))
+    );
+    // Stored with a username that is no account, then replaced with both parts.
+    let (code, b) = c.post(
+        "/v1/secrets",
+        json!({ "name": "odd", "provider": "twilio", "value": "unknown-shape-part-two", "fields": { "username": "unknown-shape-part-one" } }),
+    );
+    assert_eq!(code, 201, "{b}");
+    let (code, b) = c.patch(
+        "/v1/secrets/odd",
+        json!({ "value": format!("{TWILIO_SID}:{TWILIO_TOKEN}") }),
+    );
+    assert_eq!(code, 200, "{b}");
+    let (_, s) = c.post("/v1/secrets/odd/reveal", json!({ "confirm": true }));
+    assert_eq!(
+        (s["value"].as_str(), s["fields"]["username"].as_str()),
+        (Some(TWILIO_TOKEN), Some(TWILIO_SID))
+    );
+    // One part stored, the account by mistake; putting it right must not block
+    // every later call that names the account.
+    let (code, b) = c.post(
+        "/v1/secrets",
+        json!({ "name": "half", "provider": "twilio", "value": "ACabcdefabcdefabcdefabcdefabcdefab" }),
+    );
+    assert_eq!(code, 201, "{b}");
+    let (code, b) = c.patch(
+        "/v1/secrets/half",
+        json!({ "value": format!("ACabcdefabcdefabcdefabcdefabcdefab\n{TWILIO_TOKEN}") }),
+    );
+    assert_eq!(code, 200, "{b}");
+    let (_, h) = c.post(
+        "/v1/handles",
+        json!({ "secret": "half", "label": "h", "policy": { "allow": ["* /**"] } }),
+    );
+    let (code, b) = C::call(
+        c.agent
+            .get(&format!(
+                "{}/p/twilio/2010-04-01/Accounts/ACabcdefabcdefabcdefabcdefabcdefab.json",
+                c.base
+            ))
+            .set(
+                "Authorization",
+                &format!("Bearer {}", h["handle"].as_str().unwrap()),
+            )
+            .call(),
+    );
+    assert_ne!(b["error"].as_str(), Some("egress_blocked"), "{code} {b}");
+    r.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_slow_request_does_not_hold_up_a_stop() {
+    let (_dir, r, c) = setup().await;
+    let (code, b) = c.post(
+        "/v1/secrets",
+        json!({ "name": "twilio", "value": format!("{TWILIO_SID}:{TWILIO_TOKEN}") }),
+    );
+    assert_eq!(code, 201, "{b}");
+    let (_, h) = c.post("/v1/handles", json!({ "secret": "twilio", "label": "a" }));
+    let handle = format!("Bearer {}", h["handle"].as_str().unwrap());
+    let url = format!("{}/p/twilio/2010-04-01/hangs.json", c.base);
+    let agent = c.agent.clone();
+    std::thread::spawn(move || {
+        let _ = agent.get(&url).set("Authorization", &handle).call();
+    });
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let t0 = std::time::Instant::now();
+    r.shutdown().await;
+    assert!(t0.elapsed() < Duration::from_secs(6), "{:?}", t0.elapsed());
 }
 
 #[tokio::test(flavor = "multi_thread")]

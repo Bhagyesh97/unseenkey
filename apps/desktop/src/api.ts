@@ -131,6 +131,8 @@ export interface Preset {
   testable?: boolean;
   /** What the provider calls each part, when its keys come in two parts. */
   pair?: { username: string; secret: string } | null;
+  /** Set when every customer has their own host: the owner names theirs. */
+  tenant?: { label: string; example: string } | null;
   policies: { id: string; display: string; recommended: boolean; explanation: string }[];
 }
 

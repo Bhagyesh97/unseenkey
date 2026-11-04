@@ -558,13 +558,15 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         let mut out = Vec::new();
         let mut cursor = lo;
         loop {
-            let batch = self.audit_events(cursor, Some(audit::kinds::USE), 1024)?;
+            let batch = self.audit_events(cursor, None, 1024)?;
             let Some(last) = batch.last() else {
                 break;
             };
             cursor = last.seq + 1;
             for ev in &batch {
-                if ev.ts < since_ts {
+                // A request with no answer counts: it may have reached the provider.
+                let used = ev.kind == audit::kinds::USE || ev.kind == audit::kinds::USE_UNFINISHED;
+                if ev.ts < since_ts || !used {
                     continue;
                 }
                 if let Some(id) = ev

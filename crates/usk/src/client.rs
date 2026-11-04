@@ -115,7 +115,12 @@ impl Client {
             Err(ureq::Error::Status(code, resp)) => {
                 let body: Value = resp.into_json().unwrap_or(Value::Null);
                 let err = body["error"].as_str().unwrap_or("error").to_string();
-                let msg = body["message"].as_str().unwrap_or("").to_string();
+                // Not every refusal comes with words: the size limit answers with none.
+                let msg = match (body["message"].as_str(), code) {
+                    (Some(m), _) if !m.is_empty() => m.to_string(),
+                    (_, 413) => "that is too large for the vault".to_string(),
+                    _ => "the daemon gave no reason".to_string(),
+                };
                 let exit = match err.as_str() {
                     "vault_locked" | "wrong_password" => EXIT_LOCKED,
                     _ => 1,

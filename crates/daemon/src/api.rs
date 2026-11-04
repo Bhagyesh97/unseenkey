@@ -641,6 +641,9 @@ pub struct Created {
     pub upstreams: Vec<String>,
     /// What the value looked like.
     pub detected: Option<Detected>,
+    /// Set when the key goes nowhere until the owner names their own host: a
+    /// made-up example of one.
+    pub needs_host: Option<String>,
 }
 
 /// Detection summary.
@@ -776,6 +779,9 @@ pub async fn create_secret(
             value = SecretBytes::from_slice(pass.as_bytes());
             fields.insert("username".into(), SecretBytes::from_slice(user.as_bytes()));
         }
+    }
+    if is_pair {
+        put_pair_right(provider.as_deref(), &mut value, &mut fields);
     }
     // Stored shape for an OAuth client: the refresh token is the value; client
     // id, client secret, token URL and scope are fields.
@@ -914,6 +920,12 @@ pub async fn create_secret(
             id: id.to_hex(),
             name: req.name.trim().to_string(),
             kind: kind.as_str().to_string(),
+            needs_host: provider
+                .as_deref()
+                .and_then(presets::get)
+                .filter(|p| p.pin_needed(&upstreams))
+                .and_then(|p| p.tenant.as_ref())
+                .map(|t| t.example.clone()),
             provider,
             upstreams,
             detected: recognised.map(|r| Detected {
@@ -925,6 +937,32 @@ pub async fn create_secret(
             }),
         }),
     ))
+}
+
+/// A key's two parts pasted the wrong way round are put right, when the provider's
+/// usernames have a known shape. Left alone, the secret part would be treated as
+/// an account id: shown to AI tools and not guarded.
+fn put_pair_right(
+    provider: Option<&str>,
+    value: &mut SecretBytes,
+    fields: &mut BTreeMap<String, SecretBytes>,
+) {
+    let (Some(preset), Some(user)) = (provider.and_then(presets::get), fields.get("username"))
+    else {
+        return;
+    };
+    let reversed = match (
+        std::str::from_utf8(user.expose()),
+        std::str::from_utf8(value.expose()),
+    ) {
+        (Ok(u), Ok(v)) => preset.pair_reversed(u, v),
+        _ => false,
+    };
+    if reversed {
+        let new_user = value.clone();
+        *value = user.clone();
+        fields.insert("username".into(), new_user);
+    }
 }
 
 /// Resolve `{ref}`: a 32-hex id or a name.
@@ -1043,19 +1081,11 @@ pub struct PatchSecret {
     pub username: Option<String>,
 }
 
-/// Whether this secret's provider wants its keys in two parts.
-fn is_pair(v: &crate::state::DaemonVault, id: &Id) -> Result<bool, ApiError> {
-    Ok(v.get(id)?
-        .provider
-        .as_deref()
-        .and_then(presets::get)
-        .is_some_and(|p| p.pair_labels().is_some()))
-}
-
 /// `PATCH /v1/secrets/{ref}`. Changing where a secret may go (`upstreams`,
 /// `provider`), how it may leave the vault (`allow_injection`, `no_scrub`) or
-/// what its access tokens may do (`scope`) widens access and is owner only; a
-/// rename, tags, notes or a new value are not.
+/// what its access tokens may do (`scope`) widens access and is owner only. So
+/// are its other `fields`: a token URL says where a client secret goes. A rename,
+/// tags, notes or a new value are not.
 pub async fn patch_secret(
     State(s): State<Arc<AppState>>,
     Path(r): Path<String>,
@@ -1066,7 +1096,8 @@ pub async fn patch_secret(
         || p.no_scrub.is_some()
         || p.upstreams.is_some()
         || p.provider.is_some()
-        || p.scope.is_some();
+        || p.scope.is_some()
+        || !p.fields.is_empty();
     if widens {
         require_owner(&s, &headers)?;
     }
@@ -1077,6 +1108,16 @@ pub async fn patch_secret(
     let id = resolve(&v, &r)?;
     // Everything is checked before anything changes: a refused request stores nothing.
     let kind = v.get(&id)?.kind;
+    // As it will be after this request.
+    let provider = match &p.provider {
+        Some(changed) => changed.clone(),
+        None => v.get(&id)?.provider.clone(),
+    };
+    let pair = provider
+        .as_deref()
+        .and_then(presets::get)
+        .filter(|p| p.pair_labels().is_some());
+    let is_aws = kind == SecretKind::AwsCredentials || provider.as_deref() == Some("aws");
     if let Some(value) = &p.value {
         if value.is_empty() {
             return Err(ApiError::new(
@@ -1090,6 +1131,22 @@ pub async fn patch_secret(
                 StatusCode::BAD_REQUEST,
                 "cannot_replace",
                 "a service account's value is its whole key file, with its scopes beside it: remove it and add the new file",
+            ));
+        }
+        // A new secret access key belongs to a new access key id, and a pasted
+        // file is not a refresh token: storing either would break the key.
+        if is_aws && !p.fields.contains_key("access_key_id") {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "cannot_replace",
+                "an AWS key's parts change together: remove it and add the new one, or send the access key id with it",
+            ));
+        }
+        if kind == SecretKind::Oauth2Client && value.trim_start().starts_with('{') {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "cannot_replace",
+                "only the refresh token can be replaced here: remove this key and add the new file",
             ));
         }
     }
@@ -1113,7 +1170,7 @@ pub async fn patch_secret(
         }
     }
     if let Some(username) = &p.username {
-        if !is_pair(&v, &id)? {
+        if pair.is_none() {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
                 "username_not_applicable",
@@ -1129,64 +1186,15 @@ pub async fn patch_secret(
             ));
         }
     }
-    if let Some(value) = &p.value {
-        let mut fields: BTreeMap<String, SecretBytes> = p
-            .fields
-            .iter()
-            .map(|(k, val)| (k.clone(), SecretBytes::from_slice(val.as_bytes())))
-            .collect();
-        let mut new_value = SecretBytes::from_slice(value.as_bytes());
-        // A new password keeps its username. A colon only splits the value when
-        // nothing is stored yet, or when what precedes it is the stored username:
-        // otherwise it is a password with a colon in it, and its first half must
-        // not end up in a field the scrubber leaves alone. Two lines are both parts.
-        if is_pair(&v, &id)? && !fields.contains_key("username") {
-            let stored = v.reveal(&id)?.fields;
-            let stored_user = ["username", "user", "account_sid"]
-                .iter()
-                .find_map(|k| stored.get(*k).map(|u| (*k, u.clone())));
-            let two_lines = value.trim().contains('\n');
-            match (providers::split_pair(value), stored_user) {
-                (Some((user, pass)), None) => {
-                    new_value = SecretBytes::from_slice(pass.as_bytes());
-                    fields.insert("username".into(), SecretBytes::from_slice(user.as_bytes()));
-                }
-                (Some((user, pass)), Some((k, u)))
-                    if two_lines || u.expose() == user.as_bytes() =>
-                {
-                    new_value = SecretBytes::from_slice(pass.as_bytes());
-                    let _ = u;
-                    fields.insert(k.to_string(), SecretBytes::from_slice(user.as_bytes()));
-                }
-                (_, Some((k, u))) => {
-                    fields.insert(k.to_string(), u);
-                }
-                (None, None) => {}
-            }
+    if let Some(name) = &p.name {
+        let name = name.trim();
+        if name.is_empty() || name.len() > 128 {
+            return Err(VaultError::InvalidName.into());
         }
-        v.update_value(&id, new_value, fields)?;
+        if v.get_by_name(name).is_ok_and(|m| m.secret_id != id) {
+            return Err(VaultError::NameExists(name.into()).into());
+        }
     }
-    if let Some(username) = &p.username {
-        let username = username.trim();
-        let revealed = v.reveal(&id)?;
-        let mut fields = revealed.fields.clone();
-        fields.insert("username".into(), SecretBytes::from(username));
-        v.update_value(&id, revealed.value.clone(), fields)?;
-    }
-    if let Some(scope) = &p.scope {
-        let scope = scope.trim();
-        let revealed = v.reveal(&id)?;
-        let mut fields = revealed.fields.clone();
-        fields.insert("scope".into(), SecretBytes::from(scope));
-        v.update_value(&id, revealed.value.clone(), fields)?;
-    }
-    let has_meta = p.name.is_some()
-        || p.tags.is_some()
-        || p.upstreams.is_some()
-        || p.notes.is_some()
-        || p.provider.is_some()
-        || p.allow_injection.is_some()
-        || p.no_scrub.is_some();
     let mut upstreams = match &p.upstreams {
         Some(u) => Some(normalize_upstreams(u)?),
         None => None,
@@ -1205,6 +1213,93 @@ pub async fn patch_secret(
             upstreams = Some(preset.upstreams.clone());
         }
     }
+    // A call already out may still bring the old value back.
+    if p.value.is_some() || p.username.is_some() {
+        s.retire(&v, &id);
+    }
+    if p.no_scrub == Some(true) {
+        s.forget_retired(&v.get(&id)?.name.clone());
+    }
+    if let Some(value) = &p.value {
+        let mut fields: BTreeMap<String, SecretBytes> = p
+            .fields
+            .iter()
+            .map(|(k, val)| (k.clone(), SecretBytes::from_slice(val.as_bytes())))
+            .collect();
+        let mut new_value = SecretBytes::from_slice(value.as_bytes());
+        // A new password keeps its username. A colon only splits the value when
+        // nothing is stored yet, or when what precedes it is the stored username:
+        // otherwise it is a password with a colon in it, and its first half must
+        // not end up in a field the scrubber leaves alone. Two lines are both parts.
+        if pair.is_some() && !fields.contains_key("username") {
+            let stored = v.reveal(&id)?.fields;
+            let stored_user = ["username", "user", "account_sid"]
+                .iter()
+                .find_map(|k| stored.get(*k).map(|u| (*k, u.clone())));
+            let two_lines = value.trim().contains('\n');
+            match (providers::split_pair(value), stored_user) {
+                (Some((user, pass)), None) => {
+                    new_value = SecretBytes::from_slice(pass.as_bytes());
+                    fields.insert("username".into(), SecretBytes::from_slice(user.as_bytes()));
+                }
+                // Both parts, also when what is stored is no account and the first
+                // part is: that puts a wrong pair right.
+                (Some((user, pass)), Some((k, u)))
+                    if two_lines
+                        || u.expose() == user.as_bytes()
+                        || pair.is_some_and(|p| {
+                            p.username_fits(&user)
+                                && std::str::from_utf8(u.expose())
+                                    .is_ok_and(|text| p.username_suspect(text))
+                        }) =>
+                {
+                    new_value = SecretBytes::from_slice(pass.as_bytes());
+                    fields.insert(k.to_string(), SecretBytes::from_slice(user.as_bytes()));
+                }
+                (_, Some((k, u))) => {
+                    fields.insert(k.to_string(), u);
+                }
+                (None, None) => {}
+            }
+        }
+        // What was not sent stays: a new refresh token keeps its client id. Except
+        // the fields that would win over the new value; and an AWS key is whole as
+        // sent, as an old session token belongs to the old key.
+        if !is_aws {
+            for (k, stored) in v.reveal(&id)?.fields {
+                if !matches!(k.as_str(), "password" | "refresh_token") {
+                    fields.entry(k).or_insert(stored);
+                }
+            }
+        }
+        if pair.is_some() {
+            put_pair_right(provider.as_deref(), &mut new_value, &mut fields);
+        }
+        v.update_value(&id, new_value, fields)?;
+    }
+    if let Some(username) = &p.username {
+        let username = username.trim();
+        let revealed = v.reveal(&id)?;
+        let mut fields = revealed.fields.clone();
+        fields.insert("username".into(), SecretBytes::from(username));
+        let mut value = revealed.value.clone();
+        put_pair_right(provider.as_deref(), &mut value, &mut fields);
+        v.update_value(&id, value, fields)?;
+    }
+    if let Some(scope) = &p.scope {
+        let scope = scope.trim();
+        let revealed = v.reveal(&id)?;
+        let mut fields = revealed.fields.clone();
+        fields.insert("scope".into(), SecretBytes::from(scope));
+        v.update_value(&id, revealed.value.clone(), fields)?;
+    }
+    let has_meta = p.name.is_some()
+        || p.tags.is_some()
+        || p.upstreams.is_some()
+        || p.notes.is_some()
+        || p.provider.is_some()
+        || p.allow_injection.is_some()
+        || p.no_scrub.is_some();
     if has_meta {
         v.update_meta(&id, |m| {
             if let Some(n) = p.name.clone() {
@@ -1256,6 +1351,7 @@ pub async fn delete_secret(
 ) -> ApiResult<serde_json::Value> {
     let mut v = s.vault.lock().await;
     let id = resolve(&v, &r)?;
+    s.retire(&v, &id);
     let revoked = v.delete(&id)?;
     for hid in &revoked {
         let _ = v.audit(

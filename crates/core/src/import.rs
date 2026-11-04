@@ -46,6 +46,51 @@ pub fn paired_usernames(
     (usernames, joined)
 }
 
+/// What frameworks put before a variable the browser may read.
+const PUBLIC_PREFIXES: [&str; 5] = [
+    "NEXT_PUBLIC_",
+    "VITE_",
+    "PUBLIC_",
+    "REACT_APP_",
+    "EXPO_PUBLIC_",
+];
+
+/// The owner's own host, for keys of a provider with a host per customer, from
+/// the base URL variable beside them (`SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_URL`).
+/// A URL outside the provider's hosts says nothing: it may already be the broker.
+/// `PROD_SUPABASE_KEY` takes `PROD_SUPABASE_URL`, not `STAGING_SUPABASE_URL`; the
+/// prefixes frameworks add to what the browser may read do not count.
+pub fn own_hosts(entries: &[DotenvEntry]) -> alloc::collections::BTreeMap<String, String> {
+    let mut hosts = alloc::collections::BTreeMap::new();
+    for e in entries {
+        let Some(p) = crate::presets::guess_by_name(&e.key).filter(|p| p.tenant.is_some()) else {
+            continue;
+        };
+        let Some(var) = p.env.get("base_url") else {
+            continue;
+        };
+        let host = entries
+            .iter()
+            .find(|o| {
+                o.key.strip_suffix(var.as_str()).is_some_and(|prefix| {
+                    let own = PUBLIC_PREFIXES
+                        .iter()
+                        .find_map(|f| prefix.strip_prefix(f))
+                        .unwrap_or(prefix);
+                    own.is_empty() || e.key.starts_with(own)
+                })
+            })
+            .and_then(|o| core::str::from_utf8(o.value.expose()).ok())
+            .and_then(|url| crate::broker::Upstream::parse(url.trim()).ok())
+            .map(|u| u.host)
+            .filter(|h| crate::policy::eval::host_allowed(&p.upstreams, h));
+        if let Some(host) = host {
+            hosts.insert(e.key.clone(), host);
+        }
+    }
+    hosts
+}
+
 /// Parse `.env` text. Handles `export KEY=`, single/double quotes, `\n` and
 /// `\"` escapes inside double quotes, `#` comments, and blank lines. Unquoted
 /// values stop at ` #`.
@@ -121,6 +166,32 @@ fn unquote(rest: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_key_finds_its_own_host_beside_it() {
+        let hosts = own_hosts(&parse_dotenv(
+            "SUPABASE_KEY=sb_secret_abc\nNEXT_PUBLIC_SUPABASE_URL=https://abcd1234.supabase.co/\n",
+        ));
+        assert_eq!(
+            hosts.get("SUPABASE_KEY").map(String::as_str),
+            Some("abcd1234.supabase.co")
+        );
+        // The URL beside it, not one for something else.
+        let text = "DEMO_SUPABASE_URL=https://other.supabase.co\nSUPABASE_KEY=sb_secret_abc\n";
+        assert_eq!(own_hosts(&parse_dotenv(text)).get("SUPABASE_KEY"), None);
+        let hosts = own_hosts(&parse_dotenv(
+            "STAGING_SUPABASE_URL=https://staging.supabase.co\nPROD_SUPABASE_URL=https://prod.supabase.co\nPROD_SUPABASE_KEY=sb_secret_abc\n",
+        ));
+        assert_eq!(
+            hosts.get("PROD_SUPABASE_KEY").map(String::as_str),
+            Some("prod.supabase.co")
+        );
+        // Already pointing at the broker, or somewhere else: says nothing.
+        for url in ["http://127.0.0.1:8080/p/supabase", "https://evil.example"] {
+            let text = alloc::format!("SUPABASE_KEY=sb_secret_abc\nSUPABASE_URL={url}\n");
+            assert!(own_hosts(&parse_dotenv(&text)).is_empty(), "{url}");
+        }
+    }
 
     #[test]
     fn parses_common_forms() {

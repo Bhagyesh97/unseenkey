@@ -2,7 +2,7 @@ id = "razorpay"
 display = "Razorpay"
 category = "payments"
 upstreams = ["api.razorpay.com"]
-auth = { kind = "basic", username_label = "Key ID", secret_label = "Key secret" }
+auth = { kind = "basic", username_label = "Key ID", secret_label = "Key secret", username_like = ["rzp_*"] }
 docs = "https://dashboard.razorpay.com/app/keys"
 base_path = "/v1"
 key_prefixes = ["rzp_live_", "rzp_test_"]

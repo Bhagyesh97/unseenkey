@@ -330,6 +330,7 @@ mod tests {
             username: username.map(str::to_string),
             username_label: None,
             secret_label: None,
+            username_like: Vec::new(),
         };
         let b64 = |s: &str| base64::engine::general_purpose::STANDARD.encode(s);
         let i = inject(&basic(None), &r).unwrap();

@@ -214,9 +214,23 @@ pub async fn test_secret(
         },
         (a, _) => a.clone(),
     };
+    if let Some(t) = preset
+        .tenant
+        .as_ref()
+        .filter(|_| preset.pin_needed(&meta.upstreams))
+    {
+        return Ok(not_tested(
+            Some(preset),
+            format!(
+                "it goes nowhere until you name your {}: `usk secret set {} --upstream {}`",
+                t.label, meta.name, t.example
+            ),
+        ));
+    }
     let host = verify
         .host
         .clone()
+        .or_else(|| preset.pinned_host(&meta.upstreams).map(str::to_string))
         .unwrap_or_else(|| preset.upstreams[0].clone());
     // The host lock holds for tests too: never send the key where it may not go.
     if !unseenkey_core::policy::eval::host_allowed(&meta.upstreams, &host) {
@@ -303,7 +317,12 @@ pub async fn test_secret(
                 _ => (None, Some(code), format!("{display} answered HTTP {code}, which does not say whether the key works.")),
             }
         }
-        Err(e) => (None, None, format!("could not reach {host}: {e}")),
+        // The error's own text holds the URL, and a key may travel in the URL.
+        Err(e) => (
+            None,
+            None,
+            format!("could not reach {host}: {}", e.without_url()),
+        ),
     };
     {
         let mut v = s.vault.lock().await;

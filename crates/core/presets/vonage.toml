@@ -2,7 +2,7 @@ id = "vonage"
 display = "Vonage"
 category = "messaging"
 upstreams = ["api.nexmo.com", "rest.nexmo.com"]
-auth = { kind = "basic", username_label = "API key", secret_label = "API secret" }
+auth = { kind = "basic", username_label = "API key", secret_label = "API secret", username_like = ["????????"] }
 docs = "https://dashboard.nexmo.com/settings"
 base_path = ""
 env_names = ["nexmo"]

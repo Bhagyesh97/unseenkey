@@ -162,14 +162,24 @@ impl Running {
     /// Wait until the server stops (after a shutdown request).
     pub async fn wait(self) {
         let _ = self.handle.await;
+        // A sign-in under way may be about to store a new refresh token, and the
+        // old one may already be dead: it gets a moment.
+        let sign_in = tokio::time::timeout(SIGN_IN_GRACE, self.state.oauth.lock()).await;
+        drop(sign_in);
         {
             let mut v = self.state.vault.lock().await;
             if !v.is_locked() {
+                self.state.log_requests_out(&mut v, "stopped");
                 let _ = v.audit(kinds::LOCK, serde_json::json!({ "reason": "shutdown" }));
             }
             v.lock();
         }
-        if let Some(p) = &self.paths {
+        // Another daemon may have started while this one finished: its files stay.
+        let ours = self.paths.as_ref().is_some_and(|p| {
+            std::fs::read_to_string(&p.pid)
+                .is_ok_and(|pid| pid.trim() == std::process::id().to_string())
+        });
+        if let Some(p) = self.paths.as_ref().filter(|_| ours) {
             let _ = std::fs::remove_file(&p.token);
             let _ = std::fs::remove_file(&p.addr);
             let _ = std::fs::remove_file(&p.pid);
@@ -177,6 +187,11 @@ impl Running {
         tracing::info!("daemon stopped");
     }
 }
+
+/// How long a sign-in under way may finish after that.
+const SIGN_IN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+/// How long requests in flight may finish after a stop was asked for.
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 
 fn allowed_hosts(addr: SocketAddr) -> HashSet<String> {
     let port = addr.port();
@@ -257,6 +272,9 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
         config_path: VaultPaths::from_vault_file(&opts.vault_path).config,
         care: std::sync::atomic::AtomicU8::new(1),
         shutdown: watch::channel(false).0,
+        retired: RwLock::new(Vec::new()),
+        requests_out: std::sync::Mutex::new(HashMap::new()),
+        next_request: std::sync::atomic::AtomicU64::new(0),
         scrubber: RwLock::new(Scrubber::empty()),
         usage: Mutex::new(HashMap::new()),
         denials: Mutex::new(HashMap::new()),
@@ -414,12 +432,24 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
 
     state.set_care(care);
     let mut shutdown_rx = state.shutdown.subscribe();
+    let mut grace_rx = state.shutdown.subscribe();
     let handle = tokio::spawn(async move {
         let server = axum::serve(listener, app).with_graceful_shutdown(async move {
             let _ = shutdown_rx.wait_for(|v| *v).await;
         });
-        if let Err(e) = server.await {
-            tracing::error!(error = %e, "server error");
+        // A long stream must not keep the daemon up: what is in flight gets a
+        // moment to finish, then the vault locks all the same.
+        let grace = async move {
+            let _ = grace_rx.wait_for(|v| *v).await;
+            tokio::time::sleep(SHUTDOWN_GRACE).await;
+        };
+        tokio::select! {
+            r = std::future::IntoFuture::into_future(server) => {
+                if let Err(e) = r {
+                    tracing::error!(error = %e, "server error");
+                }
+            }
+            () = grace => tracing::warn!("stopping with requests still in flight"),
         }
     });
     tracing::info!(%addr, "daemon listening");

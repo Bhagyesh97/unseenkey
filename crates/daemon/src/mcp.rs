@@ -287,17 +287,19 @@ async fn list_secrets(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args: 
                 None => (default_policy(m.provider.as_deref(), s.care()), false),
             };
             let policy = with_hosts(policy, &m.upstreams);
-            // Some providers want the account in the path. It is not the secret.
+            // Some providers want the account in the path. It is not the secret,
+            // provided it looks like an account: a pair pasted the wrong way round
+            // would otherwise show its secret half here.
             let account = m
                 .provider
                 .as_deref()
                 .and_then(presets::get)
                 .filter(|p| p.pair_labels().is_some())
-                .and_then(|_| v.reveal(&m.secret_id).ok())
-                .and_then(|r| {
-                    r.fields
-                        .get("username")
-                        .and_then(|u| String::from_utf8(u.expose().to_vec()).ok())
+                .and_then(|p| {
+                    let revealed = v.reveal(&m.secret_id).ok()?;
+                    let user = revealed.fields.get("username")?;
+                    let user = String::from_utf8(user.expose().to_vec()).ok()?;
+                    p.username_fits(&user).then_some(user)
                 });
             json!({
                 "name": m.name, "type": m.kind.as_str(), "provider": m.provider,
@@ -382,7 +384,10 @@ async fn call_api(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args: &Val
             true,
         );
     }
-    if upstream_spec.is_none() && preset.upstreams.first().is_some_and(|h| h.contains('*')) {
+    if upstream_spec.is_none()
+        && preset.tenant.is_none()
+        && preset.upstreams.first().is_some_and(|h| h.contains('*'))
+    {
         return tool_text(
             format!(
                 "{} spans many hosts; pass upstream=\"https://<host>\" (allowed: {})",

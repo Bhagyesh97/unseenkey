@@ -2,7 +2,7 @@ id = "cloudinary"
 display = "Cloudinary"
 category = "hosting"
 upstreams = ["api.cloudinary.com"]
-auth = { kind = "basic", username_label = "API key", secret_label = "API secret" }
+auth = { kind = "basic", username_label = "API key", secret_label = "API secret", username_like = ["???????????????"] }
 docs = "https://console.cloudinary.com/settings/api-keys"
 base_path = "/v1_1"
 

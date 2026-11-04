@@ -126,6 +126,7 @@ pub fn fix_for(
     // A key's username stays in the file, where the SDK reads it; the secret
     // part carries a copy into the vault.
     let (usernames, joined) = unseenkey_core::import::paired_usernames(&entries);
+    let own_hosts = unseenkey_core::import::own_hosts(&entries);
     let todo: Vec<&Finding<'_>> = found
         .iter()
         .filter(|f| f.preset.is_some() && !already_handle(f.entry))
@@ -158,14 +159,22 @@ pub fn fix_for(
             continue;
         }
         let name = unique_name(&c, &base_name);
-        c.post(
+        let stored = c.post(
             "/v1/secrets",
             json!({
                 "name": name, "value": value, "provider": preset_id,
                 "fields": usernames.get(&e.key).map_or_else(|| json!({}), |u| json!({ "username": u })),
+                "upstreams": own_hosts.get(&e.key).map_or_else(Vec::new, |h| vec![h.clone()]),
                 "tags": ["env-guard"], "notes": format!("moved from {} ({})", path.display(), e.key),
             }),
         )?;
+        match (own_hosts.get(&e.key), stored["needs_host"].as_str()) {
+            (Some(host), _) => println!("{name} is locked to {host}"),
+            (None, Some(example)) => println!(
+                "{name} goes nowhere until you name its host: `usk secret set {name} --upstream {example}`"
+            ),
+            _ => {}
+        }
         let mut body = json!({ "secret": name, "label": format!("{name} .env") });
         if let Some(pid) = project {
             c.post(

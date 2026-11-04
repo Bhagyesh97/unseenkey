@@ -507,7 +507,7 @@ pub fn run() -> Result<(), CliError> {
                         // really gone: a command run right after `stop` must not
                         // find the old daemon still answering.
                         let posted = c.post("/v1/shutdown", json!({}));
-                        let gone = daemon::wait_until(std::time::Duration::from_secs(5), || {
+                        let gone = daemon::wait_until(std::time::Duration::from_secs(12), || {
                             (Client::try_connect(&paths).is_none() && !paths.addr.exists())
                                 .then_some(())
                         });
@@ -755,6 +755,26 @@ fn add(
     } else {
         value_str
     };
+    // A provider with a host per customer: the key goes nowhere without it.
+    let tenant = provider
+        .as_deref()
+        .map_or_else(
+            || unseenkey_core::presets::guess_by_name(&name),
+            unseenkey_core::presets::get,
+        )
+        .or_else(|| unseenkey_core::presets::detect_by_prefix(value_str))
+        .and_then(|p| p.tenant.as_ref());
+    let upstreams = match tenant {
+        Some(t) if upstreams.is_empty() && !stdin && file.is_none() && uio::is_tty() => {
+            let host = uio::read_line(&format!("{} (like {}): ", t.label, t.example))?;
+            if host.is_empty() {
+                upstreams
+            } else {
+                vec![host]
+            }
+        }
+        _ => upstreams,
+    };
     let body = json!({
         "name": name,
         "type": kind.map(|k| k.as_str()),
@@ -786,7 +806,13 @@ fn add(
         .as_array()
         .map(|a| a.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
-    if ups.is_empty() {
+    if let Some(example) = created["needs_host"].as_str() {
+        println!(
+            "Not usable yet: anyone can have a host under {}, so this key goes nowhere until you name yours: `usk secret set {} --upstream {example}`",
+            ups.join(", "),
+            created["name"].as_str().unwrap_or("")
+        );
+    } else if ups.is_empty() {
         println!(
             "Warning: no upstream host locked. Add one with --upstream so the broker can use it."
         );
@@ -970,6 +996,7 @@ fn import(paths: &VaultPaths, env_path: &Path, all: bool, dry_run: bool) -> Resu
         .map_err(|e| CliError::general(format!("cannot read {}: {e}", env_path.display())))?;
     let entries = parse_dotenv(&text);
     let (usernames, joined) = unseenkey_core::import::paired_usernames(&entries);
+    let own_hosts = unseenkey_core::import::own_hosts(&entries);
     let candidates: Vec<_> = entries
         .into_iter()
         .filter(|e| (all || e.looks_secret) && !joined.contains(&e.key))
@@ -1013,13 +1040,20 @@ fn import(paths: &VaultPaths, env_path: &Path, all: bool, dry_run: bool) -> Resu
             "type": if username.is_some() { "basic_auth" } else { e.detection.map(|d| d.kind.as_str()).unwrap_or("note") },
             "value": value,
             "fields": fields,
+            "upstreams": own_hosts.get(&e.key).map_or_else(Vec::new, |h| vec![h.clone()]),
             "tags": ["imported"],
             "notes": format!("imported from {} ({})", env_path.display(), e.key),
         });
         match c.post("/v1/secrets", body) {
-            Ok(_) => {
+            Ok(created) => {
                 added += 1;
-                println!("added {name}");
+                match own_hosts.get(&e.key) {
+                    Some(host) => println!("added {name}, locked to {host}"),
+                    None => println!("added {name}"),
+                }
+                if let Some(example) = created["needs_host"].as_str() {
+                    println!("  not usable yet: name its host with `usk secret set {name} --upstream {example}`");
+                }
             }
             Err(err) if err.kind == "name_exists" => println!("skipped {name}: already exists"),
             Err(err) => return Err(err),

@@ -284,6 +284,86 @@ pub struct AppState {
     pub oauth: Mutex<crate::oauth::TokenCache>,
     /// The same tokens for the scrubber: (`<secret>.access_token`, value).
     pub live_tokens: RwLock<Vec<(String, unseenkey_core::crypto::SecretBytes)>>,
+    /// Values replaced or removed since the last unlock: a call already out may
+    /// still bring them back. Guarded until the vault locks.
+    pub retired: RwLock<Vec<(String, unseenkey_core::crypto::SecretBytes)>>,
+    /// Requests on their way out: the log's record of each, should no answer
+    /// ever come back to write the usual one.
+    pub requests_out: std::sync::Mutex<HashMap<u64, serde_json::Value>>,
+    /// The key for the next entry in `requests_out`.
+    pub next_request: std::sync::atomic::AtomicU64,
+}
+
+/// At most this many values are kept guarded after being replaced.
+const MAX_RETIRED: usize = 64;
+/// A request on its way out. Dropped with its answer unrecorded (the caller left,
+/// so the handler was cancelled), it says so in the log.
+pub struct RequestOut {
+    state: std::sync::Arc<AppState>,
+    id: u64,
+}
+
+impl RequestOut {
+    /// The answer is about to be recorded. Hold the vault lock when calling this:
+    /// a lock either happens after, or has already logged the request.
+    pub fn answered(self) {
+        self.state.take_request(self.id);
+        // Nothing left for `drop` to find.
+    }
+}
+
+impl Drop for RequestOut {
+    fn drop(&mut self) {
+        let Some(mut event) = self.state.take_request(self.id) else {
+            return;
+        };
+        event["why"] = serde_json::json!("caller_left");
+        let state = self.state.clone();
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            rt.spawn(async move {
+                let mut vault = state.vault.lock().await;
+                if !vault.is_locked() {
+                    let _ = vault.audit(unseenkey_core::audit::kinds::USE_UNFINISHED, event);
+                }
+            });
+        }
+    }
+}
+
+/// What the scrubber guards for one secret: (name, value) pairs.
+fn guarded_values(
+    meta: &unseenkey_core::vault::SecretMeta,
+    r: unseenkey_core::vault::Revealed,
+    out: &mut Vec<(String, unseenkey_core::crypto::SecretBytes)>,
+) {
+    // The pair as it goes in a Basic header, should a provider echo it.
+    let preset = meta.provider.as_deref().and_then(presets::get);
+    if let Some(Auth::Basic { username, .. }) = preset.map(|p| &p.auth) {
+        if let Ok(pair) = adapters::basic_credentials(username.as_deref(), &r) {
+            out.push((format!("{}.basic", meta.name), pair));
+        }
+    }
+    // A key file is guarded through its `private_key` field; what
+    // else it holds (an email, a project id) is no secret.
+    if meta.kind != SecretKind::GcpServiceAccount {
+        out.push((meta.name.clone(), r.value));
+    }
+    for (k, v) in r.fields {
+        let open = match k.as_str() {
+            // An account id or an email: providers put it in their answers and
+            // paths, and it opens nothing by itself. Unless it does not look like
+            // one: then the parts were pasted the wrong way round.
+            "username" => !preset.is_some_and(|p| {
+                std::str::from_utf8(v.expose()).map_or(true, |u| p.username_suspect(u))
+            }),
+            // Requests legitimately hold scopes and token URLs.
+            "scope" | "token_url" => true,
+            _ => false,
+        };
+        if !open {
+            out.push((format!("{}.{k}", meta.name), v));
+        }
+    }
 }
 
 impl AppState {
@@ -296,6 +376,7 @@ impl AppState {
             if v.is_locked() {
                 return false;
             }
+            self.log_requests_out(&mut v, "locked");
             let _ = v.audit(
                 unseenkey_core::audit::kinds::LOCK,
                 serde_json::json!({ "reason": reason }),
@@ -304,6 +385,10 @@ impl AppState {
         }
         self.clear_scrubber();
         self.live_tokens
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.retired
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
@@ -503,32 +588,20 @@ impl AppState {
                     continue;
                 }
                 if let Ok(r) = vault.reveal(&meta.secret_id) {
-                    // The pair as it goes in a Basic header, should a provider echo it.
-                    let preset = meta.provider.as_deref().and_then(presets::get);
-                    if let Some(Auth::Basic { username, .. }) = preset.map(|p| &p.auth) {
-                        if let Ok(pair) = adapters::basic_credentials(username.as_deref(), &r) {
-                            values.push((format!("{}.basic", meta.name), pair));
-                        }
-                    }
-                    // A key file is guarded through its `private_key` field; what
-                    // else it holds (an email, a project id) is no secret.
-                    if meta.kind != SecretKind::GcpServiceAccount {
-                        values.push((meta.name.clone(), r.value));
-                    }
-                    for (k, v) in r.fields {
-                        // An account id or an email: providers put it in their
-                        // answers and paths, and it opens nothing by itself. Nor
-                        // do scopes and token URLs, which requests legitimately hold.
-                        if !matches!(k.as_str(), "username" | "scope" | "token_url") {
-                            values.push((format!("{}.{k}", meta.name), v));
-                        }
-                    }
+                    guarded_values(meta, r, &mut values);
                 }
             }
         }
         // Access tokens obtained for OAuth secrets are guarded like stored values.
         values.extend(
             self.live_tokens
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .cloned(),
+        );
+        values.extend(
+            self.retired
                 .read()
                 .unwrap_or_else(|e| e.into_inner())
                 .iter()
@@ -543,6 +616,73 @@ impl AppState {
         *self.scrubber.write().unwrap_or_else(|e| e.into_inner()) = scrubber;
     }
 
+    /// Keep guarding a secret's present value after it is replaced or removed.
+    /// Call before the change; [`Self::rebuild_scrubber`] after it picks them up.
+    pub fn retire(&self, vault: &DaemonVault, secret: &Id) {
+        let Ok(meta) = vault.get(secret) else { return };
+        if meta.no_scrub {
+            return;
+        }
+        let Ok(revealed) = vault.reveal(secret) else {
+            return;
+        };
+        let mut values = Vec::new();
+        guarded_values(meta, revealed, &mut values);
+        // An account id stored as the value by mistake is no secret now that it
+        // is being put right: guarding it would block every call that names it.
+        if let Some(p) = meta.provider.as_deref().and_then(presets::get) {
+            values.retain(|(_, v)| {
+                !std::str::from_utf8(v.expose()).is_ok_and(|text| p.username_fits(text))
+            });
+        }
+        let mut held = self.retired.write().unwrap_or_else(|e| e.into_inner());
+        held.extend(values);
+        let extra = held.len().saturating_sub(MAX_RETIRED);
+        held.drain(..extra);
+    }
+
+    /// Stop guarding what a secret held before: the owner asked for no scrubbing.
+    pub fn forget_retired(&self, name: &str) {
+        let prefix = format!("{name}.");
+        self.retired
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|(n, _)| n != name && !n.starts_with(&prefix));
+    }
+
+    /// Note a request about to leave. `event` is what the log says if no answer is
+    /// recorded: the key is gone once the vault locks, so the log is told before.
+    pub fn request_going_out(self: &std::sync::Arc<Self>, event: serde_json::Value) -> RequestOut {
+        let id = self
+            .next_request
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.requests_out
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id, event);
+        RequestOut {
+            state: self.clone(),
+            id,
+        }
+    }
+
+    fn take_request(&self, id: u64) -> Option<serde_json::Value> {
+        self.requests_out
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id)
+    }
+
+    /// Log the requests still out, while the key is here to do it.
+    pub fn log_requests_out(&self, vault: &mut DaemonVault, why: &str) {
+        let out = std::mem::take(&mut *self.requests_out.lock().unwrap_or_else(|e| e.into_inner()));
+        for (_, mut event) in out {
+            event["why"] = serde_json::json!(why);
+            if let Err(e) = vault.audit(unseenkey_core::audit::kinds::USE_UNFINISHED, event) {
+                tracing::warn!(error = %e, "could not log a request still out");
+            }
+        }
+    }
     /// Park a request; the receiver resolves with (allowed, remember).
     pub async fn approval_create(&self, p: PendingApproval) -> oneshot::Receiver<(bool, bool)> {
         let (tx, rx) = oneshot::channel();

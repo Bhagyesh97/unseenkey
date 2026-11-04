@@ -7,11 +7,11 @@ type Line = { text: string; result?: string; tone: Tone };
 
 const FILTERS: { id: string; label: string; kinds: string[] }[] = [
   { id: "all", label: "Everything", kinds: [] },
-  { id: "used", label: "Keys used", kinds: ["use", "key_tested"] },
+  { id: "used", label: "Keys used", kinds: ["use", "use_unfinished", "key_tested"] },
   { id: "blocked", label: "Blocked", kinds: ["deny", "egress_blocked"] },
   { id: "alerts", label: "Alerts", kinds: ["anomaly", "canary_tripped", "audit_tampered"] },
   { id: "asks", label: "Requests to you", kinds: ["approval_required", "approval_decided", "access_requested"] },
-  { id: "changes", label: "Changes", kinds: ["secret_created", "secret_updated", "secret_deleted", "handle_created", "handle_revoked", "handle_resumed", "policy_changed", "project_created", "project_changed", "project_deleted", "settings_changed", "unlock_method_added", "unlock_method_removed", "approval_forgotten", "reveal", "inject", "caller_registered", "caller_replaced", "caller_removed"] },
+  { id: "changes", label: "Changes", kinds: ["secret_created", "secret_updated", "secret_deleted", "handle_created", "handle_revoked", "handle_resumed", "policy_changed", "project_created", "project_changed", "project_deleted", "settings_changed", "password_changed", "unlock_method_added", "unlock_method_removed", "approval_forgotten", "reveal", "inject", "caller_registered", "caller_replaced", "caller_removed"] },
   { id: "signins", label: "Lock and unlock", kinds: ["unlock", "lock"] },
 ];
 
@@ -26,6 +26,8 @@ function sentence(e: AuditEvent, names: Map<string, string>): Line {
       const st = statusWords(b.status);
       return { text: `${by} used ${key}: ${verb(b.method)} ${s("host")}${shortPath(b.path)}`, result: st.text, tone: st.tone };
     }
+    case "use_unfinished":
+      return { text: `${by} used ${key}: ${verb(b.method)} ${s("host")}${shortPath(b.path)}`, result: "no answer recorded", tone: "plain" };
     case "deny":
       return { text: `${by} was stopped from using ${key}: ${reasonWords(b.reason, b.detail)}`, tone: "bad" };
     case "egress_blocked":
@@ -80,6 +82,8 @@ function sentence(e: AuditEvent, names: Map<string, string>): Line {
       return { text: `${who(`mcp:${s("name")}`)} was set up again; its old connection stopped working`, tone: "plain" };
     case "caller_removed":
       return { text: `${who(`mcp:${s("name")}`)} was disconnected`, tone: "plain" };
+    case "password_changed":
+      return { text: "Vault password changed", tone: "plain" };
     case "unlock_method_added":
       return { text: "Windows Hello unlock turned on", tone: "ok" };
     case "unlock_method_removed":

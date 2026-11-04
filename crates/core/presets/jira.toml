@@ -2,7 +2,8 @@ id = "jira"
 display = "Jira and Confluence"
 category = "productivity"
 upstreams = ["*.atlassian.net"]
-auth = { kind = "basic", username_label = "Atlassian account email", secret_label = "API token" }
+tenant = { label = "Your Atlassian site", example = "<your-site>.atlassian.net" }
+auth = { kind = "basic", username_label = "Atlassian account email", secret_label = "API token", username_like = ["*@*"] }
 docs = "https://id.atlassian.com/manage-profile/security/api-tokens"
 base_path = ""
 env_names = ["atlassian", "confluence", "ATLASSIAN_API_TOKEN"]
@@ -10,6 +11,9 @@ env_names = ["atlassian", "confluence", "ATLASSIAN_API_TOKEN"]
 [env]
 api_key = "JIRA_API_TOKEN"
 username = "JIRA_EMAIL"
+
+[verify]
+path = "/rest/api/3/myself"
 
 [[policies]]
 id = "read-only"

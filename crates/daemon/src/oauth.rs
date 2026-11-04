@@ -53,21 +53,38 @@ struct Cached {
 #[derive(Default)]
 pub struct TokenCache {
     tokens: HashMap<Id, Cached>,
+    failed: HashMap<Id, Failed>,
 }
+
+/// A sign-in that did not work, and until when it is not tried again.
+struct Failed {
+    version: u64,
+    tries: u32,
+    until: i64,
+    error: OauthError,
+}
+
+/// The first failed sign-in is not repeated for this long; each further one doubles it.
+const RETRY_AFTER_MS: i64 = 5_000;
+/// The longest wait between sign-ins that keep failing.
+const MAX_RETRY_AFTER_MS: i64 = 60_000;
 
 impl TokenCache {
     /// Forget every token.
     pub fn clear(&mut self) {
         self.tokens.clear();
+        self.failed.clear();
     }
 
     /// Forget one secret's token, so the next use asks the provider again.
     pub fn forget(&mut self, secret: &Id) {
         self.tokens.remove(secret);
+        self.failed.remove(secret);
     }
 }
 
 /// Why no access token could be produced.
+#[derive(Clone)]
 pub struct OauthError {
     /// HTTP status for the caller.
     pub status: StatusCode,
@@ -218,7 +235,47 @@ pub async fn access_token(
             return Ok(c.token.clone());
         }
     }
+    // A key that was just refused is refused again: fifty callers must not make
+    // fifty attempts, and a provider may block a key that keeps failing.
+    let tries = match cache.failed.get(&meta.secret_id) {
+        Some(f) if f.version != meta.value_version => 0,
+        Some(f) if now < f.until => return Err(f.error.clone()),
+        Some(f) => f.tries,
+        None => 0,
+    };
+    let outcome = sign_in(s, meta, revealed, now, &mut cache).await;
+    match &outcome {
+        Ok(_) => {
+            cache.failed.remove(&meta.secret_id);
+        }
+        Err(error) if error.code == "oauth_refresh_failed" => {
+            let wait = RETRY_AFTER_MS
+                .saturating_mul(1i64 << tries.min(8))
+                .min(MAX_RETRY_AFTER_MS);
+            cache.failed.insert(
+                meta.secret_id,
+                Failed {
+                    version: meta.value_version,
+                    tries: tries + 1,
+                    // From now: an attempt may have taken its whole 30 seconds.
+                    until: crate::proxy::now_ms() + wait,
+                    error: error.clone(),
+                },
+            );
+        }
+        Err(_) => {}
+    }
+    outcome
+}
 
+/// Ask the provider for a new access token, with the cache held.
+async fn sign_in(
+    s: &Arc<AppState>,
+    meta: &SecretMeta,
+    revealed: &Revealed,
+    now: i64,
+    cache: &mut TokenCache,
+) -> Result<Zeroizing<String>, OauthError> {
     let grant = grant(meta, revealed)?;
     let token_url = match &grant {
         Grant::Refresh(client) => client.token_url.as_str(),

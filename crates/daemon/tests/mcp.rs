@@ -744,6 +744,43 @@ async fn a_client_in_a_project_folder_sees_only_that_project() {
 /// When the provider itself refuses the key, the agent is told that retrying
 /// cannot help and how the owner fixes it, instead of guessing.
 #[tokio::test(flavor = "multi_thread")]
+async fn only_what_looks_like_an_account_is_shown_as_one() {
+    let env = setup().await;
+    for (name, value) in [
+        (
+            "good",
+            "AC0123456789abcdef0123456789abcdef:token-abcdefghijklmnop",
+        ),
+        (
+            "swapped",
+            "token-abcdefghijklmnop:AC0123456789abcdef0123456789abcdef",
+        ),
+        ("odd", "unknown-shape-part-one:unknown-shape-part-two"),
+    ] {
+        let (code, b) = env.mgmt(
+            "POST",
+            "/v1/secrets",
+            Some(json!({ "name": name, "provider": "twilio", "value": value })),
+        );
+        assert_eq!(code, 201, "{b}");
+    }
+    let list = tool_json(&env.tool("list_secrets", json!({})));
+    let account = |name: &str| {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["name"] == name)
+            .map(|s| s["account"].clone())
+            .unwrap()
+    };
+    let sid = json!("AC0123456789abcdef0123456789abcdef");
+    assert_eq!(account("good"), sid);
+    assert_eq!(account("swapped"), sid, "put right when stored");
+    assert_eq!(account("odd"), Value::Null, "may be the secret half");
+    assert!(!list.to_string().contains("unknown-shape"), "{list}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_refused_key_comes_with_the_owners_fix() {
     let env = setup().await;
     let r = env.tool(

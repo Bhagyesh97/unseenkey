@@ -1178,6 +1178,58 @@ fn changing_the_password() {
         "{}",
         out(&o)
     );
+    // The change is in the log, and the log still holds together.
+    let o = usk(&vault, &["log", "--kind", "password_changed"], "");
+    assert!(out(&o).contains("password_changed"), "{}", out(&o));
+    assert!(usk(&vault, &["log", "verify"], NEW).status.success());
+}
+
+#[test]
+fn a_key_needing_its_own_host_and_a_value_too_large() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    let _stop = StopDaemon(&vault);
+    assert!(usk(&vault, &["init", "--profile", "light"], PW)
+        .status
+        .success());
+    let o = usk(
+        &vault,
+        &["add", "supabase", "--stdin"],
+        &format!("{PW}sb_secret_abcdefghijklmnopqrstuvwxyz"),
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(out(&o).contains("Not usable yet"), "{}", out(&o));
+    assert!(
+        out(&o).contains("usk secret set supabase --upstream"),
+        "{}",
+        out(&o)
+    );
+    // Named at once: nothing more to do.
+    let o = usk(
+        &vault,
+        &[
+            "add",
+            "supabase-2",
+            "--provider",
+            "supabase",
+            "--upstream",
+            "abcd1234.supabase.co",
+            "--stdin",
+        ],
+        "sb_secret_abcdefghijklmnopqrstuvwxyz",
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(
+        out(&o).contains("Upstream locked to: abcd1234.supabase.co"),
+        "{}",
+        out(&o)
+    );
+
+    // Too large: said in words.
+    let big = "x".repeat(8 * 1024 * 1024);
+    let o = usk(&vault, &["add", "big", "--stdin"], &big);
+    assert!(!o.status.success());
+    assert!(err(&o).contains("too large"), "{}", err(&o));
 }
 
 #[test]

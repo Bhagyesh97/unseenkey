@@ -86,6 +86,18 @@ pub fn confirm(question: &str) -> Result<bool, CliError> {
     Ok(matches!(line.trim(), "y" | "Y" | "yes" | "YES"))
 }
 
+/// Ask for one line that is no secret.
+pub fn read_line(prompt: &str) -> Result<String, CliError> {
+    print!("{prompt}");
+    io::stdout().flush().ok();
+    let mut line = String::new();
+    io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .map_err(|e| CliError::general(format!("cannot read input: {e}")))?;
+    Ok(line.trim().to_string())
+}
+
 /// Is stdin a terminal?
 pub fn is_tty() -> bool {
     io::stdin().is_terminal()

@@ -141,6 +141,11 @@ pub mod kinds {
     /// `last_seq`): the log was cut short or rewritten while locked. Recorded
     /// as an event because the next append replaces the head.
     pub const AUDIT_TAMPERED: &str = "audit_tampered";
+    /// A request was on its way out and no answer was recorded: the vault locked,
+    /// the daemon stopped or the caller left. It may have reached the provider.
+    pub const USE_UNFINISHED: &str = "use_unfinished";
+    /// The vault password was changed.
+    pub const PASSWORD_CHANGED: &str = "password_changed";
 }
 
 /// Genesis `prev_hash` for a vault.

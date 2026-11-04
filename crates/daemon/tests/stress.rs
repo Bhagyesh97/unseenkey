@@ -636,12 +636,12 @@ async fn a_service_account_signs_in_once_however_many_callers() {
             assert!(!body.contains("PRIVATE KEY"), "{body}");
         });
         t.print("50 callers while the sign-in is refused");
-        println!(
-            "sign-in attempts for those 50: {}",
-            e.mock.token_calls.load(Ordering::SeqCst) - before
-        );
-        // And it recovers by itself.
+        let attempts = e.mock.token_calls.load(Ordering::SeqCst) - before;
+        println!("sign-in attempts for those 50: {attempts}");
+        assert_eq!(attempts, 1, "each caller asked Google again");
+        // And it recovers by itself, once the refusal has been held long enough.
         e.mock.token_fails.store(false, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(5200));
         let (code, body) = call(&e.agent, 0, 0);
         assert_eq!(code, 200, "no recovery: {body}");
     });
@@ -925,7 +925,10 @@ async fn a_key_file_does_not_hold_back_a_stream() {
 async fn host_locks_and_redirects() {
     let e = setup(&["site.atlassian.net"]).await;
     blocking!({
-        e.add(json!({ "name": "jira", "value": "me@example.com:atlassian-token-abcdefgh" }));
+        e.add(json!({
+            "name": "jira", "value": "me@example.com:atlassian-token-abcdefgh",
+            "upstreams": ["site.atlassian.net"]
+        }));
         let handle = format!("Bearer {}", e.handle("jira", Some("jira:full")));
         // Each of these must not leave with the key.
         for host in [
@@ -1244,7 +1247,11 @@ async fn each_new_policy_does_what_it_says() {
                     } else {
                         format!("{provider}user:{provider}-password-abcdef")
                     };
-                    e.add(json!({ "name": name, "value": value, "provider": provider }));
+                    let mut secret = json!({ "name": name, "value": value, "provider": provider });
+                    if *provider == "jira" {
+                        secret["upstreams"] = json!(["site.atlassian.net"]);
+                    }
+                    e.add(secret);
                 }
                 let h = e.handle(&name, Some(&key));
                 handles.insert(key.clone(), format!("Bearer {h}"));

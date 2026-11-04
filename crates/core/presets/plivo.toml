@@ -2,7 +2,7 @@ id = "plivo"
 display = "Plivo"
 category = "messaging"
 upstreams = ["api.plivo.com", "lookup.plivo.com"]
-auth = { kind = "basic", username_label = "Auth ID", secret_label = "Auth token" }
+auth = { kind = "basic", username_label = "Auth ID", secret_label = "Auth token", username_like = ["MA*", "SA*"] }
 docs = "https://console.plivo.com/dashboard/"
 base_path = "/v1"
 

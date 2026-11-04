@@ -1,6 +1,7 @@
 id = "supabase"
 display = "Supabase"
 upstreams = ["*.supabase.co"]
+tenant = { label = "Project URL", example = "<project-ref>.supabase.co" }
 auth = { kind = "bearer", also_headers = ["apikey"] }
 docs = "https://supabase.com/dashboard/project/_/settings/api"
 base_path = ""
@@ -10,6 +11,9 @@ key_prefixes = ["sb_secret_"]
 [env]
 base_url = "SUPABASE_URL"
 api_key = "SUPABASE_KEY"
+
+[verify]
+path = "/rest/v1/"
 
 [[policies]]
 id = "read-only"

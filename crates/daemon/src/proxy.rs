@@ -531,6 +531,28 @@ pub(crate) fn now_ms() -> i64 {
     unseenkey_core::time::Clock::now_unix_ms(&unseenkey_core::time::SystemClock)
 }
 
+/// Where a call goes that names no host, at a provider with a host per customer:
+/// the first the owner named. Anything amiss (no such handle, a locked vault, a
+/// key tied to no host) answers a made-up host, for the pipeline to refuse.
+async fn pinned_upstream(s: &AppState, handle_ref: &HandleRef, preset: &Preset) -> String {
+    let vault = s.vault.lock().await;
+    let secret = match handle_ref {
+        HandleRef::Presented(str) => vault
+            .handle_by_string(str)
+            .ok()
+            .flatten()
+            .map(|h| h.secret_id),
+        HandleRef::Resolved(id) => vault.handle(id).ok().map(|h| h.secret_id),
+    };
+    secret
+        .and_then(|id| vault.get(&id).ok())
+        .and_then(|meta| preset.pinned_host(&meta.upstreams))
+        .map_or_else(
+            || preset.upstreams[0].replace('*', "unnamed"),
+            str::to_string,
+        )
+}
+
 /// Run the pipeline. Returns the upstream's (scrubbed) response, or an error
 /// response from the broker itself.
 pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest) -> Response {
@@ -543,6 +565,7 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
         Some(u) => u.clone(),
         None => match preset.upstreams.first() {
             Some(h) if !h.contains('*') => h.clone(),
+            Some(_) if preset.tenant.is_some() => pinned_upstream(&s, &handle_ref, preset).await,
             _ => {
                 return err(
                     StatusCode::BAD_REQUEST,
@@ -657,6 +680,28 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
                     "handle_paused",
                     "this handle is paused after unusual activity; the owner can resume it (usk handle resume)",
                 );
+        }
+        // Anyone can have a host under this provider's wildcard, so the key goes
+        // nowhere until the owner has said which one is theirs.
+        if let Some((p, t)) = presets::unpinned(meta.provider.as_deref(), &meta.upstreams)
+            .and_then(|p| p.tenant.as_ref().map(|t| (p, t)))
+        {
+            let _ = vault.audit(
+                kinds::DENY,
+                json!({
+                    "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
+                    "caller": call.caller, "reason": "host_not_pinned", "host": upstream.host,
+                    "method": call.method, "path": pol_path,
+                }),
+            );
+            return err(
+                StatusCode::FORBIDDEN,
+                "host_not_pinned",
+                format!(
+                    "anyone can have a host under {}, so this key was not sent. The owner should name theirs: `usk secret set {} --upstream {}`",
+                    p.display, meta.name, t.example
+                ),
+            );
         }
         // Host lock (INV-2) on the logical host, before any override.
         if let Err(e) = check_host(&meta.upstreams, &handle.policy.upstreams, &upstream.host) {
@@ -1273,6 +1318,12 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
         );
     }
 
+    // From here it may reach the provider, so it goes in the log whatever happens.
+    let request_out = s.request_going_out(json!({
+        "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
+        "caller": call.caller, "host": upstream.host, "method": call.method, "path": call.path,
+        "bytes_in": call.body.len(),
+    }));
     let upstream_resp = match s
         .http
         .request(method.clone(), &url)
@@ -1284,6 +1335,7 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
         Ok(r) => r,
         Err(e) => {
             let mut vault = s.vault.lock().await;
+            request_out.answered();
             let _ = vault.audit(kinds::USE, json!({
                 "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
                 "caller": call.caller, "host": upstream.host, "method": call.method, "path": call.path,
@@ -1314,6 +1366,7 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
         .is_some_and(|v| !v.is_empty() && !v.eq_ignore_ascii_case("identity"));
     if still_encoded {
         let mut vault = s.vault.lock().await;
+        request_out.answered();
         let _ = vault.audit(kinds::USE, json!({
             "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
             "caller": call.caller, "host": upstream.host, "method": call.method, "path": call.path,
@@ -1346,6 +1399,7 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
     // Audit before the first response byte (INV-4). Failure means no response.
     {
         let mut vault = s.vault.lock().await;
+        request_out.answered();
         let mut event = json!({
             "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
             "caller": call.caller, "host": upstream.host, "method": call.method,
@@ -1359,10 +1413,8 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
             }
         }
         let audit = vault.audit(kinds::USE, event);
-        // Locked while the request was out: the log cannot be written without the
-        // key. It may have reached the provider, so at least the daemon log says so.
+        // Locked while the request was out: the lock wrote it in the log already.
         if audit.is_err() && vault.is_locked() {
-            tracing::warn!(secret = %meta.secret_id, "vault locked during a request: it is not in the audit log");
             return err(
                 StatusCode::UNAUTHORIZED,
                 "vault_locked",

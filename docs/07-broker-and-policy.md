@@ -31,11 +31,11 @@ The broker is the heart of the product. It is the only component that turns a ha
    - `aws_sigv4`: sign the whole request with the secret access key (see *AWS* below)
    - `oauth2_client` secrets (any route): send a cached access token as `Authorization: Bearer`; refresh it with the stored refresh token when it is about to expire (see *OAuth2* below)
    - `template`: replace `{{usk:name}}` occurrences in URL, headers, body
-7. **Host lock**: final upstream host must be in the secret's `upstreams` list (exact host match, or `*.example.com` if configured). Else 403 `host_not_allowed`. The route's preset upstream is used for presets; `X-Usk-Upstream` for generic.
+7. **Host lock**: final upstream host must be in the secret's `upstreams` list (exact host match, or `*.example.com` if configured). Else 403 `host_not_allowed`. The route's preset upstream is used for presets; `X-Usk-Upstream` for generic. A provider with a host per customer has a further rule (see *Hosts per customer* below).
 8. **Egress guard**: scan the outgoing body and headers for the plaintext of *any other* stored secret (Aho-Corasick over all unlocked secret values ≥ 12 bytes, plus their base64 and URL-encoded forms). Hit → 403 `egress_blocked` + audit + notification.
 9. **Forward**: HTTP/1.1 and HTTP/2 via `hyper`/`reqwest`; TLS via `rustls` with system roots; 30 s connect timeout; response streamed.
 10. **Scrub**: response headers and body scanned for stored secret values; replaced by `[REDACTED:usk:<name>]`. For streams, keep a trailing buffer of `max_secret_len − 1` bytes to catch values that straddle chunks.
-11. **Audit**: append `use` event (or `deny`, `egress_blocked`, `approval_*`) **before** returning the first response byte. Audit failure → 500 and the request is not forwarded (if the failure is detected before forwarding) or the response is dropped (if after; we accept this because INV-4 outranks availability).
+11. **Audit**: append `use` event (or `deny`, `egress_blocked`, `approval_*`) **before** returning the first response byte. Audit failure → 500 and the request is not forwarded (if the failure is detected before forwarding) or the response is dropped (if after; we accept this because INV-4 outranks availability). A request with no answer recorded leaves a `use_unfinished` event with `why`: `locked` or `stopped` (written by the lock or stop itself, while it still has the key) or `caller_left`. It counts toward a handle's limits, and may have reached the provider. A request cut off by a crash still leaves nothing.
 12. **Response** to the caller with the pass-through status code and headers (minus hop-by-hop and minus any `Set-Cookie` from upstream by default).
 
 ## AWS
@@ -77,8 +77,19 @@ A preset with `auth = { kind = "basic", username_label = "…", secret_label = "
 - Replacing the password keeps the username. Two lines replace both parts. One line with a colon is the whole new password, unless what precedes the colon is the stored username: a password's first half must not land in a field the scrubber leaves alone.
 - A Basic route only serves its own provider's secrets (400 `route_mismatch` otherwise), because the guard for the header is built from the secret's provider.
 - The handle: `Authorization: Bearer <handle>`, or the `Basic` header an SDK builds with the handle as its secret (`base64(account:handle)`) or, where the key is the username, `base64(handle:)`.
-- Scrubbing: the password, and `username:password` in all its encoded forms (so an echoed header is hidden). The username is not guarded: it is an account id or an email that providers put in their answers and paths. MCP's `list_secrets` shows it as `account`, for the paths that need it. A pair pasted the wrong way round would therefore expose the secret half to AI tools, until it is corrected; the key test reports it as refused.
+- Scrubbing: the password, and `username:password` in all its encoded forms (so an echoed header is hidden). The username is not guarded: it is an account id or an email that providers put in their answers and paths. MCP's `list_secrets` shows it as `account`, for the paths that need it.
+- The two parts apart: a preset's `username_like` says what its usernames look like (`AC*`, `*@*`; `*` any text, `?` one character). A pair pasted the wrong way round is put right when stored. If neither part fits, it is stored as given, because a provider may change its ids: the username is then treated as the secret it may be, so it is guarded and not shown as `account`, and the key test reports the refusal.
 - A preset's `[verify]` path may hold `{username}`.
+
+## Hosts per customer
+
+Some providers give every customer a host of their own, and anyone can get one: a wildcard host lock would let a key go to a stranger's Supabase project or Atlassian site, where its owner can read it. A preset with `tenant = { label, example }` therefore never sends a key on the strength of a wildcard.
+
+- Naming the host: `usk add` asks for it, the app has a box for it, and `--upstream` or `usk secret set <name> --upstream <host>` (owner only) sets it. `usk import` and `usk guard fix` read it from the preset's `env.base_url` variable, also with a prefix (`NEXT_PUBLIC_SUPABASE_URL`), if that URL is under the provider's hosts and its variable belongs with the key (`PROD_SUPABASE_KEY` takes `PROD_SUPABASE_URL`; `NEXT_PUBLIC_`, `VITE_` and the like do not count). Several hosts are allowed; list each one.
+- Until then the key is stored but goes nowhere: `POST /v1/secrets` answers with `needs_host`, a call answers 403 `host_not_pinned` and is audited, and the key test says what to do. A wildcard of one of these providers counts as no host named, whatever provider the secret has or lacks. The example in messages (`<project-ref>.supabase.co`) is deliberately not a valid host: a real-looking name could be someone's.
+- Once named, a call needs no `X-Usk-Upstream`: it goes to the first host named. A handle whose policy lists the provider's wildcard is narrowed to the owner's hosts.
+
+The other wildcards stay: `*.amazonaws.com` receives signatures rather than keys, and `*.googleapis.com` receives short-lived tokens and is Google's own.
 
 ## Google service accounts
 
@@ -86,6 +97,7 @@ A secret of kind `gcp_service_account` holds a Google JSON key file (the value, 
 
 - Adding: `usk add <name> --file key.json --scope webmasters.readonly` (`--scope` is repeatable; a bare name is short for `https://www.googleapis.com/auth/<name>`). The file is checked when added: `service_account_incomplete` without `client_email` and `private_key`, `invalid_private_key` if the key cannot sign. Hosts default to `*.googleapis.com`; the token endpoint's host joins the secret's list.
 - Scopes are required to sign in but not to store: without them a call answers 400 `scope_required`, naming the fix. `usk secret set <name> --scope …` (`PATCH /v1/secrets/{ref}` with `scope`) replaces them. That widens what tokens may do, so it is owner only; it creates a new version, so the next call gets a new token.
+- A refused sign-in is remembered for 5 seconds, doubling up to a minute, so that many callers make one attempt. A new value or scope, or the key test, tries again at once. The same holds for OAuth clients, which have no key test.
 - `usk secret test` signs in afresh and reports what Google said. That proves the key and scopes, not what the account was added to; each API decides that.
 - Replacing the value takes `usk rm` and `usk add`, as for the other kinds that hold several values.
 

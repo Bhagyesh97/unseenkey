@@ -45,6 +45,11 @@ pub enum Auth {
         /// What the provider calls the password, for prompts.
         #[serde(default)]
         secret_label: Option<String>,
+        /// What the provider's usernames look like (`*` any text, `?` one
+        /// character). Tells the two parts apart when pasted the wrong way
+        /// round; a username that fits no pattern is not shown to AI tools.
+        #[serde(default)]
+        username_like: Vec<String>,
     },
     /// `?<param>=<secret>` on the URL.
     Query {
@@ -92,6 +97,17 @@ pub struct HandleFormat {
     pub format: String,
 }
 
+/// A provider where every customer has a host of their own, and anyone can get
+/// one: a wildcard would let a key go to a stranger's host, so the owner names theirs.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Tenant {
+    /// What the provider calls it, for prompts.
+    pub label: String,
+    /// A made-up host, for prompts and messages.
+    pub example: String,
+}
+
 /// A provider preset.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -102,6 +118,9 @@ pub struct Preset {
     pub display: String,
     /// Hosts.
     pub upstreams: Vec<String>,
+    /// Set when these hosts are per customer: see [`Tenant`].
+    #[serde(default)]
+    pub tenant: Option<Tenant>,
     /// Injection style.
     pub auth: Auth,
     /// Where to get a key.
@@ -399,12 +418,78 @@ impl Preset {
                 username: None,
                 username_label,
                 secret_label,
+                ..
             } => Some((
                 username_label.as_deref().unwrap_or("Username"),
                 secret_label.as_deref().unwrap_or("Password"),
             )),
             _ => None,
         }
+    }
+
+    /// Does `text` look like this provider's username? False when the provider
+    /// has no known shape.
+    pub fn username_fits(&self, text: &str) -> bool {
+        // Whatever the shape, a username holds neither: `AC123:token` is both parts.
+        if text.contains(|c: char| c == ':' || c.is_whitespace()) {
+            return false;
+        }
+        match &self.auth {
+            Auth::Basic { username_like, .. } => username_like
+                .iter()
+                .any(|p| like(p.as_bytes(), text.as_bytes())),
+            _ => false,
+        }
+    }
+
+    /// Were these two parts pasted the wrong way round? Only when the shape says
+    /// so for certain: a provider may change its ids, and a key must still store.
+    pub fn pair_reversed(&self, username: &str, secret: &str) -> bool {
+        !self.username_fits(username) && self.username_fits(secret)
+    }
+
+    /// May a username be guarded as a secret because it does not look like one?
+    pub fn username_suspect(&self, text: &str) -> bool {
+        let shaped =
+            matches!(&self.auth, Auth::Basic { username_like, .. } if !username_like.is_empty());
+        shaped && !self.username_fits(text)
+    }
+
+    /// Is this secret's own host list one that needs an owner's host named?
+    pub fn pin_needed(&self, secret_upstreams: &[String]) -> bool {
+        self.tenant.is_some() && secret_upstreams.iter().any(|u| u.contains('*'))
+    }
+
+    /// The owner's own host at a per-customer provider, once named.
+    pub fn pinned_host<'a>(&self, secret_upstreams: &'a [String]) -> Option<&'a str> {
+        if self.tenant.is_none() || self.pin_needed(secret_upstreams) {
+            return None;
+        }
+        secret_upstreams.first().map(String::as_str)
+    }
+}
+
+/// The per-customer provider a key must not go to on the strength of a wildcard,
+/// if any: its own provider, or one whose wildcard it holds whatever its provider.
+pub fn unpinned(provider: Option<&str>, upstreams: &[String]) -> Option<&'static Preset> {
+    if !upstreams.iter().any(|u| u.contains('*')) {
+        return None;
+    }
+    provider
+        .and_then(get)
+        .filter(|p| p.pin_needed(upstreams))
+        .or_else(|| {
+            all().find(|p| p.tenant.is_some() && p.upstreams.iter().any(|w| upstreams.contains(w)))
+        })
+}
+
+/// `*` matches any text, `?` one byte.
+fn like(pattern: &[u8], text: &[u8]) -> bool {
+    match pattern.split_first() {
+        None => text.is_empty(),
+        Some((b'*', rest)) => (0..=text.len()).any(|i| like(rest, &text[i..])),
+        Some((b'?', rest)) => !text.is_empty() && like(rest, &text[1..]),
+        Some((c, rest)) => text.first() == Some(c) && like(rest, &text[1..]),
     }
 }
 
@@ -801,6 +886,90 @@ mod tests {
     }
 
     #[test]
+    fn the_two_parts_of_a_key_are_told_apart() {
+        let cases = [
+            (
+                "twilio",
+                "AC0123456789abcdef0123456789abcdef",
+                "0123456789abcdef0123456789abcdef",
+            ),
+            (
+                "razorpay",
+                "rzp_test_abcdefghijklmn",
+                "abcdefghijklmnopqrstuvwx",
+            ),
+            (
+                "plivo",
+                "MAABCDEFGHIJKLMNOPQR",
+                "abcdefghijklmnopqrstuvwxyz0123456789abcd",
+            ),
+            ("vonage", "a1b2c3d4", "abcdEFGHijklMNOP"),
+            (
+                "cloudinary",
+                "123456789012345",
+                "abcdefghijklmnopqrstuvwxyz0",
+            ),
+            ("jira", "me@example.com", "ATATT3xFfGF0abcdefghijkl"),
+            ("dataforseo", "me@example.com", "abcdefghijklmnop"),
+        ];
+        for (id, user, secret) in cases {
+            let p = get(id).unwrap();
+            assert!(p.username_fits(user), "{id}");
+            assert!(!p.pair_reversed(user, secret), "{id}");
+            assert!(p.pair_reversed(secret, user), "{id}");
+            assert!(p.username_suspect(secret), "{id}");
+        }
+        // Neither part looks right: stored as given, and not shown to AI tools.
+        let p = get("twilio").unwrap();
+        assert!(!p.pair_reversed("someone", "something"));
+        // A whole `first:second` is not a username, however it starts.
+        assert!(!p.username_fits("AC123:token"));
+        assert!(!p.pair_reversed("someone", "AC123:token"));
+        assert!(!p.username_fits("someone"));
+        // Every provider with a two-part key has a known shape.
+        for p in all().filter(|p| p.pair_labels().is_some()) {
+            let Auth::Basic { username_like, .. } = &p.auth else {
+                unreachable!()
+            };
+            assert!(!username_like.is_empty(), "{}", p.id);
+        }
+    }
+
+    #[test]
+    fn hosts_per_customer_are_named_by_the_owner() {
+        let p = get("supabase").unwrap();
+        assert!(p.pin_needed(&["*.supabase.co".to_string()]));
+        let mine = ["abcd1234.supabase.co".to_string()];
+        assert!(!p.pin_needed(&mine));
+        assert_eq!(p.pinned_host(&mine), Some("abcd1234.supabase.co"));
+        assert_eq!(p.pinned_host(&["*.supabase.co".to_string()]), None);
+        assert!(!get("gcp")
+            .unwrap()
+            .pin_needed(&["*.googleapis.com".to_string()]));
+        // Whatever the provider says, or if it says nothing.
+        assert!(unpinned(None, &["*.supabase.co".to_string()]).is_some());
+        assert!(unpinned(Some("github"), &["*.atlassian.net".to_string()]).is_some());
+        assert!(unpinned(None, &mine).is_none());
+        assert!(unpinned(Some("gcp"), &["*.googleapis.com".to_string()]).is_none());
+        for p in all() {
+            if let Some(t) = &p.tenant {
+                // Pasted as it stands it must fail: a real name could be someone's.
+                assert!(
+                    crate::broker::Upstream::parse(&t.example).is_err(),
+                    "{}",
+                    p.id
+                );
+                let host = t.example.replace(['<', '>'], "");
+                assert!(
+                    crate::policy::eval::host_allowed(&p.upstreams, &host),
+                    "{}",
+                    p.id
+                );
+            }
+        }
+    }
+
+    #[test]
     fn every_test_call_is_a_read_on_one_of_the_presets_hosts() {
         for p in all() {
             let Some(v) = &p.verify else { continue };
@@ -812,8 +981,9 @@ mod tests {
             );
             assert!(v.path.starts_with('/'), "{}: {}", p.id, v.path);
             let host = v.host.clone().unwrap_or_else(|| p.upstreams[0].clone());
+            // A per-customer provider's test goes to the host the owner named.
             assert!(
-                !host.contains('*'),
+                !host.contains('*') || p.tenant.is_some(),
                 "{}: test host {host} must be concrete",
                 p.id
             );

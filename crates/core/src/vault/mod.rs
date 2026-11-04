@@ -456,6 +456,9 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         }
         let (salt, wrapped) =
             header::wrap_password(&self.header.vault_id, vk, new_password, profile)?;
+        // Logged first: should the process die in between, the log tells of a
+        // change that did not happen, never the other way round.
+        self.audit(crate::audit::kinds::PASSWORD_CHANGED, serde_json::json!({}))?;
         self.header.salt_pw = salt;
         self.header.argon2 = profile;
         self.header.wrapped_vk_pw = wrapped;

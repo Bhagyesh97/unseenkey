@@ -178,6 +178,8 @@ pub fn is_loopback_host(host: &str) -> bool {
 /// The effective host allow-list: the secret's list, narrowed by the policy's
 /// list when the policy has one. Every policy host must itself be covered by
 /// the secret's list, otherwise the narrowing is invalid and nothing is allowed.
+/// The exception only narrows further: a policy written for `*.supabase.co`,
+/// on a secret tied to one project, allows that project.
 pub fn effective_hosts(secret_upstreams: &[String], policy_upstreams: &[String]) -> Vec<String> {
     if policy_upstreams.is_empty() {
         return secret_upstreams.to_vec();
@@ -186,10 +188,13 @@ pub fn effective_hosts(secret_upstreams: &[String], policy_upstreams: &[String])
         .iter()
         .all(|p| secret_upstreams.iter().any(|s| s == p) || host_allowed(secret_upstreams, p));
     if all_covered {
-        policy_upstreams.to_vec()
-    } else {
-        Vec::new()
+        return policy_upstreams.to_vec();
     }
+    secret_upstreams
+        .iter()
+        .filter(|s| !s.contains('*') && host_allowed(policy_upstreams, s))
+        .cloned()
+        .collect()
 }
 
 /// Host-lock check (INV-2): may this secret be sent to `host`?
@@ -263,6 +268,14 @@ mod tests {
         assert!(
             effective_hosts(&secret, &["evil.example".to_string()]).is_empty(),
             "widening is void"
+        );
+        assert_eq!(
+            effective_hosts(
+                &["abc.supabase.co".to_string()],
+                &["*.supabase.co".to_string()]
+            ),
+            vec!["abc.supabase.co".to_string()],
+            "a wider policy allows only the host the owner named"
         );
         assert!(check_host(&secret, &[], "api.stripe.com").is_ok());
         assert!(check_host(&secret, &[], "xyz.supabase.co").is_ok());

@@ -143,7 +143,9 @@ function AddSecret({ onDone, onCancel }: { onDone: () => void; onCancel: () => v
   const needHosts = picked === "other";
   // A key in two parts, unless both were pasted at once (`first:second` or two lines).
   const needSecond = !!preset?.pair && !/[:\n]/.test(value.trim());
-  const canSave = !!value.trim() && (!needSecond || !!second.trim()) && !!effectiveName && (!!provider || (needHosts && splitHosts(hosts).length > 0));
+  // Anyone can have a host at this provider, so the key goes nowhere until the owner names theirs.
+  const needOwnHost = !!preset?.tenant;
+  const canSave = !!value.trim() && (!needSecond || !!second.trim()) && (!needOwnHost || splitHosts(hosts).length > 0) && !!effectiveName && (!!provider || (needHosts && splitHosts(hosts).length > 0));
 
   const save = async () => {
     setErr(null);
@@ -248,11 +250,18 @@ function AddSecret({ onDone, onCancel }: { onDone: () => void; onCancel: () => v
         </label>
       )}
 
+      {value.trim() && needOwnHost && (
+        <label>{preset?.tenant?.label}
+          <input spellCheck={false} autoComplete="off" placeholder={preset?.tenant?.example} value={hosts} onChange={(e) => setHosts(e.target.value)} />
+          <span className="muted small">The key will only ever be sent there.</span>
+        </label>
+      )}
+
       <button className="link" onClick={() => setMore(!more)}>{more ? "Fewer options" : "More options"}</button>
       {more && (
         <>
           <label>Name<input placeholder={provider || "openai, stripe-live, …"} value={nameTouched ? name : ""} onChange={(e) => { setName(e.target.value); setNameTouched(true); }} /></label>
-          {!needHosts && (
+          {!needHosts && !needOwnHost && (
             <label>Allowed websites (empty: the provider's own)
               <input placeholder={preset?.upstreams.join(", ") ?? "api.example.com"} value={hosts} onChange={(e) => setHosts(e.target.value)} />
             </label>
