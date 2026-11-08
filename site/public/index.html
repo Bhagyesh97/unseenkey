@@ -335,7 +335,7 @@
             <tr><th scope="row">Rules per call: host, path, method</th><td class="no">No</td><td class="no">No</td><td class="mid">If you build them</td><td class="yes us">Yes, presets for 73 providers</td></tr>
             <tr><th scope="row">Asks you before risky calls</th><td class="no">No</td><td class="mid">At most for reading a secret, not per call</td><td class="mid">If you build it</td><td class="yes us">Yes, confirmed with Windows Hello</td></tr>
             <tr><th scope="row">Removes the key from responses</th><td class="no">No</td><td class="no">No</td><td class="mid">If you build it</td><td class="yes us">Yes, streamed and compressed too</td></tr>
-            <tr><th scope="row">Spending limits</th><td class="no">No</td><td class="no">No</td><td class="mid">If you build them</td><td class="yes us">Per handle and per project</td></tr>
+            <tr><th scope="row">Request limits, to stop a runaway bill</th><td class="no">No</td><td class="no">No</td><td class="mid">If you build them</td><td class="yes us">Per handle and per project</td></tr>
             <tr><th scope="row">Tamper-evident log of every call</th><td class="no">No</td><td class="mid">Logs secret reads, not API calls</td><td class="mid">If you build it</td><td class="yes us">Yes</td></tr>
             <tr><th scope="row">AWS signing and OAuth refresh</th><td class="mid">The key sits in the file</td><td class="mid">The key reaches the SDK</td><td class="mid">If you build them</td><td class="yes us">Done inside the broker</td></tr>
           </tbody>
@@ -404,7 +404,7 @@
     <div class="wrap cols-2 top-align">
       <div data-reveal>
         <h2>Install</h2>
-        <p class="sub">Free and open source. No account, no telemetry, nothing leaves your machine.</p>
+        <p class="sub">Free and open source. No account, no telemetry. Your keys go only to the providers you call.</p>
 <pre class="glass"><span class="c"># Windows</span>
 scoop bucket add unseenkey https://github.com/Bhagyesh97/scoop-unseenkey
 scoop install usk
@@ -488,7 +488,7 @@ cargo install --locked --git https://github.com/Bhagyesh97/unseenkey usk</pre>
         </details>
         <details>
           <summary>Why should I trust it with my keys?</summary>
-          <p>Your keys never leave your machine. There is no server, no account and no analytics. The code, the threat model and the release signatures are public. It has not had an external audit yet, so start with keys you can rotate.</p>
+          <p>Your keys go from your machine to the provider you're calling, and nowhere else. No server of ours is in the path. There is no account and no analytics. The code, the threat model and the release signatures are public. It has not had an external audit yet, so start with keys you can rotate.</p>
         </details>
       </div>
     </div>

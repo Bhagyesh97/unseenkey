@@ -55,27 +55,33 @@ usk log                           # every call, hash-chained
 
 `--shell powershell|cmd|dotenv` prints the variables for your shell or `.env`. The daemon starts itself on first use, listens on loopback only, and locks after 15 minutes without a request or when the screen locks or the machine sleeps.
 
-**Or give Claude Code the tools.** With `usk` on your PATH and a vault (`usk init`), the Claude Code plugin connects itself on first use; Claude then calls APIs through Unseenkey and never sees a key:
+**Or give your AI tools the tools, in one command:**
+
+```sh
+usk mcp install
+```
+
+It finds Claude Code, Claude Desktop, Cursor and Windsurf on your computer and connects them, makes the vault first if you don't have one, offers to add your first key, and checks that the connection answers. Run it again whenever you like; it changes nothing that already works. Then restart the tool and ask it what API keys it can use. It calls APIs through Unseenkey and never sees a key.
+
+Claude Code also has a plugin, if you'd rather install it that way. Use the plugin or `usk mcp install`, not both, or Claude Code gets the tools twice. The plugin needs Unseenkey 0.1.7 or later.
 
 ```sh
 claude plugin marketplace add Bhagyesh97/unseenkey
 claude plugin install unseenkey@unseenkey
 ```
 
-Use the plugin or `usk mcp install claude-code`, not both, or Claude Code gets the tools twice. The plugin needs Unseenkey 0.1.7 or later.
-
 ## What a handle can do
 
 | | |
 |---|---|
 | **Policy per handle** | Presets for each provider (`stripe:payments` = take payments, no refunds or payouts), explained in plain English. Expiry, request caps, time windows, approvals. |
-| **Hard caps** | `--cap 500/day`: the 501st request is refused before it leaves the machine. |
+| **Hard caps** | `--cap 500/day`: the 501st request is refused before it leaves the machine. Caps count requests, not money. |
 | **Canaries** | `--canary`: a handle that never works. Plant it in `.env.example`; any use means someone has your files, and the vault locks. |
 | **Incident responses** | A burst of refused requests throttles, pauses, asks you, or locks the vault — your choice per handle. |
 | **Approvals** | Live prompts in the desktop app or `usk approve`: allow once, allow always, deny. |
 | **Camouflage** | Handles shaped like the provider's own keys (`sk-proj-usk-…`) for SDKs that validate formats. Every format carries the `usk` marker. |
 | **AWS and OAuth2** | boto3, the AWS CLI and the JS SDK sign with a placeholder; the broker re-signs with the real key. OAuth2 refresh tokens stay in the vault; the broker keeps the access token fresh. |
-| **MCP server** | The Claude Code plugin, or `usk mcp install claude-code` (or `claude-desktop`, `cursor`, `windsurf`): the agent gets tools, never values. A tool connects itself on first use; taking over or reconnecting an existing one needs your password. |
+| **MCP server** | `usk mcp install`, or the Claude Code plugin: the agent gets tools, never values. A tool connects itself on first use; taking over or reconnecting an existing one needs your password. |
 | **Projects** | Group keys by the app that uses them. `usk project protect` (or "Protect a project" in the app) moves a folder's `.env` keys into the vault in one step; AI tools working in that folder see only its keys, and a daily request limit per project stops a runaway bill. |
 | **`.env` guard** | `usk guard fix .env` moves real keys into the vault and rewrites the file with handles. |
 | **Desktop app** | Projects with a status panel, keys, agent access, approvals, activity with chain verification, one-click MCP setup, Windows Hello, signed auto-updates. |
@@ -101,7 +107,7 @@ usk run --with DATABASE_URL=prod-db -- ./app                                 # f
 | Rules per call: host, path, method | No | No | If you build them | **Presets for 73 providers** |
 | Asks you before risky calls | No | At most for reading a secret, not per call | If you build it | **Yes, confirmed with Windows Hello or your password** |
 | Removes the key from responses | No | No | If you build it | **Yes, streamed and compressed too** |
-| Spending limits | No | No | If you build them | **Per handle and per project** |
+| Request limits, to stop a runaway bill | No | No | If you build them | **Per handle and per project** |
 | Tamper-evident log of every call | No | Logs secret reads, not API calls | If you build it | **Yes** |
 | AWS signing and OAuth refresh | The key sits in the file | The key reaches the SDK | If you build them | **Done inside the broker** |
 
@@ -135,6 +141,8 @@ Plus 55 more with a safe default or read-only, and full: xAI, Together, Firework
 Paste a key and the provider, its allowed websites and a safe default fill in, from the key's shape or, failing that, its name; then one read-only request checks the key works. `generic` covers any other host, Google service account key files sign in by themselves, OAuth2 refresh-token clients cover Google and anything RFC 6749, and `usk presets` lists everything with plain-English explanations. The [provider research](docs/research/provider-catalogue.md) covers 247 services and is where new presets come from.
 
 ## Security
+
+**Nothing goes through us.** Unseenkey has no server in the path, no account and no telemetry. Your keys go only to the provider you're calling, and the desktop app checks GitHub for updates. [SECURITY.md](SECURITY.md#where-your-data-goes) lists everything that leaves your machine, and the known open issues.
 
 - **Vault:** Argon2id → XChaCha20-Poly1305, one SQLite file, keys locked in memory and zeroised on lock, 24-word recovery phrase, optional Windows Hello.
 - **Fail closed:** each secret is locked to its provider's hosts; unmatched requests, browser-origin requests and anything the broker cannot classify are refused.

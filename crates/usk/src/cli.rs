@@ -225,9 +225,9 @@ enum Command {
         /// Only events of this kind (use, deny, egress_blocked, reveal, ...).
         #[arg(long)]
         kind: Option<String>,
-        /// Start at this sequence number.
-        #[arg(long, default_value_t = 1)]
-        since: u64,
+        /// Start at this sequence number, instead of showing the newest events.
+        #[arg(long)]
+        since: Option<u64>,
         /// Show at most this many events.
         #[arg(long, default_value_t = 50)]
         limit: usize,
@@ -260,8 +260,36 @@ enum DaemonAction {
     },
     /// Stop the running daemon.
     Stop,
+    /// Restart the daemon with this version. The vault locks; requests under way get a few seconds.
+    Restart,
     /// Show whether the daemon is running.
     Status,
+}
+
+/// Stop the daemon and wait until it is really gone: a command run right after
+/// must not find the old one still answering.
+fn stop_daemon(paths: &VaultPaths) -> Result<(), CliError> {
+    match Client::try_connect(paths) {
+        Some(c) => {
+            // The daemon answers first and exits ~200 ms later, so a dropped
+            // connection is fine.
+            let posted = c.post("/v1/shutdown", json!({}));
+            let gone = daemon::wait_until(std::time::Duration::from_secs(12), || {
+                (Client::try_connect(paths).is_none() && !paths.addr.exists()).then_some(())
+            });
+            match (posted, gone) {
+                (_, Some(())) => println!("Daemon stopped."),
+                (Err(e), None) => return Err(e),
+                (Ok(_), None) => {
+                    return Err(CliError::general(
+                        "daemon acknowledged the stop but is still running",
+                    ))
+                }
+            }
+        }
+        None => println!("Daemon is not running."),
+    }
+    Ok(())
 }
 
 fn parse_kind(s: &str) -> Result<SecretKind, String> {
@@ -363,13 +391,18 @@ pub fn run() -> Result<(), CliError> {
         Command::Deny { id } => approvals_decide(&paths, &id, false, false),
         Command::Mcp { client, action } => match (client, action) {
             (Some(c), None) => crate::mcp::bridge(&paths, &c),
-            (_, Some(McpAction::Install { client, home })) => {
-                crate::mcp::install(&paths, &client, home.as_deref())
-            }
+            (
+                _,
+                Some(McpAction::Install {
+                    client,
+                    home,
+                    new_vault,
+                }),
+            ) => crate::mcp::install(&paths, client.as_deref(), home.as_deref(), new_vault),
             (_, Some(McpAction::Remove { client })) => crate::mcp::remove(&paths, &client),
             (_, Some(McpAction::Clients)) => crate::mcp::clients(&paths, cli.json),
             (None, None) => Err(CliError::general(
-                "usage: usk mcp install <claude-code|claude-desktop|cursor|windsurf|all>, usk mcp clients, usk mcp remove <client>, or usk mcp --client <name> (stdio bridge)",
+                "usage: usk mcp install [claude-code|claude-desktop|cursor|windsurf|all], usk mcp clients, usk mcp remove <client>, or usk mcp --client <name> (stdio bridge)",
             )),
         },
         Command::Project { action } => crate::project::run(&paths, action, cli.json),
@@ -500,28 +533,23 @@ pub fn run() -> Result<(), CliError> {
                 daemon::run(opts, &paths, detached)
             }
             DaemonAction::Stop => {
-                match Client::try_connect(&paths) {
-                    Some(c) => {
-                        // The daemon answers first and exits ~200 ms later, so a
-                        // dropped connection is fine. Either way, wait until it is
-                        // really gone: a command run right after `stop` must not
-                        // find the old daemon still answering.
-                        let posted = c.post("/v1/shutdown", json!({}));
-                        let gone = daemon::wait_until(std::time::Duration::from_secs(12), || {
-                            (Client::try_connect(&paths).is_none() && !paths.addr.exists())
-                                .then_some(())
-                        });
-                        match (posted, gone) {
-                            (_, Some(())) => println!("Daemon stopped."),
-                            (Err(e), None) => return Err(e),
-                            (Ok(_), None) => {
-                                return Err(CliError::general(
-                                    "daemon acknowledged the stop but is still running",
-                                ))
-                            }
-                        }
-                    }
-                    None => println!("Daemon is not running."),
+                crate::client::skip_version_warning();
+                stop_daemon(&paths)
+            }
+            DaemonAction::Restart => {
+                crate::client::skip_version_warning();
+                stop_daemon(&paths)?;
+                let c = Client::connect(&paths, true)?;
+                let status = c.get("/v1/status")?;
+                println!(
+                    "Daemon restarted (version {}).",
+                    status["version"].as_str().unwrap_or("?")
+                );
+                if uio::is_tty() {
+                    c.ensure_unlocked()?;
+                    println!("Unlocked.");
+                } else {
+                    println!("The vault is locked; unlock it with `usk unlock`.");
                 }
                 Ok(())
             }
@@ -551,6 +579,36 @@ fn unlocked(paths: &VaultPaths) -> Result<Client, CliError> {
 }
 
 fn init(paths: &VaultPaths, profile: Argon2Profile) -> Result<(), CliError> {
+    make_vault(paths, profile).map(|_| ())
+}
+
+/// Make a vault with the default settings, for a command that sets up the
+/// rest as well, and give back the password so it need not ask again.
+pub fn create_vault(paths: &VaultPaths) -> Result<unseenkey_core::crypto::SecretBytes, CliError> {
+    make_vault(paths, Argon2Profile::DESKTOP)
+}
+
+/// `usk add <name>`, with everything left to its prompts and detection.
+pub fn add_first_key(paths: &VaultPaths, name: String) -> Result<(), CliError> {
+    add(
+        paths,
+        name,
+        None,
+        None,
+        Vec::new(),
+        Vec::new(),
+        None,
+        false,
+        None,
+        Vec::new(),
+        true,
+    )
+}
+
+fn make_vault(
+    paths: &VaultPaths,
+    profile: Argon2Profile,
+) -> Result<unseenkey_core::crypto::SecretBytes, CliError> {
     if paths.vault.exists() {
         let storage =
             SqliteStorage::open(&paths.vault).map_err(|e| CliError::general(e.to_string()))?;
@@ -594,7 +652,7 @@ fn init(paths: &VaultPaths, profile: Argon2Profile) -> Result<(), CliError> {
     if uio::is_tty() && !uio::confirm("I have written the recovery phrase down.")? {
         println!("Please write it down now; you can view it only this once.");
     }
-    Ok(())
+    Ok(pw)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1681,12 +1739,15 @@ fn env_cmd(
 fn log_list(
     paths: &VaultPaths,
     kind: Option<String>,
-    since: u64,
+    since: Option<u64>,
     limit: usize,
     json: bool,
 ) -> Result<(), CliError> {
     let c = unlocked(paths)?;
-    let mut url = format!("/v1/audit?since={since}&limit={limit}");
+    let mut url = match since {
+        Some(since) => format!("/v1/audit?since={since}&limit={limit}"),
+        None => format!("/v1/audit?latest=true&limit={limit}"),
+    };
     if let Some(k) = &kind {
         url.push_str(&format!("&kind={k}"));
     }
@@ -1702,6 +1763,12 @@ fn log_list(
     if items.is_empty() {
         println!("No events.");
         return Ok(());
+    }
+    if since.is_none() && items[0]["seq"].as_u64().is_some_and(|seq| seq > 1) {
+        println!(
+            "The newest {} events. Older ones: usk log --since 1",
+            items.len()
+        );
     }
     for e in items {
         let ts = e["ts"].as_i64().unwrap_or(0);
@@ -1821,10 +1888,15 @@ fn log_verify(paths: &VaultPaths, json: bool) -> Result<(), CliError> {
 
 #[derive(Subcommand)]
 enum McpAction {
-    /// Register a client and write its MCP config (restart the client afterwards).
+    /// Connect your AI tools: finds the ones on this computer, and on a terminal
+    /// also makes the vault if there is none. Safe to run again.
     Install {
         /// claude-code, claude-desktop, cursor, windsurf, all, or a custom name.
-        client: String,
+        /// Leave it out to connect every tool found.
+        client: Option<String>,
+        /// Make a vault if there is none, even when not on a terminal (the password comes from stdin).
+        #[arg(long)]
+        new_vault: bool,
         /// Write configs under this directory instead of the real home (tests).
         #[arg(long, hide = true)]
         home: Option<PathBuf>,
@@ -2278,7 +2350,7 @@ fn doctor(paths: &VaultPaths) -> Result<(), CliError> {
                 "daemon version {ver} matches CLI {}",
                 env!("CARGO_PKG_VERSION")
             ),
-            "run `usk daemon stop`; it restarts with the new version on next use",
+            "run `usk daemon restart`",
         );
         #[cfg(unix)]
         {

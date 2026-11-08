@@ -198,6 +198,8 @@ export const api = {
     api.call("POST", `/v1/approvals/${id}`, { decision: allow ? "allow" : "deny", remember }),
   audit: (since: number, kind: string | null, limit: number) =>
     api.call<AuditEvent[]>("GET", `/v1/audit?since=${since}&limit=${limit}${kind ? `&kind=${kind}` : ""}`),
+  auditLatest: (limit: number) =>
+    api.call<AuditEvent[]>("GET", `/v1/audit?latest=true&limit=${limit}`),
   presets: () => wrap(invoke<Preset[]>("presets")),
   installMcp: (client: string) => wrap(invoke<string>("install_mcp", { client })),
   callers: () => api.call<{ name: string; caller: string; last_seen_at: number | null }[]>("GET", "/v1/callers"),

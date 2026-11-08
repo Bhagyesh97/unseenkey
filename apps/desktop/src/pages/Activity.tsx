@@ -146,7 +146,7 @@ export function Activity({ tick }: { tick: number }) {
   useEffect(() => {
     void (async () => {
       try {
-        const all = await api.audit(1, null, 5000);
+        const all = await api.auditLatest(1000);
         setEvents(all.slice().reverse());
         const secrets: SecretMeta[] = await api.secrets().catch(() => []);
         setNames(new Map(secrets.map((s) => [s.secret_id, s.name])));

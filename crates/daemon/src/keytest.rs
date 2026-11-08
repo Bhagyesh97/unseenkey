@@ -279,51 +279,58 @@ pub async fn test_secret(
         }
         _ => verify.path.clone(),
     };
-    let mut url = format!("{origin}{path}");
-    for (k, v) in &injection.query {
-        let enc = percent_encoding::utf8_percent_encode(v, percent_encoding::NON_ALPHANUMERIC);
-        url.push(if url.contains('?') { '&' } else { '?' });
-        url.push_str(&format!("{k}={enc}"));
-    }
-    let method =
-        reqwest::Method::from_bytes(verify.method.as_bytes()).unwrap_or(reqwest::Method::GET);
-    let mut req = s
-        .http
-        .request(method, &url)
-        .timeout(Duration::from_secs(15))
-        .header(
-            "user-agent",
-            concat!("unseenkey/", env!("CARGO_PKG_VERSION")),
-        );
-    for (k, v) in &verify.headers {
-        req = req.header(k.as_str(), v.as_str());
-    }
-    for (k, v) in &injection.headers {
-        req = req.header(k.as_str(), v.as_str());
-    }
     let display = preset.display.clone();
-    let (ok, status, message) = match req.send().await {
-        Ok(resp) => {
-            let code = resp.status().as_u16();
-            match code {
-                200..=299 => (Some(true), Some(code), format!("{display} accepted the key.")),
-                401 | 403 => (
-                    Some(false),
-                    Some(code),
-                    format!(
-                        "{display} refused this key (HTTP {code}). Check that you copied all of it, that it has not expired or been revoked, and that it is the right kind of key (some providers have separate keys for sending and for reading)."
-                    ),
-                ),
-                _ => (None, Some(code), format!("{display} answered HTTP {code}, which does not say whether the key works.")),
-            }
+    let mut outcome: (Option<bool>, Option<u16>, String) = (None, None, String::new());
+    for path in std::iter::once(path).chain(verify.also_path.clone()) {
+        let mut url = format!("{origin}{path}");
+        for (k, v) in &injection.query {
+            let enc = percent_encoding::utf8_percent_encode(v, percent_encoding::NON_ALPHANUMERIC);
+            url.push(if url.contains('?') { '&' } else { '?' });
+            url.push_str(&format!("{k}={enc}"));
         }
-        // The error's own text holds the URL, and a key may travel in the URL.
-        Err(e) => (
-            None,
-            None,
-            format!("could not reach {host}: {}", e.without_url()),
-        ),
-    };
+        let method =
+            reqwest::Method::from_bytes(verify.method.as_bytes()).unwrap_or(reqwest::Method::GET);
+        let mut req = s
+            .http
+            .request(method, &url)
+            .timeout(Duration::from_secs(15))
+            .header(
+                "user-agent",
+                concat!("unseenkey/", env!("CARGO_PKG_VERSION")),
+            );
+        for (k, v) in &verify.headers {
+            req = req.header(k.as_str(), v.as_str());
+        }
+        for (k, v) in &injection.headers {
+            req = req.header(k.as_str(), v.as_str());
+        }
+        outcome = match req.send().await {
+            Ok(resp) => {
+                let code = resp.status().as_u16();
+                match code {
+                    200..=299 => (Some(true), Some(code), format!("{display} accepted the key.")),
+                    401 | 403 => (
+                        Some(false),
+                        Some(code),
+                        format!(
+                            "{display} refused this key (HTTP {code}). Check that you copied all of it, that it has not expired or been revoked, and that it is the right kind of key (some providers have separate keys for sending and for reading)."
+                        ),
+                    ),
+                    _ => (None, Some(code), format!("{display} answered HTTP {code}, which does not say whether the key works.")),
+                }
+            }
+            // The error's own text holds the URL, and a key may travel in the URL.
+            Err(e) => (
+                None,
+                None,
+                format!("could not reach {host}: {}", e.without_url()),
+            ),
+        };
+        if outcome.0 != Some(false) {
+            break;
+        }
+    }
+    let (ok, status, message) = outcome;
     {
         let mut v = s.vault.lock().await;
         let _ = v.audit(

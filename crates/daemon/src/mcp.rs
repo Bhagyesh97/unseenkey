@@ -783,7 +783,7 @@ pub async fn handle_message(
                 "usk://audit/recent" => {
                     let v = s.vault.lock().await;
                     let events: Vec<Value> = v
-                        .audit_events(1, None, 5000)
+                        .audit_latest(None, 5000)
                         .unwrap_or_default()
                         .into_iter()
                         .filter(|e| e.body["caller"].as_str() == Some(caller))

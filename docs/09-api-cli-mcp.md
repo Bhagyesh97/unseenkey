@@ -36,7 +36,7 @@ All responses are JSON. Errors: `{ "error": "<code>", "message": "…" }`.
 | POST | `/v1/projects/{ref}/secrets` | `{secret}` adds a secret; `DELETE /v1/projects/{ref}/secrets/{secret}` takes it out (it stays in the vault) |
 | GET/POST/DELETE | `/v1/unlock-methods`, `/v1/unlock-methods/{id}` | device unlock methods (Windows Hello); POST (enrolling) is **owner**; `POST /v1/unlock` and `/v1/confirm` also take `{wrap_id, kek}` |
 | GET | `/v1/callers` / POST / DELETE | manage MCP clients. POST `{name, replace?}` needs an unlocked vault and returns the client's token once; a new name needs only the session token, an existing one answers 409 `caller_exists` unless `replace` is set and the **owner** token is sent (the new token keeps everything approved for that name). A name the owner removed answers 409 `caller_removed` on the same terms, so a tool that registers itself cannot undo a disconnect. Audited as `caller_registered`, `caller_replaced`, `caller_removed`; each emits a `caller_changed` event |
-| GET | `/v1/audit?since=&kind=&limit=` | decrypted events for the owner |
+| GET | `/v1/audit?since=&kind=&limit=&latest=` | decrypted events for the owner; `latest=true` gives the newest |
 | GET | `/v1/audit/verify` | re-hash the chain; returns first broken seq if any |
 | GET | `/v1/approvals` / POST `/v1/approvals/{id}` | list pending; decide `{decision: allow\|deny, remember: bool}` (**owner**). `latest` names the one waiting request and is refused (409 `ambiguous`) when several wait |
 | GET | `/v1/presets` | compiled presets |
@@ -114,11 +114,12 @@ usk project ls | show [name] | attach <p> <secret>… | detach <p> <secret>… |
 usk project set <p> [--name n] [--path dir]… [--cap N | --no-cap] [--notes …]
 usk handle create <secret> --project <p>   the handle's requests count toward the project's daily limit
 usk mcp --client <name>          stdio MCP bridge to the daemon's /mcp (what the clients' configs run); registers <name> itself when it has no token
-usk mcp install <claude-code|claude-desktop|cursor|windsurf|all|custom-name>   register the client (usk_m_ token) and write its config
+usk mcp install [claude-code|claude-desktop|cursor|windsurf|all|custom-name]   connect one client, or with no name every client found; on a terminal, or with --new-vault, also makes the vault
+usk daemon restart                                                            run the daemon of this version; the vault locks
 usk mcp clients | usk mcp remove <name>
 usk approvals                    requests waiting for you (proxied calls parked on approval, MCP access requests)
 usk approve [id|latest] [--remember] | usk deny [id|latest]
-usk log [--since 1h] [--kind use] [--json]
+usk log [--kind use] [--limit 50] [--since <seq>] [--json]   the newest events; --since reads from that sequence number on
 usk log verify
 usk export --out file.uskx | usk import file.uskx
 
@@ -136,7 +137,7 @@ Server name `unseenkey`. Transports: stdio (`usk mcp`) and `http://127.0.0.1:739
 
 **Project scope.** The stdio bridge sends the folder its client runs in as `X-Usk-Project-Dir` (percent-encoded): `USK_PROJECT_DIR` if set, else `CLAUDE_PROJECT_DIR`, else the bridge's working directory. When a project's folder contains it, every tool sees only that project's secrets (`not_in_project` otherwise), auto-created handles are made for the project (label `mcp:<client>/<project>/<secret>`), and `store_secret` adds the new secret to it. Outside every project nothing changes. The folder is the client's own claim, so this narrows what an honest agent sees; it is not a boundary against a hostile local process.
 
-**Connecting.** `usk mcp install <client>` registers the client and writes its config; the config runs the bridge as `<usk or the desktop app> mcp --client <client>`:
+**Connecting.** `usk mcp install <client>` registers the client, writes its config and checks that the bridge lists its tools. A client whose token still works keeps it, with no password; a config that cannot be edited safely stops the install before anything changes, and the entry to add by hand is printed. The config runs the bridge as `<usk or the desktop app> mcp --client <client>`, with `--vault <path>` first for a vault outside the default place:
 
 ```json
 { "mcpServers": { "unseenkey": { "command": "usk", "args": ["mcp", "--client", "cursor"] } } }

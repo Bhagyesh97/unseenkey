@@ -162,6 +162,18 @@ fn audit_chain_survives_reopen_and_detects_tampering() {
         assert_eq!(uses[2].body["path"], "/v1/x/2");
         let page = v.audit_events(3, None, 2).unwrap();
         assert_eq!(page.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![3, 4]);
+        // The newest, the oldest of them first, of any kind or of one.
+        let seqs = |events: Vec<unseenkey_core::audit::AuditEvent>| {
+            events.iter().map(|e| e.seq).collect::<Vec<_>>()
+        };
+        assert_eq!(seqs(v.audit_latest(None, 2).unwrap()), vec![6, 7]);
+        assert_eq!(seqs(v.audit_latest(None, 100).unwrap()).len(), 7);
+        assert_eq!(
+            seqs(v.audit_latest(Some(kinds::USE), 2).unwrap()),
+            vec![5, 6]
+        );
+        assert_eq!(v.audit_latest(Some("no_such_kind"), 2).unwrap().len(), 0);
+        assert_eq!(v.audit_latest(None, 0).unwrap().len(), 0);
         assert!(v.audit_verify().unwrap().ok());
     }
     // Verification works on a locked vault.

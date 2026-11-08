@@ -418,9 +418,16 @@ fn mcp_install_bridge_and_remove() {
         &std::fs::read_to_string(home.join(".cursor").join("mcp.json")).unwrap(),
     )
     .unwrap();
+    // Run with a vault of its own, so the config has to name it.
     assert_eq!(
         cfg["mcpServers"]["unseenkey"]["args"],
-        serde_json::json!(["mcp", "--client", "cursor"])
+        serde_json::json!([
+            "--vault",
+            vault.to_str().unwrap(),
+            "mcp",
+            "--client",
+            "cursor"
+        ])
     );
     assert!(cfg["mcpServers"]["unseenkey"]["command"]
         .as_str()
@@ -1267,4 +1274,301 @@ fn a_name_fills_in_the_provider() {
         "qwertyuiopasdfghjklzxcvbnm1234567890ZZZZ",
     );
     assert!(out(&o).contains("No provider: choose one"), "{}", out(&o));
+}
+
+/// `usk` with `PATH` holding only `path`, so the AI tools it can find are the test's.
+fn usk_on_path(vault: &Path, path: &Path, args: &[&str], stdin: &str) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_usk"))
+        .arg("--vault")
+        .arg(vault)
+        .args(args)
+        .env("PATH", path)
+        .env("USK_LISTEN", "127.0.0.1:0")
+        .env("USK_IDLE_LOCK_MINUTES", "0")
+        .env("USK_NO_KEY_TEST", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn usk");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn mcp_install_finds_the_tools_makes_the_vault_and_can_be_repeated() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("v").join("vault.db");
+    std::fs::create_dir_all(vault.parent().unwrap()).unwrap();
+    let _stop = StopDaemon(&vault);
+    let home = dir.path().join("home");
+    let path = dir.path().join("bin");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&path).unwrap();
+    let home_s = home.to_str().unwrap();
+    let args = ["mcp", "install", "--home", home_s];
+    let run = |args: &[&str], stdin: &str| usk_on_path(&vault, &path, args, stdin);
+
+    // No tool on this computer: say so, and make nothing.
+    let o = run(&args, "");
+    assert!(!o.status.success());
+    assert!(err(&o).contains("no AI tool found"), "{}", err(&o));
+    assert!(!vault.exists());
+
+    // A tool, no vault, no person at a terminal: a program never gets a vault by accident.
+    let cursor = home.join(".cursor");
+    std::fs::create_dir_all(&cursor).unwrap();
+    let o = run(&args, "");
+    assert!(!o.status.success());
+    assert!(err(&o).contains("usk init"), "{}", err(&o));
+    assert!(!vault.exists());
+
+    // Asked to: one password, once, and the tool is connected and told what is next.
+    let o = run(&["mcp", "install", "--home", home_s, "--new-vault"], PW);
+    assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
+    let text = out(&o);
+    assert!(text.contains("RECOVERY PHRASE"), "{text}");
+    assert!(text.contains("Cursor: connected"), "{text}");
+    assert!(text.contains("usk add"), "{text}");
+    assert!(text.contains("Restart Cursor"), "{text}");
+    let config = cursor.join("mcp.json");
+    assert!(config.exists());
+    let token_file = vault.parent().unwrap().join("mcp").join("cursor.token");
+    let token = std::fs::read_to_string(&token_file).unwrap();
+
+    // Again: no password, same token.
+    let o = run(&args, "");
+    assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
+    assert!(out(&o).contains("Cursor: already connected"), "{}", out(&o));
+    assert_eq!(std::fs::read_to_string(&token_file).unwrap(), token);
+
+    // With a key stored there is nothing to add.
+    assert!(
+        run(&["add", "stripe", "--stdin"], "sk_live_51Habcdefghijklmnop")
+            .status
+            .success()
+    );
+    assert!(!out(&run(&args, "")).contains("usk add"));
+
+    // A token that stopped working is replaced, with the password.
+    std::fs::write(&token_file, "usk_m_stale").unwrap();
+    let o = run(&args, PW);
+    assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
+    assert!(out(&o).contains("needs your password"), "{}", out(&o));
+    let token = std::fs::read_to_string(&token_file).unwrap();
+    assert_ne!(token, "usk_m_stale");
+
+    // A config it cannot edit stays as it was, the token too, and the words say what to add.
+    let broken = "{ \"mcpServers\": {}, // a comment\n}";
+    std::fs::write(&config, broken).unwrap();
+    std::fs::write(&token_file, "usk_m_stale").unwrap();
+    let o = run(&args, PW);
+    assert!(!o.status.success());
+    assert!(err(&o).contains("left as it was"), "{}", err(&o));
+    assert!(err(&o).contains("--client"), "{}", err(&o));
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), broken);
+    assert_eq!(std::fs::read_to_string(&token_file).unwrap(), "usk_m_stale");
+    std::fs::write(&token_file, &token).unwrap();
+
+    // Other servers in the file are kept.
+    std::fs::write(
+        &config,
+        r#"{"mcpServers": {"other": {"command": "x"}}, "theme": 1}"#,
+    )
+    .unwrap();
+    assert!(run(&args, "").status.success());
+    let cfg: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    assert_eq!(cfg["mcpServers"]["other"]["command"], "x");
+    assert_eq!(cfg["theme"], 1);
+    assert!(cfg["mcpServers"]["unseenkey"].is_object());
+}
+
+/// A stand-in for `claude`, installed the way npm does it on Windows (a `.cmd`).
+/// It records its arguments and refuses a second `mcp add`, as the real one does.
+fn fake_claude(dir: &Path) {
+    #[cfg(windows)]
+    std::fs::write(
+        dir.join("claude.cmd"),
+        "@echo off\r\n\
+         echo %* >> \"%~dp0calls.txt\"\r\n\
+         if \"%2\"==\"add\" if exist \"%~dp0added\" exit /b 1\r\n\
+         if \"%2\"==\"add\" echo yes > \"%~dp0added\"\r\n\
+         if \"%2\"==\"remove\" del \"%~dp0added\"\r\n\
+         exit /b 0\r\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let file = dir.join("claude");
+        std::fs::write(
+            &file,
+            "#!/bin/sh\n\
+             here=${0%/*}\n\
+             echo \"$*\" >> \"$here/calls.txt\"\n\
+             if [ \"$2\" = add ] && [ -e \"$here/added\" ]; then exit 1; fi\n\
+             if [ \"$2\" = add ]; then : > \"$here/added\"; fi\n\
+             if [ \"$2\" = remove ]; then /bin/rm -f \"$here/added\"; fi\n\
+             exit 0\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+#[test]
+fn mcp_install_runs_claude_however_it_was_installed_and_steps_aside_for_the_plugin() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    let _stop = StopDaemon(&vault);
+    let home = dir.path().join("home");
+    let path = dir.path().join("bin");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&path).unwrap();
+    fake_claude(&path);
+    let home_s = home.to_str().unwrap();
+    let args = ["mcp", "install", "--home", home_s];
+    let calls = path.join("calls.txt");
+    assert!(usk(&vault, &["init", "--profile", "light"], PW)
+        .status
+        .success());
+    assert!(usk(&vault, &["unlock"], PW).status.success());
+
+    let o = usk_on_path(&vault, &path, &args, "");
+    assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
+    assert!(out(&o).contains("Claude Code: connected"), "{}", out(&o));
+    let log = std::fs::read_to_string(&calls).unwrap();
+    assert!(log.contains("mcp add --scope user unseenkey"), "{log}");
+    assert!(log.contains("--client claude-code"), "{log}");
+
+    // Already there: the entry is replaced, and no one is told to do it by hand.
+    let o = usk_on_path(&vault, &path, &args, "");
+    assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
+    assert!(
+        out(&o).contains("Claude Code: already connected"),
+        "{}",
+        out(&o)
+    );
+    let log = std::fs::read_to_string(&calls).unwrap();
+    assert!(log.contains("mcp remove --scope user unseenkey"), "{log}");
+
+    // With the plugin connected, finding tools leaves Claude Code alone.
+    let list = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n";
+    assert!(
+        usk(&vault, &["mcp", "--client", "claude-code-plugin"], list)
+            .status
+            .success()
+    );
+    let before = std::fs::read_to_string(&calls).unwrap();
+    let o = usk_on_path(&vault, &path, &args, "");
+    assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
+    assert!(
+        out(&o).contains("through the Unseenkey plugin"),
+        "{}",
+        out(&o)
+    );
+    assert_eq!(std::fs::read_to_string(&calls).unwrap(), before);
+}
+
+/// A stand-in for a daemon of another version: answers every request with its status.
+fn service_of_version(dir: &Path, version: &'static str) {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    std::fs::write(
+        dir.join("daemon.addr"),
+        listener.local_addr().unwrap().to_string(),
+    )
+    .unwrap();
+    std::fs::write(dir.join("daemon.token"), "usk_s_stand_in").unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut seen = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
+                match stream.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => seen.extend_from_slice(&buf[..n]),
+                }
+            }
+            let body =
+                format!(r#"{{"version":"{version}","locked":true,"secrets":0,"uptime_s":1}}"#);
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+}
+
+#[test]
+fn a_service_of_another_version_is_called_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    service_of_version(dir.path(), "0.1.2");
+    let o = usk(&vault, &["status"], "");
+    assert!(err(&o).contains("version 0.1.2"), "{}", err(&o));
+    assert!(err(&o).contains("usk daemon restart"), "{}", err(&o));
+    // Once per run, however many times this run connects.
+    assert_eq!(err(&o).matches("warning:").count(), 1, "{}", err(&o));
+
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    service_of_version(dir.path(), "99.0.0");
+    let o = usk(&vault, &["status"], "");
+    assert!(err(&o).contains("newer than this usk"), "{}", err(&o));
+    assert!(!err(&o).contains("usk daemon restart"), "{}", err(&o));
+}
+
+#[test]
+fn restarting_the_service_locks_the_vault() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    let _stop = StopDaemon(&vault);
+    assert!(usk(&vault, &["init", "--profile", "light"], PW)
+        .status
+        .success());
+    assert!(usk(&vault, &["unlock"], PW).status.success());
+
+    let o = usk(&vault, &["daemon", "restart"], "");
+    assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
+    assert!(out(&o).contains("Daemon restarted"), "{}", out(&o));
+    assert!(out(&o).contains("usk unlock"), "{}", out(&o));
+    assert!(!err(&o).contains("warning:"), "{}", err(&o));
+
+    let o = usk(&vault, &["--json", "status"], "");
+    let s: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
+    assert_eq!(s["daemon"]["locked"], true);
+    assert_eq!(s["daemon"]["version"], s["version"]);
+}
+
+#[test]
+fn the_log_shows_what_just_happened() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    let _stop = StopDaemon(&vault);
+    assert!(usk(&vault, &["init", "--profile", "light"], PW)
+        .status
+        .success());
+    assert!(usk(
+        &vault,
+        &["add", "stripe", "--stdin"],
+        &format!("{PW}sk_live_51Habcdefghijklmnop")
+    )
+    .status
+    .success());
+
+    let o = usk(&vault, &["log", "--limit", "1"], "");
+    assert!(out(&o).contains("secret_created"), "{}", out(&o));
+    assert!(out(&o).contains("usk log --since 1"), "{}", out(&o));
+    let o = usk(&vault, &["log", "--since", "1", "--limit", "1"], "");
+    assert!(out(&o).contains("unlock"), "{}", out(&o));
+    assert!(!out(&o).contains("Older ones"), "{}", out(&o));
 }

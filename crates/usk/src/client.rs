@@ -3,9 +3,53 @@
 use crate::io::{self as uio, CliError, EXIT_LOCKED};
 use serde_json::Value;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use unseenkey_daemon::VaultPaths;
+
+/// Said once per run, and not by the commands that deal with it.
+static VERSION_WARNING_DONE: AtomicBool = AtomicBool::new(false);
+
+/// Keep this run from warning about the daemon's version.
+pub fn skip_version_warning() {
+    VERSION_WARNING_DONE.store(true, Ordering::Relaxed);
+}
+
+fn version_numbers(v: &str) -> Vec<u64> {
+    v.split('.')
+        .map(|part| {
+            part.split(|c: char| !c.is_ascii_digit())
+                .next()
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0)
+        })
+        .collect()
+}
+
+/// What to say when the running daemon is not this version. An update replaces
+/// the program on disk while the old daemon keeps running, with its old code,
+/// until someone restarts it; a security fix does nothing until then.
+pub fn version_warning(daemon: &str, cli: &str) -> Option<String> {
+    if daemon == cli {
+        return None;
+    }
+    Some(if version_numbers(daemon) < version_numbers(cli) {
+        format!(
+            "warning: the Unseenkey service still running is version {daemon}; this usk is {cli}. \
+             Fixes in the newer version, security fixes included, do nothing until it restarts. \
+             Run: usk daemon restart"
+        )
+    } else {
+        let exe = std::env::current_exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        format!(
+            "warning: the Unseenkey service running is version {daemon}, newer than this usk ({cli}). \
+             This usk may be an old copy: {exe}"
+        )
+    })
+}
 
 /// A connection to a running daemon.
 pub struct Client {
@@ -59,7 +103,17 @@ impl Client {
         // token to the first request (a 401 on the first unlock). Treat a
         // refused token as "not ready" so `connect` keeps waiting.
         match c.request("GET", "/v1/status").call() {
-            Ok(r) if r.status() == 200 => Some(c),
+            Ok(r) if r.status() == 200 => {
+                let status: Value = r.into_json().unwrap_or(Value::Null);
+                if let Some(daemon) = status["version"].as_str() {
+                    if let Some(words) = version_warning(daemon, env!("CARGO_PKG_VERSION")) {
+                        if !VERSION_WARNING_DONE.swap(true, Ordering::Relaxed) {
+                            eprintln!("{words}");
+                        }
+                    }
+                }
+                Some(c)
+            }
             _ => None,
         }
     }
@@ -157,6 +211,16 @@ impl Client {
         &self.base
     }
 
+    /// Does the MCP endpoint take this caller token? Anything but a clear yes is a no.
+    pub fn mcp_token_works(&self, token: &str) -> bool {
+        self.agent
+            .post(&format!("{}/mcp", self.base))
+            .set("Authorization", &format!("Bearer {token}"))
+            .set("Content-Type", "application/json")
+            .send_string(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+            .is_ok_and(|r| r.status() == 200)
+    }
+
     /// Is the vault locked?
     pub fn is_locked(&self) -> Result<bool, CliError> {
         Ok(self.get("/v1/status")?["locked"].as_bool().unwrap_or(true))
@@ -184,6 +248,19 @@ impl Client {
     /// and keep the owner token it returns.
     pub fn confirm_with_password(&self, password: &str) -> Result<(), CliError> {
         let r = self.post("/v1/confirm", serde_json::json!({ "password": password }))?;
+        self.remember_owner(&r);
+        Ok(())
+    }
+
+    /// Unlock with a password this process already has (a vault it just made),
+    /// so the person is not asked again a moment after choosing it.
+    pub fn unlock_with(
+        &self,
+        password: &unseenkey_core::crypto::SecretBytes,
+    ) -> Result<(), CliError> {
+        let pw = std::str::from_utf8(password.expose())
+            .map_err(|_| CliError::general("password is not valid UTF-8"))?;
+        let r = self.post("/v1/unlock", serde_json::json!({ "password": pw }))?;
         self.remember_owner(&r);
         Ok(())
     }

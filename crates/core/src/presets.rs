@@ -288,6 +288,10 @@ pub struct Verify {
     pub method: String,
     /// Path and query, without the key.
     pub path: String,
+    /// A second address to try when `path` refuses, for a provider with two
+    /// kinds of key and no one address that takes both. Refused means refused by both.
+    #[serde(default)]
+    pub also_path: Option<String>,
     /// Host when not the first of `upstreams`.
     #[serde(default)]
     pub host: Option<String>,

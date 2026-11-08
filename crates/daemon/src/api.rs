@@ -1200,7 +1200,7 @@ pub async fn patch_secret(
         None => None,
     };
     // A new provider must exist, and brings its hosts along unless the owner
-    // named hosts in the same call.
+    // named hosts in the same call or the key's hosts are already within them.
     if let Some(Some(pid)) = &p.provider {
         let preset = presets::get(pid).ok_or_else(|| {
             ApiError::new(
@@ -1210,7 +1210,17 @@ pub async fn patch_secret(
             )
         })?;
         if upstreams.is_none() && !preset.upstreams.is_empty() {
-            upstreams = Some(preset.upstreams.clone());
+            // Exact hosts the provider covers stay: the owner's own project must
+            // not turn back into a wildcard the key cannot be used on.
+            let current = &v.get(&id)?.upstreams;
+            let stays = !current.is_empty()
+                && current.iter().all(|h| {
+                    !h.contains('*')
+                        && unseenkey_core::policy::eval::host_allowed(&preset.upstreams, h)
+                });
+            if !stays {
+                upstreams = Some(preset.upstreams.clone());
+            }
         }
     }
     // A call already out may still bring the old value back.
@@ -2174,6 +2184,9 @@ pub struct AuditQuery {
     pub kind: Option<String>,
     /// At most this many (default 100, max 1000).
     pub limit: Option<usize>,
+    /// The newest events instead of those from `since` on.
+    #[serde(default)]
+    pub latest: bool,
 }
 
 /// `GET /v1/audit`
@@ -2183,7 +2196,12 @@ pub async fn audit_list(
 ) -> ApiResult<Vec<unseenkey_core::audit::AuditEvent>> {
     let v = s.vault.lock().await;
     let limit = q.limit.unwrap_or(100).min(1000);
-    Ok(Json(v.audit_events(q.since, q.kind.as_deref(), limit)?))
+    let events = if q.latest {
+        v.audit_latest(q.kind.as_deref(), limit)?
+    } else {
+        v.audit_events(q.since, q.kind.as_deref(), limit)?
+    };
+    Ok(Json(events))
 }
 
 /// `GET /v1/audit/verify`

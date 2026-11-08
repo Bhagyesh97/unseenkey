@@ -692,6 +692,28 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         Ok(out)
     }
 
+    /// The newest `limit` events, optionally of one kind, the oldest of them first.
+    pub fn audit_latest(
+        &self,
+        kind: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<AuditEvent>, VaultError> {
+        let Some(last) = self.storage.audit_last()? else {
+            return Ok(Vec::new());
+        };
+        // Look back further each time: a rare kind may be a long way back.
+        let mut window = (limit as u64).max(256);
+        loop {
+            let from = last.seq.saturating_sub(window - 1).max(1);
+            let mut events = self.audit_events(from, kind, usize::MAX)?;
+            if events.len() >= limit || from == 1 {
+                let older = events.len().saturating_sub(limit);
+                return Ok(events.split_off(older));
+            }
+            window = window.saturating_mul(4);
+        }
+    }
+
     /// Walk the whole chain, and check the keyed head when the vault is
     /// unlocked. Works while locked too (the chain needs no key), but then the
     /// report says the head went [`audit::HeadStatus::Unchecked`] and a cut-short log

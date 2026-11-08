@@ -104,7 +104,7 @@ export function Gate({ status, onDone }: { status: Status; onDone: () => Promise
         <div className="gate-brand"><img src={icon} alt="" /><div><b>Unseenkey</b><span>use keys, never see them</span></div></div>
         <h1>Create your vault</h1>
         <p>
-          Secrets are encrypted on this computer with a key derived from your password. Nothing leaves your machine.
+          Secrets are encrypted on this computer with a key derived from your password. No account, no telemetry: a key goes only to the provider you call.
           <br />
           <b>The password cannot be reset.</b> You will get a recovery phrase next.
         </p>

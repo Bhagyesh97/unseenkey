@@ -26,6 +26,8 @@ const PLIVO_ID: &str = "MAPLIVOID01234567890";
 const PLIVO_TOKEN: &str = "plivo-token-abcdefghijklmnop";
 const SUPABASE: &str = "sb_secret_abcdefghijklmnopqrstuvwxyz";
 const OLD_TOKEN: &str = "twilio-old-token-abcdefghijklmnop";
+const CF_USER: &str = "cfut_userTokenAbcdefghijklmnopqrstuvwxyz";
+const CF_ACCOUNT: &str = "cfat_accountTokenAbcdefghijklmnopqrstuvwxyz";
 
 /// Calls that reached a Supabase host.
 static SUPABASE_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -69,6 +71,12 @@ async fn provider(req: Request) -> axum::response::Response {
             true
         }
         "/v1/models" => auth == format!("Bearer {GOOD_XAI}"),
+        // As Cloudflare does: this address takes user tokens only...
+        "/client/v4/user/tokens/verify" => auth == format!("Bearer {CF_USER}"),
+        // ...and this one both kinds.
+        "/client/v4/accounts" => {
+            auth == format!("Bearer {CF_USER}") || auth == format!("Bearer {CF_ACCOUNT}")
+        }
         "/v1/projects" => auth == format!("Token {DEEPGRAM}"),
         "/2010-04-01/Accounts.json" => auth == basic(&format!("{TWILIO_SID}:{TWILIO_TOKEN}")),
         "/v4/domains" => auth == basic(&format!("api:{MAILGUN_KEY}")),
@@ -182,6 +190,7 @@ async fn setup() -> (tempfile::TempDir, Running, C) {
         write_runtime_files: false,
         upstream_overrides: vec![
             ("api.x.ai".into(), format!("http://{mock}")),
+            ("api.cloudflare.com".into(), format!("http://{mock}")),
             ("api.deepgram.com".into(), format!("http://{mock}")),
             ("api.twilio.com".into(), format!("http://{mock}")),
             ("api.mailgun.net".into(), format!("http://{mock}")),
@@ -1056,4 +1065,53 @@ async fn a_custom_scheme_works_through_the_broker() {
     );
     assert_eq!(code, 200, "{body}");
     r.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_token_of_either_kind_passes_the_key_test() {
+    let (_d, _r, c) = setup().await;
+    for (name, value, works) in [
+        ("cf-user", CF_USER, true),
+        ("cf-account", CF_ACCOUNT, true),
+        ("cf-bad", "cfat_badTokenAbcdefghijklmnopqrstuvwxyz", false),
+    ] {
+        let (code, _) = c.post(
+            "/v1/secrets",
+            json!({ "name": name, "value": value, "provider": "cloudflare" }),
+        );
+        assert!(code < 300, "{name}: {code}");
+        let (_, t) = c.post(&format!("/v1/secrets/{name}/test"), json!({}));
+        assert_eq!(t["tested"], true, "{name}: {t}");
+        assert_eq!(t["ok"], works, "{name}: {t}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn naming_the_provider_keeps_the_owners_own_host() {
+    let (_d, _r, c) = setup().await;
+    // Saved without a provider, as an older service did, with the host already named.
+    let (code, _) = c.post(
+        "/v1/secrets",
+        json!({ "name": "project", "value": "a-key-of-no-known-shape-0123456789", "upstreams": ["mine.supabase.co"] }),
+    );
+    assert!(code < 300, "{code}");
+    let (code, s) = c.patch("/v1/secrets/project", json!({ "provider": "supabase" }));
+    assert_eq!(code, 200, "{s}");
+    let (_, s) = c.get("/v1/secrets/project");
+    assert_eq!(s["provider"], "supabase");
+    assert_eq!(s["upstreams"], json!(["mine.supabase.co"]));
+    // It can be used: the test goes out instead of asking for a host.
+    let (_, t) = c.post("/v1/secrets/project/test", json!({}));
+    assert_eq!(t["tested"], true, "{t}");
+
+    // A host the provider does not cover makes way for the provider's own.
+    let (code, _) = c.post(
+        "/v1/secrets",
+        json!({ "name": "elsewhere", "value": "another-key-of-no-known-shape-0123", "upstreams": ["api.example.com"] }),
+    );
+    assert!(code < 300, "{code}");
+    let (code, s) = c.patch("/v1/secrets/elsewhere", json!({ "provider": "xai" }));
+    assert_eq!(code, 200, "{s}");
+    let (_, s) = c.get("/v1/secrets/elsewhere");
+    assert_eq!(s["upstreams"], json!(["api.x.ai"]));
 }

@@ -16,6 +16,10 @@ Read this before writing any code that touches a secret. Every mitigation here m
 | A8. Broker private key (delegation mode) | Critical |
 | A9. Source code and release pipeline | Critical (supply chain) |
 
+## What leaves the machine
+
+In self mode no Unseenkey server is involved: no account, no telemetry, nothing sent to anything the project runs. What does leave is a key inside a request to a host it is locked to, the key test and sign-in requests to the same provider, and the desktop app's update check to GitHub. [SECURITY.md](../SECURITY.md#where-your-data-goes) has the full list, and known open issues. Delegation mode (Phase 3, not built) changes this for the keys you opt in to lending.
+
 ## Adversaries
 
 | ID | Adversary | Capability |
@@ -63,6 +67,7 @@ Read this before writing any code that touches a secret. Every mitigation here m
 | Threat | Mitigation | Residual |
 |---|---|---|
 | T1 pastes a key into chat | The key is never displayed after storage; handles are what users copy; `.env` guard replaces real keys with handles | User can still `usk reveal` intentionally (logged, requires unlock) |
+| T1 updates Unseenkey, and the old daemon keeps running with the old bugs | `usk` compares versions on each connection and warns; `usk daemon restart`; `usk doctor` | An MCP config that names an old copy of `usk` can start the old daemon again; the warning appears the next time the new `usk` runs. Versions before 0.1.9 do not warn |
 | T1 commits `.env` | `.env` guard; docs push base-URL pattern; handles are safe to commit | None significant |
 | T2 asks the agent to `curl` with `{{usk:x}}` to attacker host | Host lock: substitution only for the secret's upstream | Attacker can still call the *legitimate* upstream within policy (power problem) |
 | T2 makes the agent exfiltrate a secret it read from somewhere | Egress guard scans bodies to non-upstream hosts for stored values | Encoded/obfuscated exfil not caught; agent could read `.env` if user still has plaintext elsewhere |
@@ -103,6 +108,7 @@ Read this before writing any code that touches a secret. Every mitigation here m
 3. **The power problem.** Unseenkey protects the *secret*, and limits the *capability* only as well as the policy is written. Presets and approvals make good policies easy; they do not make bad ones impossible.
 4. **Phase 3 hosted broker** requires trusting the operator not to decrypt grants. Phase 4 enclaves remove that trust; until then, clients who cannot accept it should use bring-your-own-broker.
 5. **Web app** delivered by our server can be modified by our server. Use the desktop app for the highest assurance.
+6. **No external audit yet.** Known open issues are listed in [SECURITY.md](../SECURITY.md#known-open-issues).
 
 ## Security invariants (must always hold; each has a test)
 
@@ -119,6 +125,6 @@ Read this before writing any code that touches a secret. Every mitigation here m
 
 ## Disclosure and response
 
-- `SECURITY.md` with a PGP key and a 72-hour first-response commitment.
+- `SECURITY.md` with private reporting and a 72-hour first-response commitment.
 - Bug bounty from Phase 3 (start with a small private program).
 - Incident response runbook in [13](13-operations.md).

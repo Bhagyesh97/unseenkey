@@ -14,6 +14,9 @@ use unseenkey_daemon::VaultPaths;
 /// Clients we know how to configure.
 pub const CLIENTS: &[&str] = &["claude-code", "claude-desktop", "cursor", "windsurf"];
 
+/// The name the Claude Code plugin's bridge registers under.
+const PLUGIN_CLIENT: &str = "claude-code-plugin";
+
 fn token_path(paths: &VaultPaths, client: &str) -> PathBuf {
     paths.mcp.join(format!("{client}.token"))
 }
@@ -42,48 +45,119 @@ fn write_token(path: &Path, token: &str) -> Result<(), CliError> {
     Ok(())
 }
 
-/// The `mcpServers.unseenkey` entry for a client.
-fn server_entry(client: &str) -> Result<Value, CliError> {
-    let exe =
-        std::env::current_exe().map_err(|e| CliError::general(format!("current exe: {e}")))?;
-    Ok(json!({ "command": exe.to_string_lossy(), "args": ["mcp", "--client", client] }))
+/// How a person knows this client.
+fn display_name(client: &str) -> &str {
+    match client {
+        "claude-code" => "Claude Code",
+        "claude-desktop" => "Claude Desktop",
+        "cursor" => "Cursor",
+        "windsurf" => "Windsurf",
+        other => other,
+    }
 }
 
-/// Merge our entry into a `{"mcpServers": {...}}` JSON config file.
-fn merge_config(path: &Path, client: &str) -> Result<(), CliError> {
-    let mut root: Value = match std::fs::read_to_string(path) {
-        Ok(t) if !t.trim().is_empty() => serde_json::from_str(&t)
-            .map_err(|e| CliError::general(format!("{} is not valid JSON: {e}", path.display())))?,
+/// A program on `PATH`. npm installs CLIs on Windows as `.cmd` files, which
+/// `Command::new("claude")` does not find by the bare name.
+fn find_program(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    let extensions: &[&str] = if cfg!(windows) {
+        &[".exe", ".cmd", ".bat", ".com"]
+    } else {
+        &[""]
+    };
+    std::env::split_paths(&path).find_map(|dir| {
+        extensions
+            .iter()
+            .map(|e| dir.join(format!("{name}{e}")))
+            .find(|p| p.is_file())
+    })
+}
+
+/// The path a config should run: `on_path` if it leads to this same program.
+/// On Linux `current_exe` follows links, so under Homebrew it names a versioned
+/// folder that the next upgrade deletes; the link on `PATH` stays.
+fn stable_exe(exe: &Path, on_path: Option<PathBuf>) -> PathBuf {
+    let same = |p: &Path| match (std::fs::canonicalize(p), std::fs::canonicalize(exe)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    };
+    on_path
+        .filter(|p| same(p))
+        .unwrap_or_else(|| exe.to_path_buf())
+}
+
+fn config_exe() -> Result<PathBuf, CliError> {
+    let exe =
+        std::env::current_exe().map_err(|e| CliError::general(format!("current exe: {e}")))?;
+    Ok(stable_exe(&exe, find_program("usk")))
+}
+
+/// What a client runs. `--vault` only for a vault the bridge would not find by
+/// itself, and never for the desktop app, which starts the bridge only when
+/// its arguments start with `mcp`.
+fn bridge_args(paths: &VaultPaths, client: &str, cli: bool) -> Vec<String> {
+    let mut args = Vec::new();
+    if cli && VaultPaths::default_vault_file().as_deref() != Some(paths.vault.as_path()) {
+        args.push("--vault".to_string());
+        args.push(paths.vault.display().to_string());
+    }
+    args.extend(["mcp", "--client", client].map(String::from));
+    args
+}
+
+/// The `mcpServers.unseenkey` entry for a client.
+fn server_entry(exe: &Path, args: &[String]) -> Value {
+    json!({ "command": exe.to_string_lossy(), "args": args })
+}
+
+/// A client's config as it stands, without changing anything. A file that
+/// cannot be edited safely is an error here, before a token is replaced.
+fn read_config(path: &Path, entry: &Value) -> Result<Value, CliError> {
+    let refuse = |why: String| {
+        let by_hand = json!({ "mcpServers": { "unseenkey": entry } });
+        CliError::general(format!(
+            "{} cannot be edited safely: {why}. It was left as it was. Fix the file, or add this to it yourself:\n{}",
+            path.display(),
+            serde_json::to_string_pretty(&by_hand).unwrap_or_default()
+        ))
+    };
+    let root: Value = match std::fs::read_to_string(path) {
+        Ok(t) if !t.trim().is_empty() => {
+            serde_json::from_str(&t).map_err(|e| refuse(format!("it is not valid JSON ({e})")))?
+        }
         _ => json!({}),
     };
     if !root.is_object() {
-        return Err(CliError::general(format!(
-            "{} is not a JSON object",
-            path.display()
-        )));
+        return Err(refuse("it is not a JSON object".into()));
     }
-    let servers = root
-        .as_object_mut()
+    if root.get("mcpServers").is_some_and(|s| !s.is_object()) {
+        return Err(refuse("its mcpServers is not a JSON object".into()));
+    }
+    Ok(root)
+}
+
+/// Add our entry to a config [`read_config`] accepted. Replaces the file in
+/// one step, so a crash cannot leave the client's settings half written.
+fn write_config(path: &Path, mut root: Value, entry: Value) -> Result<(), CliError> {
+    root.as_object_mut()
         .unwrap()
         .entry("mcpServers")
-        .or_insert_with(|| json!({}));
-    if !servers.is_object() {
-        *servers = json!({});
-    }
-    servers
+        .or_insert_with(|| json!({}))
         .as_object_mut()
         .unwrap()
-        .insert("unseenkey".into(), server_entry(client)?);
+        .insert("unseenkey".into(), entry);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| CliError::general(e.to_string()))?;
     }
+    let cannot =
+        |e: std::io::Error| CliError::general(format!("cannot write {}: {e}", path.display()));
+    let tmp = path.with_extension("usk-tmp");
     std::fs::write(
-        path,
+        &tmp,
         serde_json::to_string_pretty(&root).unwrap_or_default(),
     )
-    .map_err(|e| CliError::general(format!("cannot write {}: {e}", path.display())))?;
-    println!("wrote {} (mcpServers.unseenkey)", path.display());
-    Ok(())
+    .map_err(cannot)?;
+    std::fs::rename(&tmp, path).map_err(cannot)
 }
 
 fn config_path(client: &str, home: Option<&Path>) -> Option<PathBuf> {
@@ -109,13 +183,141 @@ fn config_path(client: &str, home: Option<&Path>) -> Option<PathBuf> {
     Some(p)
 }
 
-/// Register `client` with the daemon and write its MCP config. Unlocks the
-/// vault first if needed (registrations are audited), and asks for the
-/// password again only to replace a client that is already registered.
-pub fn install(paths: &VaultPaths, client: &str, home: Option<&Path>) -> Result<(), CliError> {
+/// The clients installed on this machine that we know how to configure.
+fn detect(home: Option<&Path>) -> Vec<&'static str> {
+    let in_home = |rest: &[&str]| {
+        home.map(Path::to_path_buf)
+            .or_else(dirs::home_dir)
+            .is_some_and(|h| rest.iter().fold(h, |p, r| p.join(r)).is_dir())
+    };
+    let desktop = home
+        .map(Path::to_path_buf)
+        .or_else(dirs::config_dir)
+        .is_some_and(|d| d.join("Claude").is_dir());
+    let mut found = Vec::new();
+    if find_program("claude").is_some() {
+        found.push("claude-code");
+    }
+    if desktop {
+        found.push("claude-desktop");
+    }
+    if in_home(&[".cursor"]) || find_program("cursor").is_some() {
+        found.push("cursor");
+    }
+    if in_home(&[".codeium", "windsurf"]) || find_program("windsurf").is_some() {
+        found.push("windsurf");
+    }
+    found
+}
+
+/// `usk mcp install`: from nothing to a connected AI tool in one command.
+/// With no `client` it connects every tool it finds. On a terminal it also
+/// makes the vault if there is none and offers to add the first key; a program
+/// never gets a vault it did not ask for with `new_vault`.
+pub fn install(
+    paths: &VaultPaths,
+    client: Option<&str>,
+    home: Option<&Path>,
+    new_vault: bool,
+) -> Result<(), CliError> {
+    let tty = crate::io::is_tty();
+    let mut names: Vec<String> = match client {
+        Some("all") => CLIENTS.iter().map(|s| s.to_string()).collect(),
+        Some(c) => vec![c.to_string()],
+        None => detect(home).iter().map(|s| s.to_string()).collect(),
+    };
+    if names.is_empty() {
+        return Err(CliError::general(format!(
+            "no AI tool found on this computer. Install one, or name it: usk mcp install <{}>",
+            CLIENTS.join("|")
+        )));
+    }
+    let fresh_password = if paths.vault.exists() {
+        None
+    } else if new_vault || tty {
+        println!("No vault yet, so let's make one first.\n");
+        let pw = crate::cli::create_vault(paths)?;
+        println!();
+        Some(pw)
+    } else {
+        return Err(CliError::general(
+            "no vault found; run `usk init` first, or pass --new-vault to make one here",
+        ));
+    };
     let c = Client::connect(paths, true)?;
-    c.ensure_unlocked()?;
-    install_with(&c, paths, client, home, true)
+    match &fresh_password {
+        Some(pw) => c.unlock_with(pw)?,
+        None => c.ensure_unlocked()?,
+    }
+
+    // The plugin brings the same tools; both would show Claude Code two sets.
+    let has_plugin = c.get("/v1/callers").is_ok_and(|list| {
+        list.as_array().is_some_and(|items| {
+            items
+                .iter()
+                .any(|i| i["name"].as_str() == Some(PLUGIN_CLIENT))
+        })
+    });
+    if has_plugin && names.iter().any(|n| n == "claude-code") {
+        if client.is_none() {
+            println!("Claude Code: already connected through the Unseenkey plugin");
+            names.retain(|n| n != "claude-code");
+        } else {
+            println!("The Unseenkey plugin also connects Claude Code. Keep one of the two, or it gets the tools twice.");
+        }
+    }
+
+    let mut connected = Vec::new();
+    let mut failed = Vec::new();
+    for name in &names {
+        match install_one(&c, paths, name, home, true) {
+            Ok(()) => connected.push(display_name(name).to_string()),
+            Err(e) => {
+                eprintln!("{}: {}", display_name(name), e.message);
+                failed.push(display_name(name).to_string());
+            }
+        }
+    }
+    if !connected.is_empty() {
+        next_steps(&c, paths, &connected, tty);
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(CliError::general(format!(
+            "could not connect {}",
+            failed.join(", ")
+        )))
+    }
+}
+
+/// What to do now that the tools are connected.
+fn next_steps(c: &Client, paths: &VaultPaths, connected: &[String], tty: bool) {
+    let no_keys = c
+        .get("/v1/secrets")
+        .is_ok_and(|list| list.as_array().is_some_and(Vec::is_empty));
+    let mut still_no_keys = no_keys;
+    if no_keys && tty {
+        println!();
+        let name = crate::io::read_line(
+            "Your vault has no keys yet. Name your first key (like openai), or press Enter to skip: ",
+        )
+        .unwrap_or_default();
+        if !name.is_empty() {
+            match crate::cli::add_first_key(paths, name) {
+                Ok(()) => still_no_keys = false,
+                Err(e) => eprintln!("{}", e.message),
+            }
+        }
+    }
+    println!();
+    if still_no_keys {
+        println!("Add a key:  usk add openai   (any name; you paste the key at a hidden prompt)");
+    }
+    println!(
+        "Restart {}, then ask: \"What API keys can you use through Unseenkey?\"",
+        connected.join(" and ")
+    );
 }
 
 /// [`install`] for a caller that cannot prompt (the desktop app): it passes
@@ -129,7 +331,7 @@ pub fn install_as(
 ) -> Result<(), CliError> {
     let c = Client::connect(paths, true)?;
     c.set_owner(owner);
-    install_with(&c, paths, client, home, false)
+    install_one(&c, paths, client, home, false)
 }
 
 /// `POST /v1/callers`; on `caller_exists` or `caller_removed`, confirm the
@@ -160,77 +362,133 @@ fn register(c: &Client, client: &str, prompt: bool) -> Result<Value, CliError> {
     }
 }
 
-fn install_with(
+/// Add the server to Claude Code. An entry that is already there may name an
+/// old path; it is ours, so it is replaced. `Err` is the command to run by hand.
+fn add_to_claude_code(exe: &Path, args: &[String]) -> Result<(), String> {
+    let by_hand = format!(
+        "claude mcp add --scope user unseenkey -- \"{}\" {}",
+        exe.display(),
+        args.join(" ")
+    );
+    let claude = find_program("claude").ok_or_else(|| by_hand.clone())?;
+    let add = || {
+        std::process::Command::new(&claude)
+            .args(["mcp", "add", "--scope", "user", "unseenkey", "--"])
+            .arg(exe)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .is_ok_and(|o| o.status.success())
+    };
+    if add() {
+        return Ok(());
+    }
+    let _ = std::process::Command::new(&claude)
+        .args(["mcp", "remove", "--scope", "user", "unseenkey"])
+        .stdin(std::process::Stdio::null())
+        .output();
+    if add() {
+        Ok(())
+    } else {
+        Err(by_hand)
+    }
+}
+
+/// Run the bridge just as the client will and ask it for its tools.
+fn bridge_answers(exe: &Path, args: &[String]) -> Result<(), String> {
+    let mut child = std::process::Command::new(exe)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("could not start {}: {e}", exe.display()))?;
+    let mut stdin = child.stdin.take().ok_or("no stdin")?;
+    writeln!(stdin, r#"{{"jsonrpc":"2.0","id":1,"method":"tools/list"}}"#)
+        .map_err(|e| e.to_string())?;
+    drop(stdin);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+        Ok(Ok(o)) if String::from_utf8_lossy(&o.stdout).contains("call_api") => Ok(()),
+        Ok(Ok(o)) => Err(format!(
+            "it did not list its tools: {}",
+            String::from_utf8_lossy(&o.stdout).trim()
+        )),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(_) => Err("it did not answer within 10 seconds".into()),
+    }
+}
+
+/// Connect one client. Safe to repeat: a client whose token still works keeps
+/// it and needs no password. `cli` is false for the desktop app, which has its
+/// own words for the result and runs the bridge from its own executable.
+fn install_one(
     c: &Client,
     paths: &VaultPaths,
     client: &str,
     home: Option<&Path>,
-    prompt: bool,
+    cli: bool,
 ) -> Result<(), CliError> {
-    if client == "all" {
-        for name in CLIENTS {
-            install_with(c, paths, name, home, prompt)?;
-        }
-        return Ok(());
-    }
     if !CLIENTS.contains(&client) && !unseenkey_daemon::callers::valid_name(client) {
         return Err(CliError::general(format!(
             "unknown client {client:?}; use one of {} or a custom name (a-z, 0-9, -)",
             CLIENTS.join(", ")
         )));
     }
-    let created = register(c, client, prompt)?;
-    let token = created["token"]
-        .as_str()
-        .ok_or_else(|| CliError::general("daemon returned no token"))?;
-    let tp = token_path(paths, client);
-    write_token(&tp, token)?;
-    println!(
-        "registered MCP client {client} (identity mcp:{client}); token stored in {}",
-        tp.display()
-    );
+    let exe = if cli {
+        config_exe()?
+    } else {
+        std::env::current_exe().map_err(|e| CliError::general(format!("current exe: {e}")))?
+    };
+    let args = bridge_args(paths, client, cli);
+    let entry = server_entry(&exe, &args);
+    let config = config_path(client, home);
+    let current = config
+        .as_ref()
+        .map(|p| read_config(p, &entry))
+        .transpose()?;
 
-    match client {
-        "claude-code" => {
-            let exe = std::env::current_exe().map_err(|e| CliError::general(e.to_string()))?;
-            let exe_s = exe.to_string_lossy().to_string();
-            let status = std::process::Command::new("claude")
-                .args([
-                    "mcp",
-                    "add",
-                    "--scope",
-                    "user",
-                    "unseenkey",
-                    "--",
-                    &exe_s,
-                    "mcp",
-                    "--client",
-                    "claude-code",
-                ])
-                .stdin(std::process::Stdio::null())
-                .status();
-            match status {
-                Ok(s) if s.success() => println!("added to Claude Code (user scope): claude mcp list"),
-                _ => println!(
-                    "could not run `claude mcp add`; run this yourself:\n  claude mcp add --scope user unseenkey -- \"{exe_s}\" mcp --client claude-code"
-                ),
-            }
-        }
-        other => {
-            let path = config_path(other, home);
-            match path {
-                Some(p) => merge_config(&p, other)?,
-                None => println!(
-                    "no known config location for {other}; add this to its MCP settings:\n{}",
-                    serde_json::to_string_pretty(
-                        &json!({ "mcpServers": { "unseenkey": server_entry(other)? } })
-                    )
-                    .unwrap_or_default()
-                ),
-            }
-        }
+    let keeps_token = read_token(paths, client).is_some_and(|t| c.mcp_token_works(&t));
+    if !keeps_token {
+        let created = register(c, client, cli)?;
+        let token = created["token"]
+            .as_str()
+            .ok_or_else(|| CliError::general("daemon returned no token"))?;
+        write_token(&token_path(paths, client), token)?;
     }
-    println!("restart {client} to pick it up. Remove with: usk mcp remove {client}");
+
+    let name = display_name(client);
+    let state = if keeps_token {
+        "already connected"
+    } else {
+        "connected"
+    };
+    match (client, config, current) {
+        ("claude-code", _, _) => match add_to_claude_code(&exe, &args) {
+            Ok(()) => println!("{name}: {state}"),
+            Err(by_hand) => {
+                return Err(CliError::general(format!(
+                    "the `claude` command did not work. Run this yourself:\n  {by_hand}"
+                )))
+            }
+        },
+        (_, Some(path), Some(root)) => {
+            write_config(&path, root, entry)?;
+            println!("{name}: {state} ({})", path.display());
+        }
+        _ => println!(
+            "{name}: {state}. No known config location; add this to its MCP settings:\n{}",
+            serde_json::to_string_pretty(&json!({ "mcpServers": { "unseenkey": entry } }))
+                .unwrap_or_default()
+        ),
+    }
+    if cli {
+        bridge_answers(&exe, &args)
+            .map_err(|why| CliError::general(format!("set up, but the check failed: {why}")))?;
+    }
     Ok(())
 }
 
@@ -487,4 +745,58 @@ pub fn bridge(paths: &VaultPaths, client: &str) -> Result<(), CliError> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_config_runs_the_link_on_path_not_the_versioned_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("Cellar").join("0.1.9");
+        std::fs::create_dir_all(&real).unwrap();
+        let exe = real.join("usk");
+        std::fs::write(&exe, "").unwrap();
+        let link = dir.path().join("usk");
+        std::os::unix::fs::symlink(&exe, &link).unwrap();
+        assert_eq!(stable_exe(&exe, Some(link.clone())), link);
+    }
+
+    #[test]
+    fn a_config_runs_this_program_when_path_leads_elsewhere() {
+        let dir = tempfile::tempdir().unwrap();
+        let (exe, other) = (dir.path().join("usk"), dir.path().join("other"));
+        std::fs::write(&exe, "").unwrap();
+        std::fs::write(&other, "").unwrap();
+        assert_eq!(stable_exe(&exe, Some(other)), exe);
+        assert_eq!(stable_exe(&exe, None), exe);
+    }
+
+    #[test]
+    fn a_config_that_cannot_be_edited_is_refused_with_the_entry_to_add() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.json");
+        let entry = json!({ "command": "usk", "args": ["mcp", "--client", "cursor"] });
+        for bad in ["{ // a comment\n}", "[]", r#"{"mcpServers": []}"#] {
+            std::fs::write(&path, bad).unwrap();
+            let e = read_config(&path, &entry).unwrap_err();
+            assert!(e.message.contains("left as it was"), "{}", e.message);
+            assert!(e.message.contains("--client"), "{}", e.message);
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), bad);
+        }
+        std::fs::write(
+            &path,
+            r#"{"mcpServers": {"other": {"command": "x"}}, "theme": 1}"#,
+        )
+        .unwrap();
+        let root = read_config(&path, &entry).unwrap();
+        write_config(&path, root, entry).unwrap();
+        let after: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(after["theme"], 1);
+        assert_eq!(after["mcpServers"]["other"]["command"], "x");
+        assert_eq!(after["mcpServers"]["unseenkey"]["command"], "usk");
+        assert!(!path.with_extension("usk-tmp").exists());
+    }
 }
