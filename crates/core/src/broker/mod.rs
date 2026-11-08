@@ -172,7 +172,10 @@ impl Upstream {
 /// `localhost`, `127.0.0.0/8`, `::1`.
 pub fn is_loopback_host(host: &str) -> bool {
     let h = host.trim_matches(['[', ']']);
-    h == "localhost" || h == "::1" || h.starts_with("127.")
+    // Parsed, not by prefix: `127.x.example.com` is a name anyone can register.
+    h.eq_ignore_ascii_case("localhost")
+        || h.parse::<core::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// The effective host allow-list: the secret's list, narrowed by the policy's
@@ -315,5 +318,26 @@ mod tests {
         assert!(is_stripped("Set-Cookie", STRIP_RESPONSE_HEADERS));
         assert_eq!(split_path_query("/v1/x?a=1"), ("/v1/x", Some("a=1")));
         assert_eq!(split_path_query("/v1/x"), ("/v1/x", None));
+    }
+}
+
+#[cfg(test)]
+mod loopback_tests {
+    use super::is_loopback_host;
+
+    #[test]
+    fn only_a_real_loopback_address_counts() {
+        for yes in ["localhost", "127.0.0.1", "127.1.2.3", "[::1]", "::1"] {
+            assert!(is_loopback_host(yes), "{yes}");
+        }
+        for no in [
+            "127.x.googleapis.com",
+            "127.0.0.1.evil.example",
+            "127.evil.example",
+            "localhost.evil.example",
+            "128.0.0.1",
+        ] {
+            assert!(!is_loopback_host(no), "{no}");
+        }
     }
 }

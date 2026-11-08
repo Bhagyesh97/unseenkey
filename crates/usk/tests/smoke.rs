@@ -1721,3 +1721,27 @@ fn the_log_shows_what_just_happened() {
         out(&o)
     );
 }
+
+#[test]
+fn an_account_id_stays_in_the_env_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    let _stop = StopDaemon(&vault);
+    assert!(usk(&vault, &["init", "--profile", "light"], PW)
+        .status
+        .success());
+    let env = dir.path().join(".env");
+    let sid = "AC0123456789abcdef0123456789abcdef";
+    std::fs::write(
+        &env,
+        format!("TWILIO_SID={sid}\nSTRIPE_KEY=sk_live_51Habcdefghijklmnop\n"),
+    )
+    .unwrap();
+    let o = usk(&vault, &["guard", "fix", env.to_str().unwrap()], PW);
+    assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
+    let text = std::fs::read_to_string(&env).unwrap();
+    assert!(text.contains(&format!("TWILIO_SID={sid}")), "{text}");
+    assert!(!text.contains("sk_live_51Habcdefghijklmnop"), "{text}");
+    let o = usk(&vault, &["ls"], "");
+    assert!(!out(&o).contains("twilio-sid"), "{}", out(&o));
+}

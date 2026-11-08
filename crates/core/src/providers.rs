@@ -529,15 +529,35 @@ pub fn parse_service_account(text: &str) -> Option<ServiceAccountText> {
     })
 }
 
+/// Scopes as written, for a provider other than Google: space separated.
+pub fn plain_scopes(scopes: &[String]) -> String {
+    scopes
+        .iter()
+        .flat_map(|s| s.split([' ', ',']))
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// An account SID or API key SID and nothing else. It names an account, and opens
+/// nothing without its secret, so it stays where an SDK reads it.
+pub fn is_bare_sid(value: &str) -> bool {
+    let v = value.trim();
+    (v.starts_with("AC") || v.starts_with("SK"))
+        && v.len() == 34
+        && v[2..].bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 /// Scopes as Google's token request wants them: space separated, full URLs. A
-/// bare name such as `webmasters.readonly` is short for Google's auth URL.
+/// bare name such as `webmasters.readonly` is short for Google's auth URL; its
+/// sign-in scopes `openid`, `email` and `profile` are written bare.
 pub fn google_scopes(scopes: &[String]) -> String {
     scopes
         .iter()
         .flat_map(|s| s.split([' ', ',']))
         .filter(|s| !s.is_empty())
         .map(|s| {
-            if s.contains("://") {
+            if s.contains("://") || matches!(s, "openid" | "email" | "profile") {
                 s.to_string()
             } else {
                 format!("https://www.googleapis.com/auth/{s}")

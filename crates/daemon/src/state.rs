@@ -343,10 +343,13 @@ fn guarded_values(
             out.push((format!("{}.basic", meta.name), pair));
         }
     }
-    // A key file is guarded through its `private_key` field; what
-    // else it holds (an email, a project id) is no secret.
+    // A key file is guarded through its private key; what else it holds (an
+    // email, a project id) is no secret. Not every stored one has the field: an
+    // older version and MCP's store_secret did not write it.
     if meta.kind != SecretKind::GcpServiceAccount {
         out.push((meta.name.clone(), r.value));
+    } else if !r.fields.contains_key("private_key") {
+        out.push(key_file_guard(&meta.name, &r));
     }
     for (k, v) in r.fields {
         let open = match k.as_str() {
@@ -366,11 +369,33 @@ fn guarded_values(
     }
 }
 
+/// What to guard for a key file with no `private_key` field: the key inside it,
+/// or the whole file when it cannot be read as one.
+fn key_file_guard(
+    name: &str,
+    r: &unseenkey_core::vault::Revealed,
+) -> (String, unseenkey_core::crypto::SecretBytes) {
+    match adapters::service_account(r) {
+        Ok(account) => (
+            format!("{name}.private_key"),
+            unseenkey_core::crypto::SecretBytes::from_slice(account.private_key.as_bytes()),
+        ),
+        Err(_) => (name.to_string(), r.value.clone()),
+    }
+}
+
 impl AppState {
     /// Lock the vault if it is unlocked: audit with `reason`, drop keys, clear
     /// the scrubber, notify subscribers. Shared by the API, the idle timer and
     /// the OS hooks. Returns whether anything changed.
     pub async fn lock_vault(&self, reason: &'static str) -> bool {
+        // A sign-in under way gets a moment to finish, so a refresh token the
+        // provider just rotated is saved rather than lost. Not longer: locking
+        // must not wait on someone else's server. A later one finds the vault
+        // locked and keeps nothing.
+        let sign_in = tokio::time::timeout(std::time::Duration::from_secs(3), self.oauth.lock())
+            .await
+            .ok();
         {
             let mut v = self.vault.lock().await;
             if v.is_locked() {
@@ -396,7 +421,10 @@ impl AppState {
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
-        self.oauth.lock().await.clear();
+        match sign_in {
+            Some(mut cache) => cache.clear(),
+            None => self.oauth.lock().await.clear(),
+        }
         self.emit(Event::Locked { reason });
         tracing::info!(reason, "vault locked");
         true
@@ -777,5 +805,33 @@ mod tests {
         assert_eq!(w.minute.len(), 3);
         assert_eq!(w.day.len(), 6);
         assert!(UsageWindow::seeded(&[], now_ms, now).day.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod key_file_tests {
+    use super::key_file_guard;
+    use std::collections::BTreeMap;
+    use unseenkey_core::crypto::SecretBytes;
+    use unseenkey_core::vault::Revealed;
+
+    #[test]
+    fn a_key_file_without_its_field_still_has_its_key_guarded() {
+        let file = r#"{"type":"service_account","client_email":"bot@p.iam.gserviceaccount.com","private_key":"-----BEGIN PRIVATE KEY-----\nabcdefghijklmnopqrstuvwxyz\n-----END PRIVATE KEY-----\n","token_uri":"https://oauth2.googleapis.com/token"}"#;
+        let r = Revealed {
+            value: SecretBytes::from(file),
+            fields: BTreeMap::new(),
+        };
+        let (name, value) = key_file_guard("gsc", &r);
+        assert_eq!(name, "gsc.private_key");
+        let text = std::str::from_utf8(value.expose()).unwrap();
+        assert!(text.contains("abcdefghijklmnopqrstuvwxyz"), "{text}");
+        assert!(!text.contains("client_email"), "{text}");
+        // Not readable as a key file: all of it, rather than nothing.
+        let r = Revealed {
+            value: SecretBytes::from("not a key file, but a value all the same"),
+            fields: BTreeMap::new(),
+        };
+        assert_eq!(key_file_guard("gsc", &r).0, "gsc");
     }
 }

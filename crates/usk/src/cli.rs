@@ -682,7 +682,6 @@ fn add(
     test: bool,
 ) -> Result<(), CliError> {
     let c = unlocked(paths)?;
-    let scope = unseenkey_core::providers::google_scopes(&scopes);
     // An OAuth client is four values; ask for each. (Piped with --stdin, the
     // JSON your OAuth tooling wrote is taken apart by the daemon instead.)
     if kind == Some(SecretKind::Oauth2Client) && !stdin && file.is_none() {
@@ -697,6 +696,12 @@ fn add(
         let client_secret = ask("Client secret (empty for a public client): ")?;
         let refresh_token = ask("Refresh token: ")?;
         let token_url = ask("Token URL (https://…/token): ")?;
+        // A bare scope is short for a Google URL only when this is Google.
+        let scope = if token_url.contains("googleapis.com") || token_url.contains("google.com") {
+            unseenkey_core::providers::google_scopes(&scopes)
+        } else {
+            unseenkey_core::providers::plain_scopes(&scopes)
+        };
         if client_id.is_empty() || refresh_token.is_empty() || token_url.is_empty() {
             return Err(CliError::general(
                 "a client id, a refresh token and a token URL are all required",
@@ -768,6 +773,15 @@ fn add(
     // (Both halves can also be given at once: two lines, a ~/.aws/credentials
     // section or `aws sts` JSON; the daemon takes those apart.)
     let mut fields = serde_json::Map::new();
+    let is_google = provider.as_deref() == Some("gcp")
+        || name.to_ascii_lowercase().contains("google")
+        || value_str.contains("service_account")
+        || value_str.contains("googleapis.com");
+    let scope = if is_google {
+        unseenkey_core::providers::google_scopes(&scopes)
+    } else {
+        unseenkey_core::providers::plain_scopes(&scopes)
+    };
     if !scope.is_empty() {
         fields.insert("scope".into(), json!(scope));
     }
@@ -1069,7 +1083,11 @@ fn import(paths: &VaultPaths, env_path: &Path, all: bool, dry_run: bool) -> Resu
     let own_hosts = unseenkey_core::import::own_hosts(&entries);
     let candidates: Vec<_> = entries
         .into_iter()
-        .filter(|e| (all || e.looks_secret) && !joined.contains(&e.key))
+        .filter(|e| {
+            let account_id = std::str::from_utf8(e.value.expose())
+                .is_ok_and(unseenkey_core::providers::is_bare_sid);
+            (all || (e.looks_secret && !account_id)) && !joined.contains(&e.key)
+        })
         .collect();
     if candidates.is_empty() {
         println!(
@@ -2164,10 +2182,21 @@ fn secret_set(
         body.insert("username".into(), json!(u));
     }
     if !scopes.is_empty() {
-        body.insert(
-            "scope".into(),
-            json!(unseenkey_core::providers::google_scopes(&scopes)),
-        );
+        // A bare scope is short for a Google URL only when this key is Google's.
+        let meta = c.get(&format!("/v1/secrets/{name}"))?;
+        let is_google = meta["type"] == "gcp_service_account"
+            || meta["provider"] == "gcp"
+            || meta["upstreams"].as_array().is_some_and(|hosts| {
+                hosts
+                    .iter()
+                    .any(|h| h.as_str().is_some_and(|h| h.contains("googleapis.com")))
+            });
+        let scope = if is_google {
+            unseenkey_core::providers::google_scopes(&scopes)
+        } else {
+            unseenkey_core::providers::plain_scopes(&scopes)
+        };
+        body.insert("scope".into(), json!(scope));
     }
     if let Some(p) = provider {
         body.insert("provider".into(), json!(p));

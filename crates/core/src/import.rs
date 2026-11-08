@@ -69,21 +69,27 @@ pub fn own_hosts(entries: &[DotenvEntry]) -> alloc::collections::BTreeMap<String
         let Some(var) = p.env.get("base_url") else {
             continue;
         };
+        // The variable with the longest matching prefix wins, and only among those
+        // that hold a usable host: `PROD_SUPABASE_URL` over a `SUPABASE_URL` above
+        // it, and a real URL over one already pointing at the broker.
         let host = entries
             .iter()
-            .find(|o| {
-                o.key.strip_suffix(var.as_str()).is_some_and(|prefix| {
-                    let own = PUBLIC_PREFIXES
-                        .iter()
-                        .find_map(|f| prefix.strip_prefix(f))
-                        .unwrap_or(prefix);
-                    own.is_empty() || e.key.starts_with(own)
-                })
+            .rev()
+            .filter_map(|o| {
+                let prefix = o.key.strip_suffix(var.as_str())?;
+                let own = PUBLIC_PREFIXES
+                    .iter()
+                    .find_map(|f| prefix.strip_prefix(f))
+                    .unwrap_or(prefix);
+                if !own.is_empty() && !e.key.starts_with(own) {
+                    return None;
+                }
+                let url = core::str::from_utf8(o.value.expose()).ok()?;
+                let host = crate::broker::Upstream::parse(url.trim()).ok()?.host;
+                crate::policy::eval::host_allowed(&p.upstreams, &host).then_some((own.len(), host))
             })
-            .and_then(|o| core::str::from_utf8(o.value.expose()).ok())
-            .and_then(|url| crate::broker::Upstream::parse(url.trim()).ok())
-            .map(|u| u.host)
-            .filter(|h| crate::policy::eval::host_allowed(&p.upstreams, h));
+            .max_by_key(|(own, _)| *own)
+            .map(|(_, host)| host);
         if let Some(host) = host {
             hosts.insert(e.key.clone(), host);
         }
@@ -187,6 +193,14 @@ mod tests {
             Some("prod.supabase.co")
         );
         // Already pointing at the broker, or somewhere else: says nothing.
+        // The closest name wins wherever it is in the file, and a URL already
+        // pointing at the broker does not hide a real one after it.
+        let text = "SUPABASE_URL=https://dev.supabase.co\nPROD_SUPABASE_URL=https://prod.supabase.co\nPROD_SUPABASE_KEY=sb_secret_abc\n";
+        let hosts = own_hosts(&parse_dotenv(text));
+        assert_eq!(hosts["PROD_SUPABASE_KEY"], "prod.supabase.co");
+        let text = "SUPABASE_URL=http://127.0.0.1:8080/p/supabase\nNEXT_PUBLIC_SUPABASE_URL=https://abc.supabase.co\nSUPABASE_KEY=sb_secret_abc\n";
+        let hosts = own_hosts(&parse_dotenv(text));
+        assert_eq!(hosts["SUPABASE_KEY"], "abc.supabase.co");
         for url in ["http://127.0.0.1:8080/p/supabase", "https://evil.example"] {
             let text = alloc::format!("SUPABASE_KEY=sb_secret_abc\nSUPABASE_URL={url}\n");
             assert!(own_hosts(&parse_dotenv(&text)).is_empty(), "{url}");

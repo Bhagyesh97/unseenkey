@@ -476,14 +476,26 @@ impl Preset {
 /// The per-customer provider a key must not go to on the strength of a wildcard,
 /// if any: its own provider, or one whose wildcard it holds whatever its provider.
 pub fn unpinned(provider: Option<&str>, upstreams: &[String]) -> Option<&'static Preset> {
-    if !upstreams.iter().any(|u| u.contains('*')) {
+    let wildcards: Vec<String> = upstreams
+        .iter()
+        .filter(|u| u.contains('*'))
+        .cloned()
+        .collect();
+    if wildcards.is_empty() {
         return None;
     }
     provider
         .and_then(get)
         .filter(|p| p.pin_needed(upstreams))
         .or_else(|| {
-            all().find(|p| p.tenant.is_some() && p.upstreams.iter().any(|w| upstreams.contains(w)))
+            // Whatever it is written as: `*.supabase.co.` and `*.co` reach a
+            // stranger's project just as `*.supabase.co` does.
+            all().find(|p| {
+                p.tenant.is_some()
+                    && p.upstreams.iter().any(|own| {
+                        crate::policy::eval::host_allowed(&wildcards, &own.replace('*', "x"))
+                    })
+            })
         })
 }
 
@@ -982,6 +994,17 @@ mod tests {
                     p.id
                 );
             }
+        }
+    }
+
+    #[test]
+    fn a_wildcard_over_a_customers_host_needs_a_pin_however_it_is_written() {
+        let hosts = |h: &str| vec![h.to_string()];
+        for wild in ["*.supabase.co", "*.supabase.co.", "*.SUPABASE.co", "*.co"] {
+            assert!(unpinned(None, &hosts(wild)).is_some(), "{wild}");
+        }
+        for fine in ["mine.supabase.co", "*.example.com", "api.openai.com"] {
+            assert!(unpinned(None, &hosts(fine)).is_none(), "{fine}");
         }
     }
 

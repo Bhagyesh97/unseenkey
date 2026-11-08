@@ -18,7 +18,7 @@ use unseenkey_core::audit::kinds;
 use unseenkey_core::broker::{adapters, BrokerError};
 use unseenkey_core::presets::{self, Auth, Preset};
 use unseenkey_core::providers;
-use unseenkey_core::vault::{Revealed, SecretKind, SecretMeta};
+use unseenkey_core::vault::{SecretKind, SecretMeta};
 use zeroize::Zeroizing;
 
 /// What a pasted key looks like.
@@ -114,11 +114,7 @@ fn not_tested(provider: Option<&Preset>, message: impl Into<String>) -> Json<Tes
 
 /// A service account is tested by signing in: Google checks the key and the
 /// scopes. It does not show what the account was added to; each API decides that.
-async fn test_service_account(
-    s: &Arc<AppState>,
-    meta: &SecretMeta,
-    revealed: &Revealed,
-) -> Json<TestResult> {
+async fn test_service_account(s: &Arc<AppState>, meta: &SecretMeta) -> Json<TestResult> {
     let display = meta
         .provider
         .as_deref()
@@ -126,7 +122,7 @@ async fn test_service_account(
         .map(|p| p.display.clone());
     let attempt = {
         s.oauth.lock().await.forget(&meta.secret_id);
-        crate::oauth::access_token(s, meta, revealed, crate::proxy::now_ms()).await
+        crate::oauth::access_token(s, meta, crate::proxy::now_ms()).await
     };
     let (ok, message) = match attempt {
         Ok(_) => (
@@ -173,7 +169,7 @@ pub async fn test_secret(
         (v.get(&id)?.clone(), v.reveal(&id)?)
     };
     if meta.kind == SecretKind::GcpServiceAccount {
-        return Ok(test_service_account(&s, &meta, &revealed).await);
+        return Ok(test_service_account(&s, &meta).await);
     }
     let Some(preset) = meta.provider.as_deref().and_then(presets::get) else {
         return Ok(not_tested(
@@ -232,6 +228,17 @@ pub async fn test_secret(
         .clone()
         .or_else(|| preset.pinned_host(&meta.upstreams).map(str::to_string))
         .unwrap_or_else(|| preset.upstreams[0].clone());
+    // A host stored by an older version may hold what a URL parser reads as
+    // something else, and the key goes nowhere on that.
+    if unseenkey_core::broker::Upstream::parse(&host).is_err() {
+        return Ok(not_tested(
+            Some(preset),
+            format!(
+                "the host stored for this key is not a valid host name, so it was not sent. Fix it with `usk secret set {} --upstream <host>`",
+                meta.name
+            ),
+        ));
+    }
     // The host lock holds for tests too: never send the key where it may not go.
     if !unseenkey_core::policy::eval::host_allowed(&meta.upstreams, &host) {
         return Ok(not_tested(

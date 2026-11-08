@@ -98,10 +98,47 @@ fn policy_path(raw: &str) -> Option<String> {
     }
     let plain = String::from_utf8(out).ok()?;
     let lower = plain.to_ascii_lowercase();
-    let hidden = ["%2f..", "..%2f", "%5c..", "..%5c"]
+    let hidden = ["%2f..", "..%2f", "%5c..", "..%5c", "..;"]
         .iter()
         .any(|p| lower.contains(p));
     (!hidden).then_some(plain)
+}
+
+/// The same path as a server that decodes `%2F` and `%5C` or drops `;` parameters
+/// would route it, when that differs. Deny rules and approval paths hold for this
+/// reading too; the path sent stays as it was.
+fn alternate_path(path: &str) -> Option<String> {
+    let lower = path.to_ascii_lowercase();
+    if !lower.contains("%2f") && !lower.contains("%5c") && !path.contains(';') {
+        return None;
+    }
+    let mut decoded = String::with_capacity(path.len());
+    let mut rest = path;
+    while let Some(c) = rest.chars().next() {
+        let head = rest.get(..3).map(str::to_ascii_lowercase);
+        if matches!(head.as_deref(), Some("%2f" | "%5c")) {
+            decoded.push('/');
+            rest = &rest[3..];
+        } else if c == ';' {
+            let end = rest.find('/').unwrap_or(rest.len());
+            rest = &rest[end..];
+        } else {
+            decoded.push(c);
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    let url = reqwest::Url::parse(&format!("https://policy.invalid{decoded}")).ok()?;
+    (url.path() != path).then(|| url.path().to_string())
+}
+
+/// A stripped header that stays in template mode: one that holds a credential,
+/// with a placeholder for where the secret goes. Not `Host` or `X-Original-URL`:
+/// those were stripped for what they do, whatever they hold.
+fn holds_placeholder_credential(name: &str, value: &[u8]) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "authorization" | "proxy-authorization" | "cookie"
+    ) && value.windows(6).any(|w| w == b"{{usk:")
 }
 
 /// An SDK with a handle for its secret sends `base64(account:handle)`, or
@@ -791,6 +828,15 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
             caller: Some(&call.caller),
         };
         let decision = evaluate(&handle.policy, &preq, now, usage);
+        let decision = match alternate_path(&pol_path) {
+            Some(alternate) => unseenkey_core::policy::judge_alternate(
+                &handle.policy,
+                call.method.as_str(),
+                &alternate,
+                decision,
+            ),
+            None => decision,
+        };
         if let Decision::Deny(reason) = &decision {
             let status = match reason {
                 DenyReason::RateLimitedMinute | DenyReason::RateLimitedDay => {
@@ -958,7 +1004,9 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
             let scrubber = s.scrubber_snapshot();
             let mut hits = scrubber.find(&call.body);
             for (name, value) in call.headers.iter() {
-                if is_stripped(name.as_str(), STRIP_REQUEST_HEADERS) {
+                if is_stripped(name.as_str(), STRIP_REQUEST_HEADERS)
+                    && !holds_placeholder_credential(name.as_str(), value.as_bytes())
+                {
                     continue;
                 }
                 hits.extend(scrubber.find(value.as_bytes()));
@@ -1036,7 +1084,7 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
         meta.kind,
         SecretKind::Oauth2Client | SecretKind::GcpServiceAccount
     ) {
-        match crate::oauth::access_token(&s, &meta, &revealed, now_ms()).await {
+        match crate::oauth::access_token(&s, &meta, now_ms()).await {
             Ok(token) => Some(token),
             Err(e) => {
                 let mut vault = s.vault.lock().await;
@@ -1172,7 +1220,8 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
         // template mode a stripped header that carries a placeholder is the
         // caller saying where the secret goes (`Authorization: Bearer
         // {{usk:name}}`), so it stays and is filled in below.
-        let carries_placeholder = template && value.as_bytes().windows(6).any(|w| w == b"{{usk:");
+        let carries_placeholder =
+            template && holds_placeholder_credential(name.as_str(), value.as_bytes());
         if is_stripped(name.as_str(), STRIP_REQUEST_HEADERS) && !carries_placeholder {
             continue;
         }
@@ -1319,11 +1368,24 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
     }
 
     // From here it may reach the provider, so it goes in the log whatever happens.
-    let request_out = s.request_going_out(json!({
-        "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
-        "caller": call.caller, "host": upstream.host, "method": call.method, "path": call.path,
-        "bytes_in": call.body.len(),
-    }));
+    // Checked and registered under the vault lock, so a lock either comes after
+    // and writes this request down, or came before and it does not go. A sign-in
+    // above can take a while.
+    let request_out = {
+        let vault = s.vault.lock().await;
+        if vault.is_locked() {
+            return err(
+                StatusCode::UNAUTHORIZED,
+                "vault_locked",
+                "the vault was locked while waiting",
+            );
+        }
+        s.request_going_out(json!({
+            "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
+            "caller": call.caller, "host": upstream.host, "method": call.method, "path": call.path,
+            "bytes_in": call.body.len(),
+        }))
+    };
     let upstream_resp = match s
         .http
         .request(method.clone(), &url)
@@ -1475,6 +1537,53 @@ mod tests {
         }
         for raw in ["/a%2f..%2fb", "/a%2F..%2Fb", "/a%5c..%5cb", "/..%2fb"] {
             assert_eq!(policy_path(raw), None, "{raw}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod path_view_tests {
+    use super::{alternate_path, holds_placeholder_credential, policy_path};
+
+    #[test]
+    fn a_path_is_also_read_as_a_server_may_read_it() {
+        assert_eq!(alternate_path("/v1/keys"), None);
+        assert_eq!(alternate_path("/v1%2Fkeys").as_deref(), Some("/v1/keys"));
+        assert_eq!(alternate_path("/v1%5ckeys").as_deref(), Some("/v1/keys"));
+        assert_eq!(alternate_path("/v1;x=1/keys").as_deref(), Some("/v1/keys"));
+        assert_eq!(alternate_path("/a%2F..%2Fkeys").as_deref(), Some("/keys"));
+        // Text that is not plain ASCII passes through untouched.
+        assert_eq!(alternate_path("/é%2Fk").as_deref(), Some("/%C3%A9/k"));
+    }
+
+    #[test]
+    fn a_path_with_dots_and_parameters_is_refused() {
+        assert!(policy_path("/rest/search/..;/issue").is_none());
+        assert!(policy_path("/rest/search/ok").is_some());
+    }
+
+    #[test]
+    fn only_a_credential_header_stays_for_its_placeholder() {
+        for name in ["Authorization", "proxy-authorization", "cookie"] {
+            assert!(
+                holds_placeholder_credential(name, b"Bearer {{usk:k}}"),
+                "{name}"
+            );
+        }
+        assert!(!holds_placeholder_credential(
+            "authorization",
+            b"Bearer plain"
+        ));
+        for name in [
+            "host",
+            "x-original-url",
+            "x-http-method-override",
+            "transfer-encoding",
+        ] {
+            assert!(
+                !holds_placeholder_credential(name, b"/admin?t={{usk:k}}"),
+                "{name}"
+            );
         }
     }
 }

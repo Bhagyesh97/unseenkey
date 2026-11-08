@@ -1145,3 +1145,73 @@ async fn naming_the_provider_keeps_the_owners_own_host() {
     let (_, s) = c.get("/v1/secrets/eu");
     assert!(s["upstreams"].as_array().unwrap().len() > 1, "{s}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn twilio_read_only_keeps_accounts_and_keys_out_in_every_form() {
+    let (_d, r, c) = setup().await;
+    let (code, _) = c.post(
+        "/v1/secrets",
+        json!({ "name": "tw", "value": TWILIO_TOKEN, "fields": { "username": TWILIO_SID }, "provider": "twilio" }),
+    );
+    assert!(code < 300, "{code}");
+    let (code, h) = c.post(
+        "/v1/handles",
+        json!({ "secret": "tw", "label": "ro", "preset_policy": "twilio:read-only" }),
+    );
+    assert!(code < 300, "{code}: {h}");
+    let handle = h["handle"].as_str().unwrap().to_string();
+    let base = format!("http://{}", r.addr);
+    let get = |path: &str| {
+        let answer = c
+            .agent
+            .get(&format!("{base}/p/twilio{path}"))
+            .set("Authorization", &format!("Bearer {handle}"))
+            .call();
+        match answer {
+            Ok(a) => a.status(),
+            Err(ureq::Error::Status(code, _)) => code,
+            Err(e) => panic!("transport: {e}"),
+        }
+    };
+    for path in [
+        "/2010-04-01/Accounts",
+        "/2010-04-01/Accounts.json",
+        "/2010-04-01/Accounts.xml",
+        "/2010-04-01/Accounts/AC1",
+        "/2010-04-01/Accounts/AC1.json",
+        "/2010-04-01/Accounts/AC1.xml",
+        "/2010-04-01/Accounts/AC1/Keys",
+        "/2010-04-01/Accounts/AC1/Keys.xml",
+        "/2010-04-01/Accounts/AC1/Keys/SK1.xml",
+        // Written so that one segment hides what a server may read as two.
+        "/2010-04-01%2FAccounts.xml",
+        "/2010-04-01/Accounts%2FAC1%2FKeys.xml",
+    ] {
+        assert_eq!(get(path), 403, "{path}");
+    }
+    // What the policy is for gets through to the provider, which here says 401.
+    assert_eq!(get("/2010-04-01/Accounts/AC1/Messages.json"), 401);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_host_pattern_that_is_too_wide_or_malformed_is_refused() {
+    let (_d, _r, c) = setup().await;
+    for (i, bad) in ["*.co", "*", "*.", "a..*.example.com", "*.exa mple.com"]
+        .iter()
+        .enumerate()
+    {
+        let (code, v) = c.post(
+            "/v1/secrets",
+            json!({ "name": format!("wide-{i}"), "value": "a-key-of-no-known-shape-abcdefgh", "upstreams": [bad] }),
+        );
+        assert_eq!(code, 400, "{bad}: {v}");
+        assert_eq!(v["error"], "invalid_upstream", "{bad}: {v}");
+    }
+    // A trailing dot is tidied away.
+    let (code, v) = c.post(
+        "/v1/secrets",
+        json!({ "name": "tidy", "value": "another-key-no-known-shape-abcdef", "upstreams": ["*.example.com."] }),
+    );
+    assert!(code < 300, "{code}: {v}");
+    assert_eq!(v["upstreams"], json!(["*.example.com"]));
+}

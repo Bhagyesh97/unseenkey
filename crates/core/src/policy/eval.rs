@@ -193,7 +193,7 @@ pub fn evaluate(policy: &Policy, req: &Request<'_>, now_unix_ms: i64, usage: Usa
                 .approval
                 .paths
                 .iter()
-                .find(|p| p.matches(req.method, req.path))
+                .find(|p| p.matches_any_case(req.method, req.path))
             {
                 Some(p) => Decision::NeedsApproval {
                     rule,
@@ -203,6 +203,42 @@ pub fn evaluate(policy: &Policy, req: &Request<'_>, now_unix_ms: i64, usage: Usa
             }
         }
     }
+}
+
+/// Judge the same request again as a server may read it (`alternate`: an encoded
+/// slash decoded, say). Only what restricts counts: a deny rule refuses, and an
+/// approval path asks. An allow rule does not have to match, because a request
+/// with `%2F` in one segment is usually just that, and must keep working.
+pub fn judge_alternate(
+    policy: &Policy,
+    method: &str,
+    alternate: &str,
+    decision: Decision,
+) -> Decision {
+    if matches!(decision, Decision::Deny(_)) {
+        return decision;
+    }
+    if let Some(d) = policy
+        .deny
+        .iter()
+        .find(|r| r.matches_any_case(method, alternate))
+    {
+        return Decision::Deny(DenyReason::DeniedByRule(d.clone()));
+    }
+    if let (Decision::Allow(rule), ApprovalMode::Paths) = (&decision, &policy.approval.mode) {
+        if let Some(p) = policy
+            .approval
+            .paths
+            .iter()
+            .find(|p| p.matches_any_case(method, alternate))
+        {
+            return Decision::NeedsApproval {
+                rule: rule.clone(),
+                scope: ApprovalScope::Path(p.clone()),
+            };
+        }
+    }
+    decision
 }
 
 /// Host allow-list check, case-insensitive. A pattern is an exact host name
@@ -548,5 +584,48 @@ mod tests {
         assert_eq!(r.code(), "policy_denied");
         assert!(r.message().contains("POST /v1/refunds"));
         assert_eq!(DenyReason::RateLimitedDay.code(), "rate_limited");
+    }
+}
+
+#[cfg(test)]
+mod alternate_tests {
+    use super::*;
+
+    fn policy(text: &str) -> Policy {
+        Policy::from_toml(text).unwrap()
+    }
+
+    #[test]
+    fn only_what_restricts_counts_for_another_reading_of_the_path() {
+        let p = policy("allow = [\"GET /sites/*\"]\ndeny = [\"GET /v1/keys/**\"]");
+        let allow = Decision::Allow(p.allow[0].clone());
+        // An allow rule need not match: `%2F` in one segment must keep working.
+        let kept = judge_alternate(&p, "GET", "/sites/https:/example.com/", allow.clone());
+        assert!(kept.is_allow());
+        // A deny rule holds.
+        let refused = judge_alternate(&p, "GET", "/V1/keys/k1", allow);
+        assert!(matches!(
+            refused,
+            Decision::Deny(DenyReason::DeniedByRule(_))
+        ));
+    }
+
+    #[test]
+    fn an_approval_path_holds_in_any_case() {
+        let p = policy(
+            "allow = [\"* /**\"]\n[approval]\nmode = \"paths\"\npaths = [\"POST /v1/refunds\"]",
+        );
+        let req = Request {
+            method: "POST",
+            path: "/V1/Refunds",
+            host: "api.stripe.com",
+            body_len: None,
+            caller: None,
+        };
+        let d = evaluate(&p, &req, 0, Usage::default());
+        assert!(matches!(d, Decision::NeedsApproval { .. }), "{d:?}");
+        let allow = Decision::Allow(p.allow[0].clone());
+        let d = judge_alternate(&p, "POST", "/v1/refunds", allow);
+        assert!(matches!(d, Decision::NeedsApproval { .. }), "{d:?}");
     }
 }

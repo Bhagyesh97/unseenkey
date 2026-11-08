@@ -75,8 +75,10 @@ enum Seg {
     Lit(String),
     One,
     Many,
-    /// `*.json`, `SM*`: one segment with this start and end.
-    Part(String, String),
+    /// `*.json`, `SM*`, `*keys*`: one segment holding these pieces in order, the
+    /// first at its start and the last at its end. A star may stand for nothing,
+    /// so a deny on `user*` also covers `user`.
+    Part(Vec<String>),
 }
 
 /// A path pattern.
@@ -107,8 +109,7 @@ impl PathGlob {
                 "*" => Seg::One,
                 "**" => Seg::Many,
                 part if part.contains('*') => {
-                    let (start, end) = part.split_once('*').unwrap_or((part, ""));
-                    Seg::Part(start.to_string(), end.to_string())
+                    Seg::Part(part.split('*').map(str::to_string).collect())
                 }
                 lit => Seg::Lit(lit.to_string()),
             })
@@ -123,11 +124,7 @@ impl PathGlob {
                     Seg::Lit(l) => t.push_str(l),
                     Seg::One => t.push('*'),
                     Seg::Many => t.push_str("**"),
-                    Seg::Part(start, end) => {
-                        t.push_str(start);
-                        t.push('*');
-                        t.push_str(end);
-                    }
+                    Seg::Part(pieces) => t.push_str(&pieces.join("*")),
                 }
             }
             t
@@ -156,17 +153,34 @@ impl PathGlob {
                 Some((p, tail)) if p == l => Self::match_from(rest, tail),
                 _ => false,
             },
-            Some((Seg::Part(start, end), rest)) => match parts.split_first() {
-                Some((p, tail))
-                    if p.len() > start.len() + end.len()
-                        && p.starts_with(start.as_str())
-                        && p.ends_with(end.as_str()) =>
-                {
-                    Self::match_from(rest, tail)
-                }
+            Some((Seg::Part(pieces), rest)) => match parts.split_first() {
+                Some((p, tail)) if Self::part_matches(pieces, p) => Self::match_from(rest, tail),
                 _ => false,
             },
         }
+    }
+
+    fn part_matches(pieces: &[String], text: &str) -> bool {
+        let Some((first, others)) = pieces.split_first() else {
+            return false;
+        };
+        let Some((last, middle)) = others.split_last() else {
+            return text == first;
+        };
+        if text.len() < first.len() + last.len()
+            || !text.starts_with(first.as_str())
+            || !text.ends_with(last.as_str())
+        {
+            return false;
+        }
+        let mut left = &text[first.len()..text.len() - last.len()];
+        for piece in middle {
+            match left.find(piece.as_str()) {
+                Some(at) => left = &left[at + piece.len()..],
+                None => return false,
+            }
+        }
+        true
     }
 
     /// Canonical text.
@@ -288,10 +302,28 @@ mod part_tests {
     fn a_wildcard_inside_a_segment() {
         let g = PathGlob::parse("/Accounts/*/Keys/*.json").unwrap();
         assert!(g.matches("/Accounts/AC1/Keys/SK1.json"));
-        assert!(!g.matches("/Accounts/AC1/Keys/.json"));
+        assert!(g.matches("/Accounts/AC1/Keys/.json"));
         assert!(!g.matches("/Accounts/AC1/Keys/SK1.xml"));
         assert!(!g.matches("/Accounts/AC1/Keys/a/b.json"));
         assert_eq!(g.as_str(), "/Accounts/*/Keys/*.json");
+    }
+
+    #[test]
+    fn a_star_inside_a_segment_may_be_empty_and_may_repeat() {
+        let glob = |p: &str| PathGlob::parse(p).unwrap();
+        assert!(glob("/team/user*").matches("/team/user"));
+        assert!(glob("/team/user*").matches("/team/users"));
+        assert!(!glob("/team/user*").matches("/team/use"));
+        assert!(glob("/v1/*keys*").matches("/v1/keys"));
+        assert!(glob("/v1/*keys*").matches("/v1/api-keys"));
+        assert!(glob("/v1/*keys*").matches("/v1/keys-old"));
+        assert!(!glob("/v1/*keys*").matches("/v1/key"));
+        assert!(glob("/a*b*c").matches("/abc"));
+        assert!(glob("/a*b*c").matches("/a1b2c"));
+        assert!(!glob("/a*b*c").matches("/acb"));
+        // The two ends may not overlap.
+        assert!(!glob("/ab*bc").matches("/abc"));
+        assert_eq!(glob("/v1/*keys*").as_str(), "/v1/*keys*");
     }
 
     #[test]

@@ -1031,10 +1031,30 @@ fn normalize_upstreams(list: &[String]) -> Result<Vec<String>, ApiError> {
             continue;
         }
         let host = if s.contains('*') {
-            s.trim_start_matches("https://")
+            let host = s
+                .trim_start_matches("https://")
                 .trim_start_matches("http://")
                 .trim_end_matches('/')
-                .to_ascii_lowercase()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            let labels: Vec<&str> = host.split('.').collect();
+            let well_formed = labels.iter().all(|l| {
+                !l.is_empty()
+                    && (*l == "*"
+                        || l.bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
+            });
+            // `*.co` would let a key go to any site under it.
+            if !well_formed || labels.iter().filter(|l| **l != "*").count() < 2 {
+                return Err(ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_upstream",
+                    format!(
+                        "{raw:?} is too wide or not a host pattern; give one such as *.example.com"
+                    ),
+                ));
+            }
+            host
         } else {
             unseenkey_core::broker::Upstream::parse(s)
                 .map_err(|e| {

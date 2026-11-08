@@ -224,7 +224,7 @@ A provider the project does not ship can be added without a rebuild: `<vault dir
 ## Egress guard and scrubber details
 
 - Build an Aho-Corasick automaton over all secret values on unlock and rebuild on change. Values shorter than 12 bytes are excluded (too many false positives) and flagged in the UI as "too short to guard".
-- Also match `base64(value)`, `urlencode(value)`, and JSON-escaped forms.
+- Also match `base64(value)`, `urlencode(value)`, and JSON-escaped forms. A multi-line value over 256 bytes is matched by its lines of 32 bytes or more in streams, since a stream holds back the length of the longest pattern, and whole as well in anything held in one piece (requests, whole replies). With no such line it is matched whole everywhere.
 - Scrubber replacement keeps the JSON valid where possible by replacing inside string literals; otherwise plain replacement.
 - False positive path: if a legitimate response contains a stored value (e.g. the user stored their own account id as a secret), the owner sees `[REDACTED:usk:name]` and can mark the secret as `no_scrub`.
 

@@ -520,7 +520,7 @@ async fn request_access(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args
                     .policy
                     .deny
                     .iter()
-                    .any(|d| d.matches(rule.method.as_str(), rule.path.as_str()))
+                    .any(|d| d.matches_any_case(rule.method.as_str(), rule.path.as_str()))
                     || !handle
                         .policy
                         .allow

@@ -503,12 +503,16 @@ impl<S: Storage, C: Clock> Vault<S, C> {
             .collect();
         let mut cursor = start + 1;
         loop {
-            let batch = self.audit_events(cursor, Some(audit::kinds::USE), 1024)?;
+            // A request cut off may have reached the provider, so it counts too.
+            let batch = self.audit_events(cursor, None, 1024)?;
             let Some(last) = batch.last() else {
                 break;
             };
             cursor = last.seq + 1;
-            for ev in &batch {
+            for ev in batch
+                .iter()
+                .filter(|e| e.kind == audit::kinds::USE || e.kind == audit::kinds::USE_UNFINISHED)
+            {
                 let Some(id) = ev
                     .body
                     .get("handle")

@@ -21,6 +21,12 @@ fn findings(entries: &[DotenvEntry]) -> Vec<Finding<'_>> {
     entries
         .iter()
         .filter(|e| e.looks_secret)
+        // An account id stays where the SDK reads it. In the vault it would be a
+        // value to guard, and block every call whose URL holds it.
+        .filter(|e| {
+            !core::str::from_utf8(e.value.expose())
+                .is_ok_and(unseenkey_core::providers::is_bare_sid)
+        })
         .map(|e| Finding {
             entry: e,
             preset: e

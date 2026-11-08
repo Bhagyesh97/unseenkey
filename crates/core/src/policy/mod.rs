@@ -18,7 +18,7 @@ pub mod explain;
 pub mod rules;
 pub mod schedule;
 
-pub use eval::{evaluate, ApprovalScope, Decision, DenyReason, Request, Usage};
+pub use eval::{evaluate, judge_alternate, ApprovalScope, Decision, DenyReason, Request, Usage};
 pub use explain::explain;
 pub use rules::{Method, Rule};
 pub use schedule::Schedule;

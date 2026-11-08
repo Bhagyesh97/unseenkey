@@ -17,6 +17,10 @@ pub const MIN_LEN: usize = 12;
 /// pattern would hold back the start of every streamed reply, for every secret.
 const LONG_VALUE: usize = 256;
 
+/// Shortest line of such a value worth guarding. A PEM key's lines are 64 long,
+/// and a shorter line (`apiVersion: v1` in a kubeconfig) may be anywhere.
+const LONG_VALUE_LINE: usize = 32;
+
 /// Redaction marker; the name is appended so owners can tell what leaked.
 pub const MARKER_PREFIX: &str = "[REDACTED:usk:";
 
@@ -28,6 +32,12 @@ pub struct Scrubber {
     names: Vec<String>,
     /// Longest pattern, for stream overlap.
     max_len: usize,
+    /// Long values whole, in all their encodings, for data held in one piece: an
+    /// outgoing request or a whole reply. Not for streams, which is why they are
+    /// apart. Base64 of a whole PEM key shares no text with base64 of its lines.
+    whole: Option<AhoCorasick>,
+    /// Pattern index in `whole` → owning secret name.
+    whole_names: Vec<String>,
 }
 
 /// One secret to guard.
@@ -86,6 +96,8 @@ impl Scrubber {
     pub fn new(secrets: &[Guarded<'_>]) -> Self {
         let mut patterns: Vec<Vec<u8>> = Vec::new();
         let mut names = Vec::new();
+        let mut whole_patterns: Vec<Vec<u8>> = Vec::new();
+        let mut whole_names = Vec::new();
         for g in secrets {
             let v = g.value.expose();
             if v.len() < MIN_LEN {
@@ -93,15 +105,33 @@ impl Scrubber {
             }
             let lines = core::str::from_utf8(v)
                 .ok()
-                .filter(|s| s.len() > LONG_VALUE && s.contains('\n'));
-            if let Some(text) = lines {
-                for line in text.lines().map(str::trim) {
-                    if line.len() >= MIN_LEN && !line.starts_with("-----") {
-                        for variant in variants(line.as_bytes()) {
+                .filter(|s| s.len() > LONG_VALUE && s.contains('\n'))
+                .map(|text| {
+                    text.lines()
+                        .map(str::trim)
+                        .filter(|l| l.len() >= LONG_VALUE_LINE && !l.starts_with("-----"))
+                        .collect::<Vec<_>>()
+                })
+                .filter(|lines| !lines.is_empty());
+            if let Some(lines) = lines {
+                for line in lines {
+                    // In `token: abc…` the secret is what follows the name, and a
+                    // reply may hold it alone.
+                    let tail = line
+                        .rsplit_once(": ")
+                        .or_else(|| line.split_once('='))
+                        .map(|(_, tail)| tail.trim())
+                        .filter(|tail| tail.len() >= LONG_VALUE_LINE);
+                    for part in core::iter::once(line).chain(tail) {
+                        for variant in variants(part.as_bytes()) {
                             patterns.push(variant);
                             names.push(g.name.to_string());
                         }
                     }
+                }
+                for variant in variants(v) {
+                    whole_patterns.push(variant);
+                    whole_names.push(g.name.to_string());
                 }
                 continue;
             }
@@ -111,17 +141,21 @@ impl Scrubber {
             }
         }
         let max_len = patterns.iter().map(Vec::len).max().unwrap_or(0);
-        let ac = if patterns.is_empty() {
-            None
-        } else {
-            Some(
+        let build = |patterns: &[Vec<u8>]| {
+            (!patterns.is_empty()).then(|| {
                 AhoCorasickBuilder::new()
                     .match_kind(MatchKind::LeftmostLongest)
-                    .build(&patterns)
-                    .expect("patterns are bounded and non-empty"),
-            )
+                    .build(patterns)
+                    .expect("patterns are bounded and non-empty")
+            })
         };
-        Self { ac, names, max_len }
+        Self {
+            ac: build(&patterns),
+            names,
+            max_len,
+            whole: build(&whole_patterns),
+            whole_names,
+        }
     }
 
     /// An empty scrubber that matches nothing.
@@ -136,14 +170,20 @@ impl Scrubber {
 
     /// Names of secrets found in `data`, deduplicated, in order of first hit.
     pub fn find(&self, data: &[u8]) -> Vec<String> {
-        let Some(ac) = &self.ac else {
-            return Vec::new();
-        };
         let mut out: Vec<String> = Vec::new();
-        for m in ac.find_iter(data) {
-            let n = &self.names[m.pattern().as_usize()];
+        let mut note = |n: &String| {
             if !out.iter().any(|o| o == n) {
                 out.push(n.clone());
+            }
+        };
+        if let Some(ac) = &self.ac {
+            for m in ac.find_iter(data) {
+                note(&self.names[m.pattern().as_usize()]);
+            }
+        }
+        if let Some(whole) = &self.whole {
+            for m in whole.find_iter(data) {
+                note(&self.whole_names[m.pattern().as_usize()]);
             }
         }
         out
@@ -152,6 +192,7 @@ impl Scrubber {
     /// True if any guarded value (or encoding) appears in `data`.
     pub fn contains(&self, data: &[u8]) -> bool {
         self.ac.as_ref().is_some_and(|ac| ac.is_match(data))
+            || self.whole.as_ref().is_some_and(|ac| ac.is_match(data))
     }
 
     fn marker(&self, pattern: usize, out: &mut Vec<u8>) {
@@ -163,15 +204,27 @@ impl Scrubber {
     /// Replace every occurrence with `[REDACTED:usk:<name>]`. Returns the new
     /// bytes and the number of replacements.
     pub fn scrub(&self, data: &[u8]) -> (Vec<u8>, usize) {
-        let Some(ac) = &self.ac else {
-            return (data.to_vec(), 0);
+        let (first, mut count) = match &self.whole {
+            Some(whole) => Self::replace(whole, &self.whole_names, data),
+            None => (data.to_vec(), 0),
         };
+        let Some(ac) = &self.ac else {
+            return (first, count);
+        };
+        let (out, more) = Self::replace(ac, &self.names, &first);
+        count += more;
+        (out, count)
+    }
+
+    fn replace(ac: &AhoCorasick, names: &[String], data: &[u8]) -> (Vec<u8>, usize) {
         let mut out = Vec::with_capacity(data.len());
         let mut last = 0;
         let mut count = 0;
         for m in ac.find_iter(data) {
             out.extend_from_slice(&data[last..m.start()]);
-            self.marker(m.pattern().as_usize(), &mut out);
+            out.extend_from_slice(MARKER_PREFIX.as_bytes());
+            out.extend_from_slice(names[m.pattern().as_usize()].as_bytes());
+            out.push(b']');
             last = m.end();
             count += 1;
         }
@@ -245,6 +298,51 @@ impl StreamScrubber {
 #[cfg(test)]
 mod pem_tests {
     use super::*;
+
+    #[test]
+    fn a_long_value_is_guarded_whole_where_it_can_be_and_its_ordinary_lines_are_not() {
+        use base64::Engine;
+        let line = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj";
+        let pem = format!(
+            "-----BEGIN PRIVATE KEY-----\n{}-----END PRIVATE KEY-----\n",
+            format!("{line}\n").repeat(8)
+        );
+        let value = SecretBytes::from(pem.as_str());
+        let s = Scrubber::new(&[Guarded {
+            name: "key",
+            value: &value,
+        }]);
+        // Base64 of the whole file shares no text with base64 of its lines.
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&pem);
+        assert_eq!(s.find(b64.as_bytes()), ["key"]);
+        assert!(s.contains(b64.as_bytes()));
+        let (clean, n) = s.scrub(format!("x{b64}y").as_bytes());
+        assert!(n >= 1 && !String::from_utf8_lossy(&clean).contains(&b64));
+        // Streams stay light: only the lines count towards what is held back.
+        assert!(s.max_len() < 200, "{}", s.max_len());
+
+        // Nothing but short lines: guarded whole, not left out.
+        let short = "abcdefghi\n".repeat(30);
+        let value = SecretBytes::from(short.as_str());
+        let s = Scrubber::new(&[Guarded {
+            name: "short",
+            value: &value,
+        }]);
+        assert_eq!(s.find(short.as_bytes()), ["short"]);
+
+        // A config's ordinary lines are not secrets, and traffic holding them is fine.
+        let config = format!(
+            "apiVersion: v1\nkind: Config\nclusters: []\n{}token: {line}\n",
+            "users: []\n".repeat(30)
+        );
+        let value = SecretBytes::from(config.as_str());
+        let s = Scrubber::new(&[Guarded {
+            name: "kube",
+            value: &value,
+        }]);
+        assert!(s.find(b"apiVersion: v1").is_empty());
+        assert_eq!(s.find(line.as_bytes()), ["kube"]);
+    }
 
     #[test]
     fn a_long_key_is_hidden_without_holding_back_streams() {

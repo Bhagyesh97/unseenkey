@@ -224,17 +224,33 @@ fn grant(meta: &SecretMeta, revealed: &Revealed) -> Result<Grant, OauthError> {
 pub async fn access_token(
     s: &Arc<AppState>,
     meta: &SecretMeta,
-    revealed: &Revealed,
     now: i64,
 ) -> Result<Zeroizing<String>, OauthError> {
     // One at a time: holding the cache also keeps a burst of requests from
     // each spending the (possibly single-use) refresh token.
     let mut cache = s.oauth.lock().await;
+    // A caller who read the key before queueing here may be behind: a newer
+    // version in the cache means someone else has just signed in.
     if let Some(c) = cache.tokens.get(&meta.secret_id) {
-        if c.version == meta.value_version && now < c.expires_at - SKEW_MS {
+        if c.version >= meta.value_version && now < c.expires_at - SKEW_MS {
             return Ok(c.token.clone());
         }
     }
+    // And the refresh token it read may be dead by now, so read it again.
+    let (meta, revealed) = {
+        let v = s.vault.lock().await;
+        match (v.get(&meta.secret_id), v.reveal(&meta.secret_id)) {
+            (Ok(fresh), Ok(revealed)) => (fresh.clone(), revealed),
+            _ => {
+                return Err(fail(
+                    StatusCode::UNAUTHORIZED,
+                    "vault_locked",
+                    "the vault was locked, or the key removed, while waiting to sign in",
+                ))
+            }
+        }
+    };
+    let (meta, revealed) = (&meta, &revealed);
     // A key that was just refused is refused again: fifty callers must not make
     // fifty attempts, and a provider may block a key that keeps failing.
     let tries = match cache.failed.get(&meta.secret_id) {
@@ -430,6 +446,15 @@ async fn sign_in(
     let mut version = meta.value_version;
     {
         let mut vault = s.vault.lock().await;
+        // Locked meanwhile: nothing may stay in memory after a lock.
+        if vault.is_locked() {
+            tracing::warn!(secret = %meta.secret_id, "vault locked during sign-in; the answer was discarded");
+            return Err(fail(
+                StatusCode::UNAUTHORIZED,
+                "vault_locked",
+                "the vault was locked while signing in; unlock it and try again",
+            ));
+        }
         let current = match &grant {
             Grant::Refresh(client) => Some(client.refresh_token.as_str()),
             Grant::ServiceAccount(..) => None,

@@ -104,9 +104,8 @@ Low severity, known and not yet fixed. We add to this list as we find things.
   host you name and cannot tell whether that project is really yours. `usk import`
   and `usk guard fix` take it from the `SUPABASE_URL` beside the key, so read a
   `.env` you did not write before importing it.
-- **One header goes unchecked.** On the template route, a header such as
-  `Authorization` that carries a placeholder is not checked for other stored values
-  before it goes out.
+- **Long values in streamed replies.** A multi-line value over 256 bytes, such as a PEM key, is hidden line by line in a streamed reply, because a stream cannot hold back its whole length. Its last short line is not hidden, and neither is base64 of the whole value in a stream. Requests and whole replies are checked for the whole value too.
+- **Encodings.** Scrubbing covers the value, base64, percent-encoding and JSON escaping. A program that transforms a value in some other way is not caught.
 
 ## Past security fixes
 
@@ -114,7 +113,7 @@ Details are in [CHANGELOG.md](CHANGELOG.md).
 
 | Version | Fixed |
 |---|---|
-| 0.1.9 | A handle could send the real key to another host; a Supabase or Jira key could go to a stranger's project; a failed key test could show the key; `..` got past policies; some requests went unrecorded; a preset file could send a key to another host during a key test |
+| 0.1.9 | A handle could send the real key to another host; a Supabase or Jira key could go to a stranger's project; a failed key test could show the key; `..` got past policies; some requests went unrecorded; a preset file could send a key to another host during a key test; a host name starting with `127.` could get a key in cleartext; paths could slip past deny rules and approvals |
 | 0.1.6 | A program with the session token could take over a connected AI tool's identity |
 | 0.1.5 | The session token was enough to reveal keys and approve requests; compressed replies were not scrubbed. From a full review of the code |
 
