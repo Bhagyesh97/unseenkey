@@ -28,6 +28,9 @@ const SUPABASE: &str = "sb_secret_abcdefghijklmnopqrstuvwxyz";
 const OLD_TOKEN: &str = "twilio-old-token-abcdefghijklmnop";
 const CF_USER: &str = "cfut_userTokenAbcdefghijklmnopqrstuvwxyz";
 const CF_ACCOUNT: &str = "cfat_accountTokenAbcdefghijklmnopqrstuvwxyz";
+const CF_LIMITED: &str = "cfat_limitedTokenAbcdefghijklmnopqrstuvwxyz";
+/// A Supabase-looking test of its own, kept out of `SUPABASE_CALLS`.
+const PROJECT_KEY: &str = "a-key-of-no-known-shape-0123456789";
 
 /// Calls that reached a Supabase host.
 static SUPABASE_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -50,7 +53,9 @@ async fn provider(req: Request) -> axum::response::Response {
         .to_string();
     let ok = match req.uri().path() {
         p if p.starts_with("/rest/v1/") => {
-            SUPABASE_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if auth != format!("Bearer {PROJECT_KEY}") {
+                SUPABASE_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
             auth == format!("Bearer {SUPABASE}")
         }
         // A reply already on its way when the key was replaced.
@@ -73,6 +78,10 @@ async fn provider(req: Request) -> axum::response::Response {
         "/v1/models" => auth == format!("Bearer {GOOD_XAI}"),
         // As Cloudflare does: this address takes user tokens only...
         "/client/v4/user/tokens/verify" => auth == format!("Bearer {CF_USER}"),
+        // A good token that may not list accounts.
+        "/client/v4/accounts" if auth == format!("Bearer {CF_LIMITED}") => {
+            return (axum::http::StatusCode::FORBIDDEN, "{}").into_response()
+        }
         // ...and this one both kinds.
         "/client/v4/accounts" => {
             auth == format!("Bearer {CF_USER}") || auth == format!("Bearer {CF_ACCOUNT}")
@@ -1084,6 +1093,15 @@ async fn a_token_of_either_kind_passes_the_key_test() {
         assert_eq!(t["tested"], true, "{name}: {t}");
         assert_eq!(t["ok"], works, "{name}: {t}");
     }
+    // Refused at the first address and 403 at the second says nothing either way.
+    let (code, _) = c.post(
+        "/v1/secrets",
+        json!({ "name": "cf-limited", "value": CF_LIMITED, "provider": "cloudflare" }),
+    );
+    assert!(code < 300, "{code}");
+    let (_, t) = c.post("/v1/secrets/cf-limited/test", json!({}));
+    assert_eq!(t["tested"], true, "{t}");
+    assert!(t["ok"].is_null(), "{t}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1092,7 +1110,7 @@ async fn naming_the_provider_keeps_the_owners_own_host() {
     // Saved without a provider, as an older service did, with the host already named.
     let (code, _) = c.post(
         "/v1/secrets",
-        json!({ "name": "project", "value": "a-key-of-no-known-shape-0123456789", "upstreams": ["mine.supabase.co"] }),
+        json!({ "name": "project", "value": PROJECT_KEY, "upstreams": ["mine.supabase.co"] }),
     );
     assert!(code < 300, "{code}");
     let (code, s) = c.patch("/v1/secrets/project", json!({ "provider": "supabase" }));
@@ -1114,4 +1132,16 @@ async fn naming_the_provider_keeps_the_owners_own_host() {
     assert_eq!(code, 200, "{s}");
     let (_, s) = c.get("/v1/secrets/elsewhere");
     assert_eq!(s["upstreams"], json!(["api.x.ai"]));
+
+    // Only a per-customer provider keeps a host: anywhere else, one of its hosts
+    // would leave the key test with nowhere to go.
+    let (code, _) = c.post(
+        "/v1/secrets",
+        json!({ "name": "eu", "value": "yet-another-key-of-no-known-shape", "upstreams": ["api.eu.mailgun.net"] }),
+    );
+    assert!(code < 300, "{code}");
+    let (code, s) = c.patch("/v1/secrets/eu", json!({ "provider": "mailgun" }));
+    assert_eq!(code, 200, "{s}");
+    let (_, s) = c.get("/v1/secrets/eu");
+    assert!(s["upstreams"].as_array().unwrap().len() > 1, "{s}");
 }

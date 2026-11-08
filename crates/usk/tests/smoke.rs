@@ -483,7 +483,7 @@ fn mcp_install_bridge_and_remove() {
     assert!(!token_file.exists());
     let lines = bridge(&vault, "cursor");
     assert_eq!(lines[0]["result"]["serverInfo"]["name"], "unseenkey");
-    assert!(tool_text(&lines).contains("usk mcp install cursor"));
+    assert!(tool_text(&lines).contains("mcp install cursor"));
     assert!(!token_file.exists());
 }
 
@@ -576,7 +576,7 @@ fn the_bridge_registers_itself() {
     // A name that is registered without this bridge's token is never taken over.
     std::fs::remove_file(&token_file).unwrap();
     let lines = bridge(&vault, "claude-code-plugin");
-    assert!(tool_text(&lines).contains("usk mcp install claude-code-plugin"));
+    assert!(tool_text(&lines).contains("mcp install claude-code-plugin"));
     assert!(!token_file.exists());
     // The owner can: install asks for the password and writes a new token.
     let o = usk(&vault, &["mcp", "install", "claude-code-plugin"], PW);
@@ -1334,7 +1334,7 @@ fn mcp_install_finds_the_tools_makes_the_vault_and_can_be_repeated() {
     let text = out(&o);
     assert!(text.contains("RECOVERY PHRASE"), "{text}");
     assert!(text.contains("Cursor: connected"), "{text}");
-    assert!(text.contains("usk add"), "{text}");
+    assert!(text.contains(" add openai"), "{text}");
     assert!(text.contains("Restart Cursor"), "{text}");
     let config = cursor.join("mcp.json");
     assert!(config.exists());
@@ -1353,7 +1353,7 @@ fn mcp_install_finds_the_tools_makes_the_vault_and_can_be_repeated() {
             .status
             .success()
     );
-    assert!(!out(&run(&args, "")).contains("usk add"));
+    assert!(!out(&run(&args, "")).contains(" add openai"));
 
     // A token that stopped working is replaced, with the password.
     std::fs::write(&token_file, "usk_m_stale").unwrap();
@@ -1387,19 +1387,69 @@ fn mcp_install_finds_the_tools_makes_the_vault_and_can_be_repeated() {
     assert_eq!(cfg["mcpServers"]["other"]["command"], "x");
     assert_eq!(cfg["theme"], 1);
     assert!(cfg["mcpServers"]["unseenkey"].is_object());
+
+    // Locked: a connected tool needs nothing, so nothing asks for the password,
+    // and the file is left exactly as it was.
+    assert!(run(&["lock"], "").status.success());
+    let before = std::fs::read_to_string(&config).unwrap();
+    let o = run(&args, "");
+    assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
+    assert!(out(&o).contains("Cursor: already connected"), "{}", out(&o));
+    let s: serde_json::Value = serde_json::from_str(&out(&run(&["--json", "status"], ""))).unwrap();
+    assert_eq!(s["daemon"]["locked"], true);
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), before);
+    assert!(run(&["unlock"], PW).status.success());
+
+    // A disconnect holds when tools are found, and naming the tool undoes it.
+    assert!(run(&["mcp", "remove", "cursor"], "").status.success());
+    let o = run(&args, "");
+    assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
+    assert!(out(&o).contains("left alone"), "{}", out(&o));
+    assert!(!token_file.exists());
+    let o = run(&["mcp", "install", "cursor", "--home", home_s], PW);
+    assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
+    assert!(token_file.exists());
+
+    // From another vault the tool stays where it is, and no second vault appears.
+    let other = dir.path().join("other").join("vault.db");
+    std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+    let before = std::fs::read_to_string(&config).unwrap();
+    let o = usk_on_path(&other, &path, &args, "");
+    assert!(!o.status.success());
+    assert!(err(&o).contains("connected to the vault at"), "{}", err(&o));
+    assert!(!other.exists());
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), before);
+
+    // A wrong password keeps its own exit code.
+    std::fs::remove_file(&token_file).unwrap();
+    let o = run(&args, "not-the-password\n");
+    assert_eq!(o.status.code(), Some(3), "{}\n{}", out(&o), err(&o));
 }
 
 /// A stand-in for `claude`, installed the way npm does it on Windows (a `.cmd`).
-/// It records its arguments and refuses a second `mcp add`, as the real one does.
+/// It records its arguments, keeps one `mcp` entry in a file, and refuses a second
+/// `mcp add`, as the real one does. `plugin.json` is what `plugin list` prints.
 fn fake_claude(dir: &Path) {
     #[cfg(windows)]
     std::fs::write(
         dir.join("claude.cmd"),
         "@echo off\r\n\
          echo %* >> \"%~dp0calls.txt\"\r\n\
-         if \"%2\"==\"add\" if exist \"%~dp0added\" exit /b 1\r\n\
-         if \"%2\"==\"add\" echo yes > \"%~dp0added\"\r\n\
-         if \"%2\"==\"remove\" del \"%~dp0added\"\r\n\
+         if \"%1\"==\"plugin\" goto plugin\r\n\
+         if \"%2\"==\"get\" goto get\r\n\
+         if \"%2\"==\"remove\" goto remove\r\n\
+         if exist \"%~dp0added\" exit /b 1\r\n\
+         echo %* > \"%~dp0added\"\r\n\
+         exit /b 0\r\n\
+         :get\r\n\
+         if not exist \"%~dp0added\" exit /b 1\r\n\
+         type \"%~dp0added\"\r\n\
+         exit /b 0\r\n\
+         :remove\r\n\
+         del \"%~dp0added\"\r\n\
+         exit /b 0\r\n\
+         :plugin\r\n\
+         if exist \"%~dp0plugin.json\" (type \"%~dp0plugin.json\") else (echo [])\r\n\
          exit /b 0\r\n",
     )
     .unwrap();
@@ -1412,9 +1462,18 @@ fn fake_claude(dir: &Path) {
             "#!/bin/sh\n\
              here=${0%/*}\n\
              echo \"$*\" >> \"$here/calls.txt\"\n\
-             if [ \"$2\" = add ] && [ -e \"$here/added\" ]; then exit 1; fi\n\
-             if [ \"$2\" = add ]; then : > \"$here/added\"; fi\n\
-             if [ \"$2\" = remove ]; then /bin/rm -f \"$here/added\"; fi\n\
+             if [ \"$1\" = plugin ]; then\n\
+               if [ -e \"$here/plugin.json\" ]; then /bin/cat \"$here/plugin.json\"; else echo '[]'; fi\n\
+               exit 0\n\
+             fi\n\
+             if [ \"$2\" = get ]; then\n\
+               [ -e \"$here/added\" ] || exit 1\n\
+               /bin/cat \"$here/added\"\n\
+               exit 0\n\
+             fi\n\
+             if [ \"$2\" = remove ]; then /bin/rm -f \"$here/added\"; exit 0; fi\n\
+             if [ -e \"$here/added\" ]; then exit 1; fi\n\
+             echo \"$*\" > \"$here/added\"\n\
              exit 0\n",
         )
         .unwrap();
@@ -1435,6 +1494,7 @@ fn mcp_install_runs_claude_however_it_was_installed_and_steps_aside_for_the_plug
     let home_s = home.to_str().unwrap();
     let args = ["mcp", "install", "--home", home_s];
     let calls = path.join("calls.txt");
+    let log = || std::fs::read_to_string(&calls).unwrap();
     assert!(usk(&vault, &["init", "--profile", "light"], PW)
         .status
         .success());
@@ -1443,11 +1503,14 @@ fn mcp_install_runs_claude_however_it_was_installed_and_steps_aside_for_the_plug
     let o = usk_on_path(&vault, &path, &args, "");
     assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
     assert!(out(&o).contains("Claude Code: connected"), "{}", out(&o));
-    let log = std::fs::read_to_string(&calls).unwrap();
-    assert!(log.contains("mcp add --scope user unseenkey"), "{log}");
-    assert!(log.contains("--client claude-code"), "{log}");
+    assert!(
+        log().contains("mcp add --scope user unseenkey"),
+        "{}",
+        log()
+    );
+    assert!(log().contains("--client claude-code"), "{}", log());
 
-    // Already there: the entry is replaced, and no one is told to do it by hand.
+    // Again: the entry already runs this, so it is not touched.
     let o = usk_on_path(&vault, &path, &args, "");
     assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
     assert!(
@@ -1455,17 +1518,43 @@ fn mcp_install_runs_claude_however_it_was_installed_and_steps_aside_for_the_plug
         "{}",
         out(&o)
     );
-    let log = std::fs::read_to_string(&calls).unwrap();
-    assert!(log.contains("mcp remove --scope user unseenkey"), "{log}");
+    assert!(!log().contains("mcp remove"), "{}", log());
+    assert_eq!(log().matches("mcp add").count(), 1, "{}", log());
 
-    // With the plugin connected, finding tools leaves Claude Code alone.
-    let list = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n";
+    // An entry naming an old path is ours, and is replaced.
+    std::fs::write(
+        path.join("added"),
+        format!(
+            "/old/usk --vault {} mcp --client claude-code\n",
+            vault.display()
+        ),
+    )
+    .unwrap();
+    let o = usk_on_path(&vault, &path, &args, "");
+    assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
     assert!(
-        usk(&vault, &["mcp", "--client", "claude-code-plugin"], list)
-            .status
-            .success()
+        log().contains("mcp remove --scope user unseenkey"),
+        "{}",
+        log()
     );
-    let before = std::fs::read_to_string(&calls).unwrap();
+    assert_eq!(log().matches("mcp add").count(), 2, "{}", log());
+
+    // Claude Code connected to another vault stays there.
+    std::fs::write(
+        path.join("added"),
+        "/old/usk --vault /elsewhere/vault.db mcp --client claude-code\n",
+    )
+    .unwrap();
+    let o = usk_on_path(&vault, &path, &args, "");
+    assert!(!o.status.success());
+    assert!(err(&o).contains("connected to the vault at"), "{}", err(&o));
+    assert_eq!(log().matches("mcp add").count(), 2, "{}", log());
+    std::fs::remove_file(path.join("added")).unwrap();
+
+    // With the plugin on, finding tools leaves Claude Code alone, and says what is next.
+    let plugin = path.join("plugin.json");
+    std::fs::write(&plugin, r#"[{"id":"unseenkey@unseenkey","enabled":true}]"#).unwrap();
+    let before = log().matches("mcp add").count();
     let o = usk_on_path(&vault, &path, &args, "");
     assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
     assert!(
@@ -1473,7 +1562,36 @@ fn mcp_install_runs_claude_however_it_was_installed_and_steps_aside_for_the_plug
         "{}",
         out(&o)
     );
-    assert_eq!(std::fs::read_to_string(&calls).unwrap(), before);
+    assert!(out(&o).contains("Restart Claude Code"), "{}", out(&o));
+    assert_eq!(log().matches("mcp add").count(), before, "{}", log());
+
+    // Turned off, or gone though its name is still registered: Claude Code needs connecting.
+    std::fs::write(&plugin, r#"[{"id":"unseenkey@unseenkey","enabled":false}]"#).unwrap();
+    let list = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n";
+    assert!(
+        usk(&vault, &["mcp", "--client", "claude-code-plugin"], list)
+            .status
+            .success()
+    );
+    let o = usk_on_path(&vault, &path, &args, "");
+    assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
+    assert_eq!(log().matches("mcp add").count(), before + 1, "{}", log());
+
+    // No `claude` at all: say what to run, and it is not a failure.
+    let empty = dir.path().join("nothing");
+    std::fs::create_dir_all(&empty).unwrap();
+    let o = usk_on_path(
+        &vault,
+        &empty,
+        &["mcp", "install", "claude-code", "--home", home_s],
+        "",
+    );
+    assert!(o.status.success(), "{}\n{}", out(&o), err(&o));
+    assert!(
+        out(&o).contains("claude mcp add --scope user unseenkey"),
+        "{}",
+        out(&o)
+    );
 }
 
 /// A stand-in for a daemon of another version: answers every request with its status.
@@ -1525,6 +1643,17 @@ fn a_service_of_another_version_is_called_out() {
     let o = usk(&vault, &["status"], "");
     assert!(err(&o).contains("newer than this usk"), "{}", err(&o));
     assert!(!err(&o).contains("usk daemon restart"), "{}", err(&o));
+    // Restarting from an older copy would be a downgrade, so it is refused, and
+    // the doctor does not advise it.
+    let o = usk(&vault, &["daemon", "restart"], "");
+    assert!(!o.status.success());
+    assert!(err(&o).contains("newer than this usk"), "{}", err(&o));
+    let o = usk(&vault, &["doctor"], "");
+    assert!(!out(&o).contains("usk daemon restart"), "{}", out(&o));
+    assert_eq!(
+        (out(&o) + &err(&o)).matches("newer than this usk").count(),
+        1
+    );
 }
 
 #[test]
@@ -1571,4 +1700,24 @@ fn the_log_shows_what_just_happened() {
     let o = usk(&vault, &["log", "--since", "1", "--limit", "1"], "");
     assert!(out(&o).contains("unlock"), "{}", out(&o));
     assert!(!out(&o).contains("Older ones"), "{}", out(&o));
+    // The hint is for when there is more, and keeps to the kind asked for.
+    let o = usk(&vault, &["log", "--kind", "secret_created"], "");
+    assert!(!out(&o).contains("Older ones"), "{}", out(&o));
+    assert!(usk(
+        &vault,
+        &["add", "stripe-two", "--stdin"],
+        "sk_live_51Hzyxwvutsrqponmlkji"
+    )
+    .status
+    .success());
+    let o = usk(
+        &vault,
+        &["log", "--kind", "secret_created", "--limit", "1"],
+        "",
+    );
+    assert!(
+        out(&o).contains("--since 1 --kind secret_created"),
+        "{}",
+        out(&o)
+    );
 }

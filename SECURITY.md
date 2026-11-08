@@ -14,7 +14,7 @@ Local does not mean nothing ever leaves your machine. This is what does:
 | What | Where it goes | When |
 |---|---|---|
 | Your API key, inside a request | Only the hosts that key is locked to, over TLS | Every call you or your tools make. This is how a key gets used. |
-| A test request with your key | The same provider | When you add a key (`usk add --no-test` skips it) or run `usk secret test` |
+| A test request with your key | The same provider | When you add or replace a key (`usk add --no-test` skips it) or run `usk secret test` |
 | A sign-in request | The provider's own sign-in address | OAuth2 and Google service account keys, when an access token is needed |
 | An update check (desktop app only) | GitHub, which sees your IP address and the app's version | At start and every 6 hours. There is no setting to turn this off yet. The `usk` command-line tool never checks. |
 
@@ -114,7 +114,7 @@ Details are in [CHANGELOG.md](CHANGELOG.md).
 
 | Version | Fixed |
 |---|---|
-| 0.1.9 | A handle could send the real key to another host; a Supabase or Jira key could go to a stranger's project; a failed key test could show the key; `..` got past policies; some requests went unrecorded |
+| 0.1.9 | A handle could send the real key to another host; a Supabase or Jira key could go to a stranger's project; a failed key test could show the key; `..` got past policies; some requests went unrecorded; a preset file could send a key to another host during a key test |
 | 0.1.6 | A program with the session token could take over a connected AI tool's identity |
 | 0.1.5 | The session token was enough to reveal keys and approve requests; compressed replies were not scrubbed. From a full review of the code |
 

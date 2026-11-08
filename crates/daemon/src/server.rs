@@ -359,6 +359,7 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
         .route("/approvals", get(api::approvals_list))
         .route("/approvals/{id}", post(api::approvals_decide))
         .route("/callers", get(api::callers_list).post(api::callers_create))
+        .route("/callers-removed", get(api::callers_removed))
         .route(
             "/callers/{name}",
             axum::routing::delete(api::callers_remove),

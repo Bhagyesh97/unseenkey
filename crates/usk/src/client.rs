@@ -27,6 +27,11 @@ fn version_numbers(v: &str) -> Vec<u64> {
         .collect()
 }
 
+/// Is the running daemon a newer version than this program?
+pub fn daemon_is_newer(daemon: &str, cli: &str) -> bool {
+    version_numbers(daemon) > version_numbers(cli)
+}
+
 /// What to say when the running daemon is not this version. An update replaces
 /// the program on disk while the old daemon keeps running, with its old code,
 /// until someone restarts it; a security fix does nothing until then.

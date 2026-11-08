@@ -268,20 +268,34 @@ pub async fn test_secret(
         .cloned()
         .unwrap_or_else(|| format!("https://{host}"));
     // Some providers put the account in the path.
-    let path = match &auth {
-        Auth::Basic { username, .. } if verify.path.contains("{username}") => {
-            let user = adapters::basic_username(username.as_deref(), &revealed).map_err(|e| {
-                ApiError::new(StatusCode::BAD_REQUEST, "cannot_test", e.to_string())
-            })?;
-            let user =
-                percent_encoding::utf8_percent_encode(&user, percent_encoding::NON_ALPHANUMERIC);
-            verify.path.replace("{username}", &user.to_string())
+    let fill = |template: &str| -> Result<String, ApiError> {
+        match &auth {
+            Auth::Basic { username, .. } if template.contains("{username}") => {
+                let user =
+                    adapters::basic_username(username.as_deref(), &revealed).map_err(|e| {
+                        ApiError::new(StatusCode::BAD_REQUEST, "cannot_test", e.to_string())
+                    })?;
+                let user = percent_encoding::utf8_percent_encode(
+                    &user,
+                    percent_encoding::NON_ALPHANUMERIC,
+                );
+                Ok(template.replace("{username}", &user.to_string()))
+            }
+            _ => Ok(template.to_string()),
         }
-        _ => verify.path.clone(),
     };
+    let path = fill(&verify.path)?;
+    let also_path = verify.also_path.as_deref().map(fill).transpose()?;
     let display = preset.display.clone();
     let mut outcome: (Option<bool>, Option<u16>, String) = (None, None, String::new());
-    for path in std::iter::once(path).chain(verify.also_path.clone()) {
+    for (attempt, path) in std::iter::once(path).chain(also_path).enumerate() {
+        // Presets are checked when loaded. The key does not go out on that alone.
+        if !path.starts_with('/') {
+            return Ok(not_tested(
+                Some(preset),
+                "the preset's test path does not start with /, so the key was not sent".to_string(),
+            ));
+        }
         let mut url = format!("{origin}{path}");
         for (k, v) in &injection.query {
             let enc = percent_encoding::utf8_percent_encode(v, percent_encoding::NON_ALPHANUMERIC);
@@ -309,6 +323,9 @@ pub async fn test_secret(
                 let code = resp.status().as_u16();
                 match code {
                     200..=299 => (Some(true), Some(code), format!("{display} accepted the key.")),
+                    // The first address said no. At the second, 403 can mean a good
+                    // key that may not list what this address lists.
+                    403 if attempt > 0 => (None, Some(code), format!("{display} answered HTTP {code}, which does not say whether the key works: it may not have permission for this test.")),
                     401 | 403 => (
                         Some(false),
                         Some(code),

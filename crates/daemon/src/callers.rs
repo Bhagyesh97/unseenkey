@@ -124,6 +124,17 @@ impl Callers {
             .contains(name)
     }
 
+    /// The names [`Callers::is_removed`] holds for.
+    pub fn removed_names(&self) -> Vec<String> {
+        self.inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .removed
+            .iter()
+            .cloned()
+            .collect()
+    }
+
     /// Remove a caller; the name stays reserved (see [`Callers::is_removed`]).
     pub fn remove(&self, name: &str) -> std::io::Result<bool> {
         let mut f = self.inner.write().unwrap_or_else(|e| e.into_inner());

@@ -1200,7 +1200,7 @@ pub async fn patch_secret(
         None => None,
     };
     // A new provider must exist, and brings its hosts along unless the owner
-    // named hosts in the same call or the key's hosts are already within them.
+    // named hosts in the same call or the key already has its own host there.
     if let Some(Some(pid)) = &p.provider {
         let preset = presets::get(pid).ok_or_else(|| {
             ApiError::new(
@@ -1210,10 +1210,11 @@ pub async fn patch_secret(
             )
         })?;
         if upstreams.is_none() && !preset.upstreams.is_empty() {
-            // Exact hosts the provider covers stay: the owner's own project must
-            // not turn back into a wildcard the key cannot be used on.
+            // The owner's own host at a per-customer provider stays: it must not
+            // turn back into a wildcard the key cannot be used on.
             let current = &v.get(&id)?.upstreams;
-            let stays = !current.is_empty()
+            let stays = preset.tenant.is_some()
+                && !current.is_empty()
                 && current.iter().all(|h| {
                     !h.contains('*')
                         && unseenkey_core::policy::eval::host_allowed(&preset.upstreams, h)
@@ -2140,6 +2141,12 @@ pub async fn callers_list(State(s): State<Arc<AppState>>) -> ApiResult<Vec<Value
             .map(|(n, e)| serde_json::json!({ "name": n, "caller": format!("mcp:{n}"), "created_at": e.created_at, "last_seen_at": e.last_seen_at }))
             .collect(),
     ))
+}
+
+/// `GET /v1/callers-removed`: names the owner disconnected, which stay that way
+/// until the owner reconnects them.
+pub async fn callers_removed(State(s): State<Arc<AppState>>) -> ApiResult<Vec<String>> {
+    Ok(Json(s.callers.removed_names()))
 }
 
 /// `DELETE /v1/callers/{name}`

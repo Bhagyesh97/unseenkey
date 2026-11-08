@@ -506,6 +506,18 @@ fn parse(id: &str, text: &str) -> Result<Preset, PolicyError> {
             p.id
         )));
     }
+    // A test URL is the host followed by this path, so a path starting with `@`
+    // would make everything before it a user name and send the key elsewhere.
+    if let Some(v) = &p.verify {
+        if let Some(path) = core::iter::once(&v.path)
+            .chain(v.also_path.iter())
+            .find(|path| !path.starts_with('/'))
+        {
+            return Err(PolicyError::Invalid(format!(
+                "preset {id}: a test path must start with /, not {path:?}"
+            )));
+        }
+    }
     if p.upstreams.is_empty() && id != "generic" {
         return Err(PolicyError::Invalid(format!(
             "preset {id} has no upstreams"
@@ -974,6 +986,25 @@ mod tests {
     }
 
     #[test]
+    fn a_test_path_cannot_name_another_host() {
+        let preset = |verify: &str| {
+            format!(
+                "id = \"mine\"\ndisplay = \"Mine\"\nupstreams = [\"api.example.com\"]\nauth = {{ kind = \"bearer\" }}\n\n[verify]\n{verify}\n"
+            )
+        };
+        assert!(parse("mine", &preset("path = \"/ok\"\nalso_path = \"/also\"")).is_ok());
+        for bad in [
+            "path = \"@evil.example/\"",
+            "path = \"/ok\"\nalso_path = \"@evil.example/\"",
+            "path = \".evil.example/\"",
+            "path = \":80@evil.example/\"",
+        ] {
+            let e = parse("mine", &preset(bad)).unwrap_err().to_string();
+            assert!(e.contains("must start with /"), "{bad}: {e}");
+        }
+    }
+
+    #[test]
     fn every_test_call_is_a_read_on_one_of_the_presets_hosts() {
         for p in all() {
             let Some(v) = &p.verify else { continue };
@@ -984,6 +1015,12 @@ mod tests {
                 v.method
             );
             assert!(v.path.starts_with('/'), "{}: {}", p.id, v.path);
+            assert!(
+                v.also_path.as_ref().is_none_or(|a| a.starts_with('/')),
+                "{}: {:?}",
+                p.id,
+                v.also_path
+            );
             let host = v.host.clone().unwrap_or_else(|| p.upstreams[0].clone());
             // A per-customer provider's test goes to the host the owner named.
             assert!(

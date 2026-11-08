@@ -670,20 +670,7 @@ impl<S: Storage, C: Clock> Vault<S, C> {
                 if kind.is_some_and(|k| k != row.kind) {
                     continue;
                 }
-                let sealed = aead::Sealed {
-                    nonce: row.nonce,
-                    ciphertext: row.ciphertext.clone(),
-                };
-                let plain = aead::open(&dek, &self.audit_aad(row.seq, &row.kind), &sealed)
-                    .map_err(|_| VaultError::Corrupt(self.header.vault_id))?;
-                let body: serde_json::Value = serde_json::from_slice(plain.expose())
-                    .map_err(|_| VaultError::Corrupt(self.header.vault_id))?;
-                out.push(AuditEvent {
-                    seq: row.seq,
-                    ts: row.ts,
-                    kind: row.kind.clone(),
-                    body,
-                });
+                out.push(self.audit_open(&dek, row)?);
                 if out.len() >= limit {
                     break;
                 }
@@ -692,26 +679,56 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         Ok(out)
     }
 
+    fn audit_open(&self, dek: &SecretBytes, row: &AuditRow) -> Result<AuditEvent, VaultError> {
+        let sealed = aead::Sealed {
+            nonce: row.nonce,
+            ciphertext: row.ciphertext.clone(),
+        };
+        let plain = aead::open(dek, &self.audit_aad(row.seq, &row.kind), &sealed)
+            .map_err(|_| VaultError::Corrupt(self.header.vault_id))?;
+        let body: serde_json::Value = serde_json::from_slice(plain.expose())
+            .map_err(|_| VaultError::Corrupt(self.header.vault_id))?;
+        Ok(AuditEvent {
+            seq: row.seq,
+            ts: row.ts,
+            kind: row.kind.clone(),
+            body,
+        })
+    }
+
     /// The newest `limit` events, optionally of one kind, the oldest of them first.
     pub fn audit_latest(
         &self,
         kind: Option<&str>,
         limit: usize,
     ) -> Result<Vec<AuditEvent>, VaultError> {
+        let vk = self.vk()?;
+        let dek = self.audit_dek(vk);
+        let mut newest_first = Vec::new();
         let Some(last) = self.storage.audit_last()? else {
-            return Ok(Vec::new());
+            return Ok(newest_first);
         };
-        // Look back further each time: a rare kind may be a long way back.
-        let mut window = (limit as u64).max(256);
-        loop {
-            let from = last.seq.saturating_sub(window - 1).max(1);
-            let mut events = self.audit_events(from, kind, usize::MAX)?;
-            if events.len() >= limit || from == 1 {
-                let older = events.len().saturating_sub(limit);
-                return Ok(events.split_off(older));
+        // Page by page from the end, opening only the rows wanted.
+        let mut end = last.seq;
+        while newest_first.len() < limit {
+            let from = end.saturating_sub(255).max(1);
+            let batch = self.storage.audit_rows(from, (end - from + 1) as usize)?;
+            for row in batch.iter().rev() {
+                if kind.is_some_and(|k| k != row.kind) {
+                    continue;
+                }
+                newest_first.push(self.audit_open(&dek, row)?);
+                if newest_first.len() >= limit {
+                    break;
+                }
             }
-            window = window.saturating_mul(4);
+            if from == 1 {
+                break;
+            }
+            end = from - 1;
         }
+        newest_first.reverse();
+        Ok(newest_first)
     }
 
     /// Walk the whole chain, and check the keyed head when the vault is

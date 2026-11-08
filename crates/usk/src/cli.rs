@@ -538,13 +538,25 @@ pub fn run() -> Result<(), CliError> {
             }
             DaemonAction::Restart => {
                 crate::client::skip_version_warning();
+                let this = env!("CARGO_PKG_VERSION");
+                if let Some(c) = Client::try_connect(&paths) {
+                    let status = c.get("/v1/status")?;
+                    let running = status["version"].as_str().unwrap_or("");
+                    if crate::client::daemon_is_newer(running, this) {
+                        return Err(CliError::general(format!(
+                            "the running service is version {running}, newer than this usk ({this}). Restarting from here would replace it with the older version and its older bugs. Use the newer usk instead."
+                        )));
+                    }
+                }
                 stop_daemon(&paths)?;
                 let c = Client::connect(&paths, true)?;
                 let status = c.get("/v1/status")?;
-                println!(
-                    "Daemon restarted (version {}).",
-                    status["version"].as_str().unwrap_or("?")
-                );
+                let running = status["version"].as_str().unwrap_or("?");
+                if running == this {
+                    println!("Daemon restarted (version {running}).");
+                } else {
+                    println!("The service running now is version {running}, not {this}: something else started it. Close what uses an old copy of usk, or run `usk mcp install` to update its config.");
+                }
                 if uio::is_tty() {
                     c.ensure_unlocked()?;
                     println!("Unlocked.");
@@ -1764,9 +1776,13 @@ fn log_list(
         println!("No events.");
         return Ok(());
     }
-    if since.is_none() && items[0]["seq"].as_u64().is_some_and(|seq| seq > 1) {
+    if since.is_none() && items.len() == limit && items[0]["seq"].as_u64().is_some_and(|s| s > 1) {
+        let same_kind = kind
+            .as_deref()
+            .map(|k| format!(" --kind {k}"))
+            .unwrap_or_default();
         println!(
-            "The newest {} events. Older ones: usk log --since 1",
+            "The newest {} events. Older ones: usk log --since 1{same_kind}",
             items.len()
         );
     }
@@ -2334,6 +2350,8 @@ fn doctor(paths: &VaultPaths) -> Result<(), CliError> {
         &format!("config {}", paths.config.display()),
         &cfg.err().map(|e| e.to_string()).unwrap_or_default(),
     );
+    // The check below says it, in its place.
+    crate::client::skip_version_warning();
     let daemon = Client::try_connect(paths);
     let running = daemon.is_some();
     check(
@@ -2344,13 +2362,16 @@ fn doctor(paths: &VaultPaths) -> Result<(), CliError> {
     if let Some(c) = &daemon {
         let s = c.get("/v1/status").unwrap_or(Value::Null);
         let ver = s["version"].as_str().unwrap_or("?");
+        let advice = crate::client::version_warning(ver, env!("CARGO_PKG_VERSION"))
+            .map(|w| w.trim_start_matches("warning: ").to_string())
+            .unwrap_or_default();
         check(
             ver == env!("CARGO_PKG_VERSION"),
             &format!(
                 "daemon version {ver} matches CLI {}",
                 env!("CARGO_PKG_VERSION")
             ),
-            "run `usk daemon restart`",
+            &advice,
         );
         #[cfg(unix)]
         {
