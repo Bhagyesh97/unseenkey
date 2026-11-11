@@ -28,7 +28,7 @@ zeroize = { version = "1", features = ["zeroize_derive", "serde"] }
 bip39 = { version = "3", default-features = false, features = ["alloc"] }
 
 # storage
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 
 # daemon
 # gzip/brotli/deflate: the broker asks providers for compressed replies itself and

@@ -633,8 +633,13 @@ fn add_to_claude_code(
     let Some(claude) = find_program("claude") else {
         return Err(ClaudeProblem::NotFound(by_hand));
     };
+    // How `claude mcp get` shows the command may quote a part (a path with `~`
+    // in it, passed through a `.cmd`), so quotes do not count.
     let exe_text = exe.to_string_lossy();
-    if current.is_some_and(|c| c.contains(exe_text.as_ref()) && c.contains(&args.join(" "))) {
+    if current.is_some_and(|c| {
+        let c = c.replace('"', "");
+        c.contains(exe_text.as_ref()) && c.contains(&args.join(" "))
+    }) {
         return Ok(());
     }
     let run = |what: &[&str], extra: &[&std::ffi::OsStr]| -> Result<(), String> {
