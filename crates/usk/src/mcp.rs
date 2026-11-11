@@ -934,10 +934,13 @@ pub fn bridge(paths: &VaultPaths, client: &str) -> Result<(), CliError> {
             Ok(l) => l,
             Err(_) => break,
         };
+        // Windows PowerShell starts what it pipes with a byte order mark, and
+        // the first message would not parse, so it would get no answer.
+        let line = line.trim_start_matches('\u{feff}');
         if line.trim().is_empty() {
             continue;
         }
-        let parsed = serde_json::from_str::<Value>(&line).ok();
+        let parsed = serde_json::from_str::<Value>(line).ok();
         let req_id = parsed.as_ref().and_then(|v| v.get("id").cloned());
         // A second try only after a 401: the token was replaced or removed.
         let mut out = None;
@@ -980,7 +983,7 @@ pub fn bridge(paths: &VaultPaths, client: &str) -> Result<(), CliError> {
             if let Some(d) = &dir {
                 req = req.set(unseenkey_daemon::mcp::PROJECT_DIR_HEADER, d);
             }
-            out = match req.send_string(&line) {
+            out = match req.send_string(line) {
                 Ok(r) if r.status() == 202 => None,
                 Ok(r) => Some(r.into_string().unwrap_or_default()),
                 Err(ureq::Error::Status(401, _)) => {

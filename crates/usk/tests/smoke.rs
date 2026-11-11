@@ -1482,6 +1482,32 @@ fn fake_claude(dir: &Path) {
 }
 
 #[test]
+fn a_bridge_with_no_vault_answers_and_says_what_is_missing() {
+    // As Claude Desktop meets it on a computer with nothing set up yet, and
+    // with the byte order mark Windows PowerShell puts in front of a pipe.
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    let input = "\u{feff}{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n\
+                 {\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n\
+                 {\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"list_secrets\",\"arguments\":{}}}\n";
+    let o = usk(&vault, &["mcp", "--client", "claude-desktop"], input);
+    assert!(o.status.success(), "{}", err(&o));
+    let replies: Vec<serde_json::Value> = out(&o)
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(replies.len(), 2, "{}", out(&o));
+    assert_eq!(replies[0]["id"], 1);
+    assert_eq!(replies[0]["result"]["serverInfo"]["name"], "unseenkey");
+    assert_eq!(replies[1]["result"]["isError"], true);
+    assert!(replies[1]["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("not set up on this computer"));
+    assert!(!vault.exists(), "a bridge never makes a vault");
+}
+
+#[test]
 fn mcp_install_runs_claude_however_it_was_installed_and_steps_aside_for_the_plugin() {
     let dir = tempfile::tempdir().unwrap();
     let vault = dir.path().join("vault.db");
