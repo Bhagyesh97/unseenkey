@@ -113,7 +113,7 @@ Details are in [CHANGELOG.md](CHANGELOG.md).
 
 | Version | Fixed |
 |---|---|
-| 0.1.9 | A handle could send the real key to another host; a Supabase or Jira key could go to a stranger's project; a failed key test could show the key; `..` got past policies; some requests went unrecorded; a preset file could send a key to another host during a key test; a host name starting with `127.` could get a key in cleartext; paths could slip past deny rules and approvals |
+| 0.1.9 | A handle could send the real key to another host; a Supabase or Jira key could go to a stranger's project; a failed key test could show the key; `..` got past policies; some requests went unrecorded; a preset file could send a key to another host during a key test; a host name starting with `127.` could get a key in cleartext; paths could slip past deny rules and approvals; a wildcard host such as `*.co.uk` or `api.example.*` could reach domains anyone can register |
 | 0.1.6 | A program with the session token could take over a connected AI tool's identity |
 | 0.1.5 | The session token was enough to reveal keys and approve requests; compressed replies were not scrubbed. From a full review of the code |
 

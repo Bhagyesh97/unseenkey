@@ -2,7 +2,7 @@
 
 The top section of this file becomes the release notes when a `v*` tag is pushed.
 
-## 0.1.9 — 2026-11-03
+## 0.1.9 — 2026-11-11
 
 - **Google service account keys.** `usk add gsc --file key.json --scope webmasters.readonly`: the broker signs in with the key file and sends Google a short-lived access token, so the file itself never leaves the vault. Search Console, Tag Manager, Analytics and the other Google APIs work through handles and through AI tools. Scopes can be changed with `usk secret set <name> --scope …`; the key test signs in and reports what Google said.
 - **Keys that come in two parts work.** Twilio was listed but could not be used: `usk add` and the app took one value, and the broker sent it with an empty username. `usk add` now asks for both parts in the provider's words, the app shows a second box, and both can be pasted at once as `first:second` or on two lines. A key stored with one part (`usk import` meets them one at a time) is not sent; the test and any call say what is missing, and `usk secret set <name> --username …` adds it. Replacing the password keeps the username. An SDK's own `Basic` header with a handle in it now works, and if a provider echoes the header it is hidden like any other secret.
