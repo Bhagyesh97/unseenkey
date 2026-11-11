@@ -488,12 +488,23 @@ pub fn unpinned(provider: Option<&str>, upstreams: &[String]) -> Option<&'static
         .and_then(get)
         .filter(|p| p.pin_needed(upstreams))
         .or_else(|| {
-            // Whatever it is written as: `*.supabase.co.` and `*.co` reach a
-            // stranger's project just as `*.supabase.co` does.
+            // Whatever it is written as: `*.supabase.co.`, `*.co` and
+            // `*.*.supabase.co` reach a stranger's project just as
+            // `*.supabase.co` does. So try hosts under it at every depth a
+            // pattern can name.
+            let depth = wildcards
+                .iter()
+                .map(|w| w.split('.').count())
+                .max()
+                .unwrap_or(0);
             all().find(|p| {
                 p.tenant.is_some()
                     && p.upstreams.iter().any(|own| {
-                        crate::policy::eval::host_allowed(&wildcards, &own.replace('*', "x"))
+                        let sample = own.replace('*', "x");
+                        (0..=depth).any(|extra| {
+                            let host = format!("{}{sample}", "x.".repeat(extra));
+                            crate::policy::eval::host_allowed(&wildcards, &host)
+                        })
                     })
             })
         })
@@ -1000,7 +1011,15 @@ mod tests {
     #[test]
     fn a_wildcard_over_a_customers_host_needs_a_pin_however_it_is_written() {
         let hosts = |h: &str| vec![h.to_string()];
-        for wild in ["*.supabase.co", "*.supabase.co.", "*.SUPABASE.co", "*.co"] {
+        for wild in [
+            "*.supabase.co",
+            "*.supabase.co.",
+            "*.SUPABASE.co",
+            "*.co",
+            "*.*.supabase.co",
+            "x.*.supabase.co",
+            "*.*.atlassian.net",
+        ] {
             assert!(unpinned(None, &hosts(wild)).is_some(), "{wild}");
         }
         for fine in ["mine.supabase.co", "*.example.com", "api.openai.com"] {

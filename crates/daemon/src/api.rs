@@ -1044,8 +1044,11 @@ fn normalize_upstreams(list: &[String]) -> Result<Vec<String>, ApiError> {
                         || l.bytes()
                             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
             });
-            // `*.co` would let a key go to any site under it.
-            if !well_formed || labels.iter().filter(|l| **l != "*").count() < 2 {
+            // What follows the last `*` is where the key may go: `*.co`,
+            // `api.example.*`, `*.co.uk` and `*.github.io` would each let it go
+            // to sites anyone can register.
+            let suffix = &labels[labels.iter().rposition(|l| *l == "*").map_or(0, |i| i + 1)..];
+            if !well_formed || suffix.len() < 2 || is_shared_suffix(suffix) {
                 return Err(ApiError::new(
                     StatusCode::BAD_REQUEST,
                     "invalid_upstream",
@@ -1071,6 +1074,54 @@ fn normalize_upstreams(list: &[String]) -> Result<Vec<String>, ApiError> {
         }
     }
     Ok(out)
+}
+
+/// A domain under which anyone can get a name: a country's second level
+/// (`co.uk`, `com.au`) or a hosting service's (`github.io`, `vercel.app`).
+/// Not the whole public suffix list, but the ones a wildcard is likely to name.
+fn is_shared_suffix(labels: &[&str]) -> bool {
+    const SHARED: &[&str] = &[
+        "github.io",
+        "gitlab.io",
+        "vercel.app",
+        "netlify.app",
+        "pages.dev",
+        "workers.dev",
+        "r2.dev",
+        "herokuapp.com",
+        "appspot.com",
+        "web.app",
+        "firebaseapp.com",
+        "azurewebsites.net",
+        "cloudfront.net",
+        "blogspot.com",
+        "onrender.com",
+        "fly.dev",
+        "railway.app",
+        "glitch.me",
+        "ngrok.io",
+        "ngrok-free.app",
+        "ngrok.app",
+        "trycloudflare.com",
+        "repl.co",
+        "replit.dev",
+        "deno.dev",
+        "surge.sh",
+    ];
+    let joined = labels.join(".");
+    if SHARED.contains(&joined.as_str()) {
+        return true;
+    }
+    // `co.uk`, `com.au`, `ne.jp`: a generic second level under a country.
+    matches!(
+        labels,
+        [second, tld] if tld.len() == 2
+            && matches!(
+                *second,
+                "co" | "com" | "net" | "org" | "gov" | "edu" | "ac" | "or" | "ne" | "go"
+                    | "gen" | "ltd" | "plc" | "me" | "biz" | "info" | "nom" | "sch"
+            )
+    )
 }
 
 /// `PATCH /v1/secrets/{ref}` body. Every field optional.

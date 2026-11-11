@@ -392,10 +392,15 @@ impl AppState {
         // A sign-in under way gets a moment to finish, so a refresh token the
         // provider just rotated is saved rather than lost. Not longer: locking
         // must not wait on someone else's server. A later one finds the vault
-        // locked and keeps nothing.
-        let sign_in = tokio::time::timeout(std::time::Duration::from_secs(3), self.oauth.lock())
-            .await
-            .ok();
+        // locked and keeps nothing. A lock for an incident does not wait at all:
+        // every moment unlocked is another request with real keys.
+        let sign_in = if matches!(reason, "canary" | "anomaly") {
+            self.oauth.try_lock().ok()
+        } else {
+            tokio::time::timeout(std::time::Duration::from_secs(3), self.oauth.lock())
+                .await
+                .ok()
+        };
         {
             let mut v = self.vault.lock().await;
             if v.is_locked() {

@@ -104,7 +104,7 @@ Low severity, known and not yet fixed. We add to this list as we find things.
   host you name and cannot tell whether that project is really yours. `usk import`
   and `usk guard fix` take it from the `SUPABASE_URL` beside the key, so read a
   `.env` you did not write before importing it.
-- **Long values in streamed replies.** A multi-line value over 256 bytes, such as a PEM key, is hidden line by line in a streamed reply, because a stream cannot hold back its whole length. Its last short line is not hidden, and neither is base64 of the whole value in a stream. Requests and whole replies are checked for the whole value too.
+- **Long values in replies.** Every reply is streamed, and a stream cannot hold back a long value's whole length. So a multi-line value over 256 bytes, such as a PEM key, is hidden in a reply line by line, a long line in pieces of 48 bytes. Short lines that are not code-like, the value after a name that does not say secret (`server: `), and base64 of the whole value are not hidden in a reply. Outgoing requests are checked for the whole value too.
 - **Encodings.** Scrubbing covers the value, base64, percent-encoding and JSON escaping. A program that transforms a value in some other way is not caught.
 
 ## Past security fixes

@@ -33,8 +33,9 @@ pub struct Scrubber {
     /// Longest pattern, for stream overlap.
     max_len: usize,
     /// Long values whole, in all their encodings, for data held in one piece: an
-    /// outgoing request or a whole reply. Not for streams, which is why they are
-    /// apart. Base64 of a whole PEM key shares no text with base64 of its lines.
+    /// outgoing request, and the held-back end of a reply. Not for streams,
+    /// which is why they are apart. Base64 of a whole PEM key shares no text
+    /// with base64 of its lines.
     whole: Option<AhoCorasick>,
     /// Pattern index in `whole` → owning secret name.
     whole_names: Vec<String>,
@@ -91,6 +92,78 @@ fn variants(value: &[u8]) -> Vec<Vec<u8>> {
     out
 }
 
+/// A line of a long value worth guarding on its own: 32 bytes or more, or a
+/// shorter one that reads like a code (`a8f3-k29d-77qx-p0m1`: letters and digits,
+/// no space, no `name=`). Lines like `apiVersion: v1` or `region=us-east-1`
+/// turn up in ordinary traffic and would block it.
+fn worth_guarding(line: &str) -> bool {
+    if line.starts_with("-----") {
+        return false;
+    }
+    line.len() >= LONG_VALUE_LINE
+        || (line.len() >= MIN_LEN
+            && !line.contains(|c: char| c.is_whitespace() || c == '=' || c == ':')
+            && line.bytes().any(|b| b.is_ascii_digit())
+            && line.bytes().any(|b| b.is_ascii_alphabetic()))
+}
+
+/// In `token: abc…` or `API_KEY=abc…` the secret is what follows the name, and
+/// a reply may hold it alone. Only when the name says it is a secret: the URL
+/// after `server: ` in a kubeconfig is not, and traffic names it.
+fn secret_tail(line: &str) -> Option<&str> {
+    let (name, tail) = line.rsplit_once(": ").or_else(|| line.split_once('='))?;
+    let name = name.to_ascii_lowercase();
+    let secret = !name.contains("public")
+        && [
+            "token",
+            "secret",
+            "key",
+            "password",
+            "passwd",
+            "pwd",
+            "credential",
+            "authorization",
+            "bearer",
+            "private",
+        ]
+        .iter()
+        .any(|w| name.contains(w));
+    let tail = tail.trim().trim_matches(['"', '\'']);
+    (secret && tail.len() >= MIN_LEN).then_some(tail)
+}
+
+/// What of one line of a long value to guard: the line, if worth it, and the
+/// secret after its name, if it has one.
+fn guarded_parts(line: &str) -> impl Iterator<Item = &str> {
+    worth_guarding(line)
+        .then_some(line)
+        .into_iter()
+        .chain(secret_tail(line))
+}
+
+/// Longest piece of a line guarded as one pattern, a multiple of 3 so base64
+/// of the line is base64 of its pieces. A longer line (a kubeconfig's 3 KB
+/// `client-key-data`) is cut, or its length would be held back in every stream.
+const PIECE: usize = 48;
+
+/// `part` whole if short, else in pieces of [`PIECE`] bytes, the last one
+/// ending where the line ends. Any leak of the line holds every piece. A
+/// piece of base64 that starts with `-----` (`LS0tLS1…`, a base64 PEM's
+/// `-----BEGIN … KEY-----` opening) is the same in every such key, so it is
+/// left out; the pieces after it are the key's own.
+fn pieces(part: &str) -> Vec<&[u8]> {
+    let b = part.as_bytes();
+    if b.len() <= 2 * PIECE {
+        return vec![b];
+    }
+    let mut out: Vec<&[u8]> = b.chunks(PIECE).filter(|c| c.len() == PIECE).collect();
+    if b.len() % PIECE != 0 {
+        out.push(&b[b.len() - PIECE..]);
+    }
+    out.retain(|p| !p.starts_with(b"LS0tLS1"));
+    out
+}
+
 impl Scrubber {
     /// Build from the given secrets. Values shorter than [`MIN_LEN`] are skipped.
     pub fn new(secrets: &[Guarded<'_>]) -> Self {
@@ -103,30 +176,21 @@ impl Scrubber {
             if v.len() < MIN_LEN {
                 continue;
             }
-            let lines = core::str::from_utf8(v)
+            let parts = core::str::from_utf8(v)
                 .ok()
                 .filter(|s| s.len() > LONG_VALUE && s.contains('\n'))
                 .map(|text| {
                     text.lines()
                         .map(str::trim)
-                        .filter(|l| l.len() >= LONG_VALUE_LINE && !l.starts_with("-----"))
+                        .flat_map(guarded_parts)
                         .collect::<Vec<_>>()
                 })
-                .filter(|lines| !lines.is_empty());
-            if let Some(lines) = lines {
-                for line in lines {
-                    // In `token: abc…` the secret is what follows the name, and a
-                    // reply may hold it alone.
-                    let tail = line
-                        .rsplit_once(": ")
-                        .or_else(|| line.split_once('='))
-                        .map(|(_, tail)| tail.trim())
-                        .filter(|tail| tail.len() >= LONG_VALUE_LINE);
-                    for part in core::iter::once(line).chain(tail) {
-                        for variant in variants(part.as_bytes()) {
-                            patterns.push(variant);
-                            names.push(g.name.to_string());
-                        }
+                .filter(|parts| !parts.is_empty());
+            if let Some(parts) = parts {
+                for piece in parts.into_iter().flat_map(pieces) {
+                    for variant in variants(piece) {
+                        patterns.push(variant);
+                        names.push(g.name.to_string());
                     }
                 }
                 for variant in variants(v) {
@@ -342,6 +406,65 @@ mod pem_tests {
         }]);
         assert!(s.find(b"apiVersion: v1").is_empty());
         assert_eq!(s.find(line.as_bytes()), ["kube"]);
+    }
+
+    #[test]
+    fn codes_secret_names_and_very_long_lines() {
+        use base64::Engine;
+        let guard = |name: &'static str, text: &str| {
+            let value = SecretBytes::from(text);
+            Scrubber::new(&[Guarded {
+                name,
+                value: &value,
+            }])
+        };
+        // Recovery codes: short lines, each one a secret.
+        let codes: Vec<String> = (0..20)
+            .map(|i| format!("k29d-77qx-{i:02}m1-a8f3"))
+            .collect();
+        let s = guard("codes", &codes.join("\n"));
+        assert_eq!(s.find(codes[3].as_bytes()), ["codes"]);
+        assert!(s.max_len() < 100, "holds back {}", s.max_len());
+
+        // The value after `token: ` is a secret; the URL after `server: ` is not.
+        let token = "q7Wm2Lx9Vb4Nc8Rt1Yz6Hd3Kf5Pj0Gs";
+        let server = "https://abc123.gr7.us-east-1.eks.amazonaws.com";
+        let config = format!(
+            "apiVersion: v1\nkind: Config\n{}    server: {server}\n    token: {token}\n",
+            "- name: prod\n".repeat(20)
+        );
+        let s = guard("kube", &config);
+        assert_eq!(s.find(token.as_bytes()), ["kube"]);
+        assert!(s.find(server.as_bytes()).is_empty());
+        assert!(s.find(b"region=us-east-1").is_empty());
+
+        // A 3 KB line is guarded in pieces, so streams are not held back by it,
+        // and any stretch of it is still hidden, in one piece or streamed.
+        let mut x: u32 = 7;
+        let data: Vec<u8> = (0..2250)
+            .map(|_| {
+                x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                (x >> 16) as u8
+            })
+            .collect();
+        let blob = base64::engine::general_purpose::STANDARD.encode(&data);
+        let s = guard(
+            "long",
+            &format!("apiVersion: v1\nclient-key-data: {blob}\n"),
+        );
+        assert!(s.max_len() < 300, "holds back {}", s.max_len());
+        let stretch = &blob[1000..1100];
+        let reply = format!("{{\"echo\":\"{stretch}\"}}");
+        let out = String::from_utf8(s.scrub(reply.as_bytes()).0).unwrap();
+        assert!(!out.contains(&stretch[40..90]), "{out}");
+        let mut st = StreamScrubber::new(s.clone());
+        let mut streamed = Vec::new();
+        for c in blob.as_bytes().chunks(37) {
+            streamed.extend(st.push(c));
+        }
+        streamed.extend(st.finish());
+        let streamed = String::from_utf8(streamed).unwrap();
+        assert!(!streamed.contains(&blob[200..260]), "{streamed:.200}");
     }
 
     #[test]

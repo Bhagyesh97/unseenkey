@@ -1196,9 +1196,22 @@ async fn twilio_read_only_keeps_accounts_and_keys_out_in_every_form() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_host_pattern_that_is_too_wide_or_malformed_is_refused() {
     let (_d, _r, c) = setup().await;
-    for (i, bad) in ["*.co", "*", "*.", "a..*.example.com", "*.exa mple.com"]
-        .iter()
-        .enumerate()
+    for (i, bad) in [
+        "*.co",
+        "*",
+        "*.",
+        "a..*.example.com",
+        "*.exa mple.com",
+        // What follows the last star is where the key may go.
+        "api.example.*",
+        "a.*.co",
+        "*.co.uk",
+        "*.com.au",
+        "*.github.io",
+        "*.*.vercel.app",
+    ]
+    .iter()
+    .enumerate()
     {
         let (code, v) = c.post(
             "/v1/secrets",
@@ -1214,4 +1227,10 @@ async fn a_host_pattern_that_is_too_wide_or_malformed_is_refused() {
     );
     assert!(code < 300, "{code}: {v}");
     assert_eq!(v["upstreams"], json!(["*.example.com"]));
+    // A star inside a real domain is fine.
+    let (code, v) = c.post(
+        "/v1/secrets",
+        json!({ "name": "inner", "value": "a-third-key-no-known-shape-abcdef", "upstreams": ["s3.*.amazonaws.com", "*.example.co.uk"] }),
+    );
+    assert!(code < 300, "{code}: {v}");
 }

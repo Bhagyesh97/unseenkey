@@ -455,6 +455,19 @@ async fn sign_in(
                 "the vault was locked while signing in; unlock it and try again",
             ));
         }
+        // Replaced meanwhile: this answer is for the old value, and saving its
+        // refresh token would overwrite the owner's new one.
+        if vault
+            .get(&meta.secret_id)
+            .map_or(true, |now| now.value_version != meta.value_version)
+        {
+            tracing::warn!(secret = %meta.secret_id, "secret replaced during sign-in; the answer was discarded");
+            return Err(fail(
+                StatusCode::CONFLICT,
+                "secret_changed",
+                "the key was replaced while signing in; try again",
+            ));
+        }
         let current = match &grant {
             Grant::Refresh(client) => Some(client.refresh_token.as_str()),
             Grant::ServiceAccount(..) => None,

@@ -230,7 +230,16 @@ pub async fn test_secret(
         .unwrap_or_else(|| preset.upstreams[0].clone());
     // A host stored by an older version may hold what a URL parser reads as
     // something else, and the key goes nowhere on that.
-    if unseenkey_core::broker::Upstream::parse(&host).is_err() {
+    // The parser stops at `/`, `?` and `#`, so `evil.example?x.supabase.co`
+    // reads as evil.example: what it reads must be the whole of what is stored.
+    if !unseenkey_core::broker::Upstream::parse(&host).is_ok_and(|u| {
+        let read = match u.port {
+            Some(p) => format!("{}:{p}", u.host),
+            None => u.host,
+        };
+        read.trim_end_matches('.')
+            .eq_ignore_ascii_case(host.trim_end_matches('.'))
+    }) {
         return Ok(not_tested(
             Some(preset),
             format!(

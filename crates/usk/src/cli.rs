@@ -776,6 +776,8 @@ fn add(
     let is_google = provider.as_deref() == Some("gcp")
         || name.to_ascii_lowercase().contains("google")
         || value_str.contains("service_account")
+        || value_str.contains("authorized_user")
+        || value_str.contains("googleusercontent.com")
         || value_str.contains("googleapis.com");
     let scope = if is_google {
         unseenkey_core::providers::google_scopes(&scopes)
@@ -2182,15 +2184,28 @@ fn secret_set(
         body.insert("username".into(), json!(u));
     }
     if !scopes.is_empty() {
-        // A bare scope is short for a Google URL only when this key is Google's.
+        // A bare scope is short for a Google URL only when this key is Google's,
+        // as it is now or as this same command makes it.
         let meta = c.get(&format!("/v1/secrets/{name}"))?;
-        let is_google = meta["type"] == "gcp_service_account"
-            || meta["provider"] == "gcp"
-            || meta["upstreams"].as_array().is_some_and(|hosts| {
+        let stored_hosts: Vec<String> = meta["upstreams"]
+            .as_array()
+            .map(|hosts| {
                 hosts
                     .iter()
-                    .any(|h| h.as_str().is_some_and(|h| h.contains("googleapis.com")))
-            });
+                    .filter_map(|h| h.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let hosts = if upstreams.is_empty() {
+            &stored_hosts
+        } else {
+            &upstreams
+        };
+        let is_google = meta["kind"] == "gcp_service_account"
+            || provider
+                .as_deref()
+                .map_or(meta["provider"] == "gcp", |p| p == "gcp")
+            || hosts.iter().any(|h| h.contains("googleapis.com"));
         let scope = if is_google {
             unseenkey_core::providers::google_scopes(&scopes)
         } else {

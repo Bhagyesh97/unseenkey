@@ -504,15 +504,16 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         let mut cursor = start + 1;
         loop {
             // A request cut off may have reached the provider, so it counts too.
-            let batch = self.audit_events(cursor, None, 1024)?;
+            let batch = self.audit_events_of(
+                cursor,
+                &[audit::kinds::USE, audit::kinds::USE_UNFINISHED],
+                1024,
+            )?;
             let Some(last) = batch.last() else {
                 break;
             };
             cursor = last.seq + 1;
-            for ev in batch
-                .iter()
-                .filter(|e| e.kind == audit::kinds::USE || e.kind == audit::kinds::USE_UNFINISHED)
-            {
+            for ev in &batch {
                 let Some(id) = ev
                     .body
                     .get("handle")
@@ -660,6 +661,20 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         kind: Option<&str>,
         limit: usize,
     ) -> Result<Vec<AuditEvent>, VaultError> {
+        match kind {
+            Some(k) => self.audit_events_of(since_seq, &[k], limit),
+            None => self.audit_events_of(since_seq, &[], limit),
+        }
+    }
+
+    /// Events of any of `kinds` (all kinds if empty) from `since_seq` on. The
+    /// kind is in clear, so the others are never decrypted.
+    fn audit_events_of(
+        &self,
+        since_seq: u64,
+        kinds: &[&str],
+        limit: usize,
+    ) -> Result<Vec<AuditEvent>, VaultError> {
         let vk = self.vk()?;
         let dek = self.audit_dek(vk);
         let mut out = Vec::new();
@@ -671,7 +686,7 @@ impl<S: Storage, C: Clock> Vault<S, C> {
             }
             for row in &batch {
                 cursor = row.seq + 1;
-                if kind.is_some_and(|k| k != row.kind) {
+                if !kinds.is_empty() && !kinds.contains(&row.kind.as_str()) {
                     continue;
                 }
                 out.push(self.audit_open(&dek, row)?);
