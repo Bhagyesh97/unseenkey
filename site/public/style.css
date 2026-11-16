@@ -207,6 +207,10 @@ section p.sub { color: var(--muted); margin: 0 0 24px; max-width: 760px; font-si
   .btn { transition: none; }
 }
 
+/* demo recording */
+.demo { margin: 0 auto; max-width: 960px; border-radius: 14px; overflow: hidden; padding: 0; }
+.demo img { display: block; width: 100%; height: auto; aspect-ratio: 1120 / 630; background: #0b0f17; }
+
 /* terminal */
 .term { border-radius: 14px; overflow: hidden; }
 .term-bar { display: flex; align-items: center; gap: 7px; padding: 10px 14px; border-bottom: 1px solid var(--line); }

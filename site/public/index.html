@@ -51,6 +51,7 @@
         "url": "https://unseenkey.com/",
         "description": "A local vault and policy broker that lets AI agents, scripts and hired developers use your API keys without ever seeing them.",
         "applicationCategory": "SecurityApplication",
+        "softwareVersion": "0.1.9",
         "operatingSystem": "Windows, macOS, Linux",
         "license": "https://www.apache.org/licenses/LICENSE-2.0",
         "downloadUrl": "https://github.com/Bhagyesh97/unseenkey/releases/latest",
@@ -76,6 +77,7 @@
   <a class="brand" href="/"><img src="/favicon-192.png" alt="">Unseenkey</a>
   <nav>
     <a href="#problem">Why</a>
+    <a href="#demo">Demo</a>
     <a href="#how">How it works</a>
     <a href="#features">Features</a>
     <a href="#compare">Compare</a>
@@ -112,10 +114,25 @@
       </div>
     </div>
     <div class="wrap stats" data-reveal="stagger">
-      <div><b><span data-count="65">0</span></b><span>providers built in</span></div>
+      <div><b><span data-count="73">0</span></b><span>providers built in</span></div>
       <div><b><span data-count="1.9">0</span> ms</b><span>p99 broker overhead</span></div>
-      <div><b><span data-count="214">0</span></b><span>tests on every push</span></div>
+      <div><b><span data-count="277">0</span></b><span>tests on every push</span></div>
       <div><b>0 bytes</b><span>of telemetry, ever</span></div>
+    </div>
+  </section>
+
+  <section id="demo">
+    <div class="wrap">
+      <div data-reveal>
+        <h2>See it in one minute</h2>
+        <p class="sub">Set up in one command, move the key out of <code>.env</code>, ask Claude Code for it, then let a runaway script hit a daily cap. Real runs, nothing staged.</p>
+      </div>
+      <figure class="demo glass" data-reveal>
+        <picture>
+          <source srcset="/demo-still.png" media="(prefers-reduced-motion: reduce)">
+          <img src="/demo.gif" width="1120" height="630" loading="lazy" decoding="async" alt="Terminal recording: usk mcp install connects Claude Code and Cursor; usk guard fix moves the OpenAI key out of .env and leaves a handle; Claude Code, asked to print the key, finds only the handle and says it cannot, yet can still call the API through the broker; a handle capped at 500 calls a day refuses call 501; usk log verify reports the log intact.">
+        </picture>
+      </figure>
     </div>
   </section>
 
@@ -405,22 +422,26 @@
       <div data-reveal>
         <h2>Install</h2>
         <p class="sub">Free and open source. No account, no telemetry. Your keys go only to the providers you call.</p>
-<pre class="glass"><span class="c"># Windows</span>
+<pre class="glass"><span class="c"># Windows: desktop app, then the CLI</span>
+winget install Unseenkey.Unseenkey
 scoop bucket add unseenkey https://github.com/Bhagyesh97/scoop-unseenkey
 scoop install usk
 
 <span class="c"># macOS and Linux</span>
 brew install Bhagyesh97/unseenkey/usk
 
+<span class="c"># connect your AI tools</span>
+usk mcp install
+
 <span class="c"># from source (Rust 1.85+)</span>
 cargo install --locked --git https://github.com/Bhagyesh97/unseenkey usk</pre>
         <div class="cta">
           <a class="btn primary" href="https://github.com/Bhagyesh97/unseenkey/releases/latest">Download the desktop app</a>
         </div>
-        <p class="fine">Installers for Windows (MSI, EXE), macOS (DMG) and Linux (deb, rpm, AppImage), and CLI archives for every platform. The installers are not yet code-signed, so Windows SmartScreen and macOS Gatekeeper warn on first launch.</p>
+        <p class="fine">Installers for Windows (MSI, EXE), macOS (DMG) and Linux (deb, rpm, AppImage), and CLI archives for every platform. Claude Desktop users can install the <code>.mcpb</code> bundle from the same page; the server is also in the <a href="https://registry.modelcontextprotocol.io/v0/servers?search=io.github.Bhagyesh97/unseenkey">MCP registry</a> as <code>io.github.Bhagyesh97/unseenkey</code>. The installers are not yet code-signed, so Windows SmartScreen and macOS Gatekeeper warn on first launch.</p>
       </div>
       <div data-reveal>
-        <h2>Nine releases in eleven days</h2>
+        <h2>Ten releases in three weeks</h2>
         <p class="sub">Built in the open since 30 September. <a href="https://github.com/Bhagyesh97/unseenkey/blob/main/CHANGELOG.md">Full changelog</a>.</p>
         <ol class="releases">
           <li><b>0.1.9</b><time>11 Nov</time><span>Security fixes: a handle could reach another host on wildcard keys, and <code>..</code> could get past policies. Google service account keys, keys in two parts, 73 providers, <code>usk passwd</code>.</span></li>
@@ -472,7 +493,7 @@ cargo install --locked --git https://github.com/Bhagyesh97/unseenkey usk</pre>
         </details>
         <details>
           <summary>Does it work with my tools?</summary>
-          <p>Claude Code, Claude Desktop, Cursor and Windsurf connect in one click. Any SDK that lets you set its API address works, which covers OpenAI, Anthropic, Stripe, AWS and most others. Tools that cannot change their address can use <code>usk run</code>, which is weaker: that one process sees the key, but its output is scrubbed and logged.</p>
+          <p>Claude Code, Claude Desktop, Cursor and Windsurf connect in one click, or with one command: <code>usk mcp install</code>. Any SDK that lets you set its API address works, which covers OpenAI, Anthropic, Stripe, AWS and most others. Tools that cannot change their address can use <code>usk run</code>, which is weaker: that one process sees the key, but its output is scrubbed and logged.</p>
         </details>
         <details>
           <summary>Does it slow requests down?</summary>

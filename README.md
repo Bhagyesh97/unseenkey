@@ -34,6 +34,12 @@ A leaked handle costs you nothing. A leaked key costs you until you notice.
 
 > **Status: v0.1, alpha.** Works and is tested on Windows, macOS and Linux. Not yet externally audited: use it with keys you can rotate. Delegating keys to other people through a hosted broker is designed, not built.
 
+<p align="center">
+  <img src="site/public/demo.gif" width="840" alt="Terminal recording: usk mcp install connects Claude Code and Cursor; usk guard fix moves the OpenAI key out of .env and leaves a handle; Claude Code, asked to print the key, finds only the handle and says it cannot, yet can still call the API through the broker; a handle capped at 500 calls a day refuses call 501; usk log verify reports the log intact.">
+  <br>
+  <sub>One minute of real runs of <code>usk</code> and Claude Code, with a made-up key. A stand-in on the machine plays OpenAI.</sub>
+</p>
+
 ## How it works
 
 <p align="center">
@@ -120,7 +126,7 @@ usk run --with DATABASE_URL=prod-db -- ./app                                 # f
 ```sh
 scoop bucket add unseenkey https://github.com/Bhagyesh97/scoop-unseenkey && scoop install usk   # Windows
 brew install Bhagyesh97/unseenkey/usk                                                          # macOS, Linux
-winget install Unseenkey.Unseenkey                                                             # desktop app, Windows (listing under review)
+winget install Unseenkey.Unseenkey                                                             # desktop app, Windows
 cargo install --locked --git https://github.com/Bhagyesh97/unseenkey usk                       # from source, Rust 1.85+
 ```
 
