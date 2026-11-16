@@ -4,22 +4,39 @@ on:
   push:
     tags: ["v*"]
 
+# Read-only unless a job says otherwise. The build jobs run build scripts and
+# proc macros from the whole dependency tree; they get a token that cannot
+# write to the repository or ask Sigstore for a certificate. Only the jobs that
+# publish ask for more, each for what it needs.
+#
+# No caches anywhere in this workflow: a cache is written by other runs, and
+# what ships must come from the tagged commit and the lockfiles alone.
+#
+# Every action is pinned to a commit (its tag is in the comment), and no
+# checkout leaves its token behind in `.git/config`.
 permissions:
-  contents: write
-  id-token: write # Sigstore keyless signing
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   check:
+    # Two things, before any expensive build starts.
+    #
     # The tag must match the versions we ship: v0.1.0 or v0.1.0-rc.1 need
     # workspace, desktop and Claude Code plugin versions of 0.1.0. Catches a
-    # forgotten bump before any expensive build starts.
-    name: tag matches versions
+    # forgotten bump.
+    #
+    # The tagged commit must be on main. A tag can be pushed from any branch,
+    # reviewed or not; a release is built only from what main holds.
+    name: tag matches versions and is on main
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - shell: bash
         run: |
           set -euo pipefail
@@ -30,6 +47,12 @@ jobs:
           plugin=$(python3 -c "import json; print(json.load(open('plugins/unseenkey/.claude-plugin/plugin.json'))['version'])")
           echo "tag=$tag core=$core workspace=$ws desktop=$app plugin=$plugin"
           [ "$core" = "$ws" ] && [ "$core" = "$app" ] && [ "$core" = "$plugin" ] || { echo "::error::tag $tag does not match workspace $ws / desktop $app / plugin $plugin"; exit 1; }
+      - shell: bash
+        run: |
+          set -euo pipefail
+          commit=$(git rev-parse 'HEAD^{commit}')
+          git merge-base --is-ancestor "$commit" origin/main || { echo "::error::${GITHUB_REF_NAME} ($commit) is not on main; merge it first, then tag the commit on main"; exit 1; }
+          echo "$commit is on main"
 
   build:
     name: build (${{ matrix.target }})
@@ -60,10 +83,11 @@ jobs:
             archive: zip
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2
         if: matrix.cross
         with:
@@ -103,6 +127,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
@@ -130,8 +156,11 @@ jobs:
     name: sign and publish
     needs: [build, mcpb]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the draft release
+      id-token: write # Sigstore keyless signing
     outputs:
-      # The draft's id, so the desktop jobs attach to it by id instead of
+      # The draft's id, so the later jobs attach to it by id instead of
       # looking it up by tag (a lookup that raced and failed twice on 0.1.1).
       release_id: ${{ steps.draft.outputs.id }}
     steps:
@@ -139,20 +168,19 @@ jobs:
       # not from the archives: syft cannot see inside a tarball of binaries and
       # produced an empty document on the first run.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist
           merge-multiple: true
-      - name: checksums
-        run: |
-          cd dist
-          sha256sum * > SHA256SUMS
-          cat SHA256SUMS
       - uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9 # v3
+      # SHA256SUMS is not made here: the `checksums` job writes it at the end,
+      # over these files and the desktop installers together.
       - name: sign (keyless, Sigstore)
         run: |
           cd dist
-          for f in *.tar.gz *.zip *.mcpb SHA256SUMS; do
+          for f in *.tar.gz *.zip *.mcpb; do
             cosign sign-blob --yes --output-signature "$f.sig" --output-certificate "$f.pem" "$f"
           done
           ls -la
@@ -181,9 +209,18 @@ jobs:
     # Desktop installers, built after the CLI release exists so tauri-action
     # attaches to the same draft. Updater bundles are signed with the minisign
     # key in TAURI_SIGNING_PRIVATE_KEY; latest.json is merged across platforms.
+    #
+    # This job holds the updater's signing key, so it runs in the `release`
+    # environment. GitHub makes that environment on first use, with no rules.
+    # Moving the signing secrets from the repository into it, and adding
+    # yourself as a required reviewer there, means no other workflow or branch
+    # can read them and nothing is signed until you approve the run.
     name: desktop (${{ matrix.os }} ${{ matrix.args }})
     needs: release
     runs-on: ${{ matrix.os }}
+    environment: release
+    permissions:
+      contents: write # attach the installers to the draft
     strategy:
       fail-fast: false
       matrix:
@@ -198,6 +235,8 @@ jobs:
             args: ""
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Linux system libraries
         if: runner.os == 'Linux'
         run: |
@@ -206,16 +245,17 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
-      - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
-        with:
-          workspaces: apps/desktop/src-tauri
       - run: npm ci
         working-directory: apps/desktop
+      # The app has its own lockfile. The build below goes through the Tauri
+      # CLI, so the lockfile is checked here instead: this fails if Cargo.lock
+      # does not already describe every dependency, and the build after it then
+      # has nothing to resolve.
+      - name: the lockfile is complete
+        run: cargo fetch --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
       - name: Apple signing and notarization (only when the secrets exist)
         if: runner.os == 'macOS'
         env:
@@ -254,17 +294,103 @@ jobs:
           includeUpdaterJson: true
           args: ${{ matrix.args }}
 
+  checksums:
+    # One SHA256SUMS over every file on the draft, written last and signed.
+    #
+    # The desktop jobs can write to the release, and they run the largest
+    # dependency tree we have. So before anything is listed, each CLI archive
+    # and the MCP bundle is checked against the Sigstore signature the
+    # `release` job made for it: the desktop jobs cannot ask Sigstore for a
+    # certificate in this workflow's name, so a file changed after signing
+    # fails here. The installers have no such earlier signature; their line in
+    # SHA256SUMS says what this run built, and the updater checks its own
+    # (minisign) signature on them.
+    name: checksums over every file
+    needs: [release, desktop]
+    if: always() && needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # attach SHA256SUMS to the draft
+      id-token: write # Sigstore keyless signing
+    steps:
+      - uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9 # v3
+      - name: download every file on the draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          api="repos/${GITHUB_REPOSITORY}/releases"
+          mkdir files signatures
+          gh api --paginate "$api/${RELEASE_ID}/assets?per_page=100" -q '.[] | [.id, .name] | @tsv' > assets.tsv
+          while IFS=$'\t' read -r id name; do
+            case "$name" in
+              # An earlier attempt's list: replaced below.
+              SHA256SUMS | SHA256SUMS.sig | SHA256SUMS.pem)
+                gh api -X DELETE "$api/assets/$id" < /dev/null
+                ;;
+              *.sig | *.pem)
+                gh api -H "Accept: application/octet-stream" "$api/assets/$id" < /dev/null > "signatures/$name"
+                ;;
+              *)
+                gh api -H "Accept: application/octet-stream" "$api/assets/$id" < /dev/null > "files/$name"
+                ;;
+            esac
+          done < assets.tsv
+          ls -la files
+      - name: the signed files are still the ones that were signed
+        shell: bash
+        run: |
+          set -euo pipefail
+          checked=0
+          for pem in signatures/*.pem; do
+            name=$(basename "$pem" .pem)
+            cosign verify-blob \
+              --certificate "$pem" \
+              --signature "signatures/$name.sig" \
+              --certificate-identity "https://github.com/${GITHUB_WORKFLOW_REF}" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              "files/$name"
+            checked=$((checked + 1))
+          done
+          echo "checked $checked signatures"
+          # Five CLI archives and the MCP bundle.
+          [ "$checked" -ge 6 ] || { echo "::error::only $checked signed files on the draft"; exit 1; }
+      - name: SHA256SUMS, signed
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          (cd files && sha256sum -- * > ../SHA256SUMS)
+          cat SHA256SUMS
+          cosign sign-blob --yes --output-signature SHA256SUMS.sig --output-certificate SHA256SUMS.pem SHA256SUMS
+          for f in SHA256SUMS SHA256SUMS.sig SHA256SUMS.pem; do
+            curl --fail-with-body --silent --show-error -X POST \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@$f" \
+              "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=$f" > /dev/null
+          done
+
   notes:
     # The handwritten section of CHANGELOG.md for this version, followed by
     # GitHub's generated list of changes. Runs last so neither the CLI nor the
     # desktop step can overwrite it. The draft stays a draft: publishing is a
     # human decision after the installers were tried.
     name: release notes
-    needs: [release, desktop]
+    needs: [release, desktop, checksums]
     if: always() && needs.release.result == 'success'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # edit the draft's notes
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

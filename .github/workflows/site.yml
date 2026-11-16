@@ -35,6 +35,8 @@ jobs:
           fi
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         if: steps.secrets.outputs.ok == 'true'
+        with:
+          persist-credentials: false
       # Wrangler from the site's own lockfile, not cloudflare/wrangler-action:
       # the repository only allows GitHub's and a short list of vetted actions,
       # and a third-party action made this workflow fail before it started.

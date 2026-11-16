@@ -1,0 +1,49 @@
+# Dependabot opens pull requests for outdated dependencies; CI and the
+# supply-chain workflow then judge them like any other change. Security
+# updates are separate: turn on "Dependabot security updates" in the
+# repository's settings, and they come as soon as an advisory is published.
+#
+# Minor and patch updates arrive as one pull request per ecosystem and week,
+# major ones each on their own.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      rust:
+        update-types: [minor, patch]
+
+  # The desktop app has its own lockfile (Tauri's tree).
+  - package-ecosystem: cargo
+    directory: /apps/desktop/src-tauri
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      desktop-rust:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directories:
+      - /apps/desktop
+      - /site
+      - /tests/browser
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      npm:
+        update-types: [minor, patch]
+
+  # Actions are pinned to commits; Dependabot moves the pin and the version
+  # in the comment beside it.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

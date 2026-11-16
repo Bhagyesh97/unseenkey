@@ -1,0 +1,47 @@
+name: supply-chain
+
+# Advisories, licences, banned crates and crate sources, for both lockfiles:
+# the workspace's and the desktop app's (Tauri's tree).
+#
+# Runs on every push and pull request, docs-only ones too, and once a day: an
+# advisory published against a crate we already ship changes nothing in the
+# repository, so only the clock can bring it up.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+# Every action is pinned to a commit (its tag is in the comment), so a moved
+# tag cannot change what runs here.
+permissions:
+  contents: read
+
+jobs:
+  supply-chain:
+    name: cargo deny + audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: cargo deny (workspace, deny.toml)
+        uses: EmbarkStudios/cargo-deny-action@b66acf5e9fe20f8aba065be86778a8a4c846f902 # v2
+        with:
+          command: check
+      # cargo-deny takes the deny.toml nearest the manifest: the app has its
+      # own, apps/desktop/src-tauri/deny.toml, which says where it differs.
+      - name: cargo deny (desktop app, its own deny.toml)
+        uses: EmbarkStudios/cargo-deny-action@b66acf5e9fe20f8aba065be86778a8a4c846f902 # v2
+        with:
+          command: check
+          manifest-path: apps/desktop/src-tauri/Cargo.toml
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit
+      - run: cargo audit --file apps/desktop/src-tauri/Cargo.lock

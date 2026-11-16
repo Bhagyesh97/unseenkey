@@ -83,7 +83,7 @@ In self mode no Unseenkey server is involved: no account, no telemetry, nothing 
 | T8 steals disk | Vault encrypted with Argon2id-derived key; no plaintext ever on disk; SQLite audit log encrypted | Weak password → offline brute force; enforce strength meter and passkey |
 | T8 steals unlocked laptop | Auto-lock on idle/sleep/screen lock; approval prompts for sensitive secrets | Short window before lock |
 | T6 on upstream | TLS 1.2+ with system roots; certificate verification never disabled; optional pinning per preset | None significant |
-| T9 dependency | `cargo deny`, `cargo audit`, vendored lockfile, minimal deps, reproducible builds, Sigstore-signed releases, SBOM published | Zero-day in a trusted crate |
+| T9 dependency | `cargo deny` and `cargo audit` on every push and daily, committed lockfiles enforced with `--locked`, minimal deps, Sigstore-signed releases with a signed `SHA256SUMS` over every file, SBOM published. Builds are not yet reproducible ([12](12-testing-and-assurance.md)) | Zero-day in a trusted crate |
 | T10 echoes secrets back | Response scrubbing. The broker strips the caller's `Accept-Encoding`, negotiates gzip/brotli/deflate itself and unpacks before scrubbing; a reply in any other encoding is refused (`undecodable_response`) | Transformed values |
 | T8 edits the vault file to restore access | Superseded record versions are erased on every write and a deleted value is purged, so removing the newest row brings nothing back; a log that has had a keyed head reports a missing one as tampering (`audit_tampered`, state `removed`) | Swapping in a complete older copy of the file is not detected: that needs state outside the file |
 
@@ -111,7 +111,7 @@ In self mode no Unseenkey server is involved: no account, no telemetry, nothing 
 5. **Web app** delivered by our server can be modified by our server. Use the desktop app for the highest assurance.
 6. **No external audit yet.** Known open issues are listed in [SECURITY.md](../SECURITY.md#known-open-issues).
 
-## Security invariants (must always hold; each has a test)
+## Security invariants (must always hold; the tests for each are listed in [12](12-testing-and-assurance.md), INV-7 has none until sync exists)
 
 - INV-1: Plaintext is never written to disk, logs, crash dumps or error messages.
 - INV-2: Plaintext leaves the daemon only inside an outgoing request to a host on the secret's upstream list, or via an explicitly audited reveal/injection.
