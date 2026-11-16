@@ -20,6 +20,12 @@ impl MemoryStorage {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Remove one audit row, as someone editing the vault file could.
+    #[cfg(test)]
+    pub(crate) fn drop_audit_row(&mut self, seq: u64) {
+        self.audit.retain(|r| r.seq != seq);
+    }
 }
 
 impl Storage for MemoryStorage {
