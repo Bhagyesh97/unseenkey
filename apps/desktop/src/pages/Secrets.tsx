@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, ago, type Preset, type SecretMeta } from "../api";
 
 /** "api.example.com, *.other.com" or one per line → a clean list. */
@@ -69,7 +69,10 @@ export function Secrets({ tick }: { tick: number }) {
         {adding ? (
           <AddSecret onDone={() => { setAdding(false); void load(); }} onCancel={() => setAdding(false)} />
         ) : selected ? (
-          <SecretDetail secret={selected} onChange={load} />
+          // Keyed by the secret: a revealed value, an open "Replace value" box
+          // or a test result belongs to one secret and must not follow the
+          // selection to another.
+          <SecretDetail key={selected.secret_id} secret={selected} onChange={load} />
         ) : (
           <div className="muted">Select a secret, or add one.</div>
         )}
@@ -284,6 +287,12 @@ function SecretDetail({ secret, onChange }: { secret: SecretMeta; onChange: () =
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<string | null>(null);
+  // One hide timer at a time: a second reveal restarts the 30 seconds, and
+  // leaving the secret cancels it.
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+  }, []);
   const [editing, setEditing] = useState(false);
   const [replacing, setReplacing] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -330,7 +339,8 @@ function SecretDetail({ secret, onChange }: { secret: SecretMeta; onChange: () =
     try {
       const r = await api.call<{ value: string }>("POST", `/v1/secrets/${secret.secret_id}/reveal`, { confirm: true, reason });
       setRevealed(r.value);
-      setTimeout(() => setRevealed(null), 30_000);
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+      hideTimer.current = setTimeout(() => setRevealed(null), 30_000);
     } catch (e) {
       setErr((e as Error).message);
     }
