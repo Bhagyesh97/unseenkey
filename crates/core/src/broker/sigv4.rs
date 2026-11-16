@@ -393,11 +393,12 @@ pub fn decode_aws_chunked(data: &[u8]) -> Result<Dechunked, BrokerError> {
             break;
         }
         let end = i.checked_add(size).ok_or_else(bad)?;
-        if end + 2 > data.len() || &data[end..end + 2] != b"\r\n" {
+        let after = end.checked_add(2).ok_or_else(bad)?;
+        if after > data.len() || &data[end..after] != b"\r\n" {
             return Err(bad());
         }
         body.extend_from_slice(&data[i..end]);
-        i = end + 2;
+        i = after;
     }
     let mut trailers = Vec::new();
     while i < data.len() {
@@ -641,6 +642,14 @@ mod tests {
             b"3\r\nabc\r\n",
         ] {
             assert!(decode_aws_chunked(bad).is_err());
+        }
+        // A chunk size near the top of the address range is an error, not a
+        // panic: the caller chooses these bytes, and the daemon stops on a panic.
+        for back in 0..40usize {
+            let huge = format!("{:x}\r\n", usize::MAX - back);
+            assert!(decode_aws_chunked(huge.as_bytes()).is_err(), "{huge:?}");
+            let with_data = format!("{:x};chunk-signature=aa\r\nabc\r\n0\r\n\r\n", usize::MAX - back);
+            assert!(decode_aws_chunked(with_data.as_bytes()).is_err(), "{with_data:?}");
         }
         assert_eq!(strip_aws_chunked("aws-chunked"), None);
         assert_eq!(strip_aws_chunked("gzip, aws-chunked"), Some("gzip".into()));
