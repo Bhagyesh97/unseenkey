@@ -98,7 +98,7 @@ enum Command {
         #[arg(long)]
         reason: Option<String>,
     },
-    /// Delete a secret.
+    /// Delete a secret and revoke its handles. Asks for the vault password.
     Rm {
         name: String,
         #[arg(long)]
@@ -1068,6 +1068,9 @@ fn rm(paths: &VaultPaths, name: &str, yes: bool) -> Result<(), CliError> {
         println!("Cancelled.");
         return Ok(());
     }
+    // Deleting a key also revokes its handles: the owner's call, not that of
+    // whatever program holds the daemon token.
+    c.ensure_owner()?;
     let out = c.delete(&format!("/v1/secrets/{name}"))?;
     match out["handles_revoked"].as_u64().unwrap_or(0) {
         0 => println!("Deleted {name}."),
@@ -2046,10 +2049,13 @@ enum SecretAction {
         name: String,
     },
     /// Replace a secret's value (a new or rotated key). Handles keep working.
+    /// Asks for the vault password.
     Replace {
         /// Secret name.
         name: String,
-        /// Read the new value from standard input instead of prompting.
+        /// Read the new value from standard input instead of prompting. When
+        /// the input is piped, its first line is the vault password and the
+        /// rest is the value.
         #[arg(long)]
         stdin: bool,
     },
@@ -2129,6 +2135,23 @@ fn secret_replace(paths: &VaultPaths, name: &str, stdin: bool) -> Result<(), Cli
             "{name} holds several values; remove it with `usk rm {name}` and add it again"
         )));
     }
+    // A new value under an old name and its handles is the owner's to give.
+    // Asked before the value is read, so piped input is always the password
+    // line first and then the value, whether or not the vault was locked.
+    c.ensure_owner().map_err(|e| {
+        if e.kind == "wrong_password" && !uio::is_tty() {
+            CliError::with_code(
+                e.code,
+                e.kind,
+                format!(
+                    "{}; the first line of piped input is the vault password, the rest is the new value. Nothing changed",
+                    e.message
+                ),
+            )
+        } else {
+            e
+        }
+    })?;
     let value = if stdin {
         uio::read_secret_rest()?
     } else {
@@ -2236,8 +2259,10 @@ fn secret_set(
             "nothing to change; pass --allow-injection, --no-scrub, --notes, --tag, --upstream, --scope or --username",
         ));
     }
-    // Where a key may go and how it may leave the vault are the owner's to change.
+    // Where a key may go, how it may leave the vault and the half of a
+    // two-part key that is sent with it are the owner's to change.
     if [
+        "username",
         "provider",
         "allow_injection",
         "no_scrub",

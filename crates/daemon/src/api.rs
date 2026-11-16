@@ -573,11 +573,18 @@ pub async fn unlock_methods_add(
     Ok(Json(serde_json::json!({ "id": id.to_hex() })))
 }
 
-/// `DELETE /v1/unlock-methods/{id}` — remove a device unlock method (vault must be unlocked).
+/// `DELETE /v1/unlock-methods/{id}` — remove a device unlock method (vault must
+/// be unlocked). Owner only, like enrolling one: how the vault opens is the
+/// owner's to change.
 pub async fn unlock_methods_remove(
     State(s): State<Arc<AppState>>,
     Path(id): Path<String>,
+    headers: HeaderMap,
 ) -> ApiResult<serde_json::Value> {
+    if s.vault.lock().await.is_locked() {
+        return Err(VaultError::Locked.into());
+    }
+    require_owner(&s, &headers)?;
     let id = Id::from_hex(id.trim()).ok_or_else(|| {
         ApiError::new(
             StatusCode::NOT_FOUND,
@@ -1155,8 +1162,13 @@ pub struct PatchSecret {
 /// `PATCH /v1/secrets/{ref}`. Changing where a secret may go (`upstreams`,
 /// `provider`), how it may leave the vault (`allow_injection`, `no_scrub`) or
 /// what its access tokens may do (`scope`) widens access and is owner only. So
-/// are its other `fields`: a token URL says where a client secret goes. A rename,
-/// tags, notes or a new value are not.
+/// are its other `fields`: a token URL says where a client secret goes.
+///
+/// What the secret is belongs to the owner too. A new `value` or `username`
+/// from a program that only read `daemon.token` would put somebody else's
+/// account behind the owner's handles, and the owner's data with it. A new
+/// `name` would make an approval prompt name the wrong key. Tags and notes are
+/// left to the session token.
 pub async fn patch_secret(
     State(s): State<Arc<AppState>>,
     Path(r): Path<String>,
@@ -1169,7 +1181,8 @@ pub async fn patch_secret(
         || p.provider.is_some()
         || p.scope.is_some()
         || !p.fields.is_empty();
-    if widens {
+    let replaces = p.value.is_some() || p.username.is_some() || p.name.is_some();
+    if widens || replaces {
         require_owner(&s, &headers)?;
     }
     if let Some(value) = p.value.as_mut() {
@@ -1426,11 +1439,14 @@ pub async fn patch_secret(
     Ok(Json(v.get(&id)?.clone()))
 }
 
-/// `DELETE /v1/secrets/{ref}`
+/// `DELETE /v1/secrets/{ref}`. Owner only: the key is gone for good, and
+/// every handle for it with it.
 pub async fn delete_secret(
     State(s): State<Arc<AppState>>,
     Path(r): Path<String>,
+    headers: HeaderMap,
 ) -> ApiResult<serde_json::Value> {
+    require_owner(&s, &headers)?;
     let mut v = s.vault.lock().await;
     let id = resolve(&v, &r)?;
     s.retire(&v, &id);

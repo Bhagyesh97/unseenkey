@@ -1007,11 +1007,26 @@ fn replacing_a_value_keeps_the_handles() {
     let o = usk(&vault, &["handle", "create", "deploy", "--label", "ci"], "");
     assert!(o.status.success(), "{}", err(&o));
 
+    // The vault is open and the daemon token is on disk, but a new value under
+    // an old name is the owner's to give: without the password nothing changes.
     let o = usk(
         &vault,
         &["secret", "replace", "deploy", "--stdin"],
-        "  zxcvbnmasdfghjklqwertyuiop654321 
-",
+        "zxcvbnmasdfghjklqwertyuiop654321\n",
+    );
+    assert_eq!(o.status.code(), Some(3), "{}", err(&o));
+    assert!(err(&o).contains("first line"), "{}", err(&o));
+    let o = usk(&vault, &["rm", "deploy", "--yes"], "");
+    assert_eq!(o.status.code(), Some(3), "{}", err(&o));
+    let o = usk(&vault, &["--json", "show", "deploy"], "");
+    let m: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
+    assert_eq!(m["value_version"], 1, "untouched: {m}");
+
+    // Piped: the password line, then the value.
+    let o = usk(
+        &vault,
+        &["secret", "replace", "deploy", "--stdin"],
+        &format!("{PW}  zxcvbnmasdfghjklqwertyuiop654321 \n"),
     );
     assert!(o.status.success(), "{}", err(&o));
     assert!(out(&o).contains("now version 2"), "{}", out(&o));
@@ -1027,7 +1042,11 @@ fn replacing_a_value_keeps_the_handles() {
     assert_eq!(hs[0]["label"], "ci");
     assert_eq!(hs[0]["active"], true, "the handle survives the new value");
 
-    let o = usk(&vault, &["secret", "replace", "deploy", "--stdin"], "   ");
+    let o = usk(
+        &vault,
+        &["secret", "replace", "deploy", "--stdin"],
+        &format!("{PW}   "),
+    );
     assert!(!o.status.success());
     assert!(err(&o).contains("empty value"), "{}", err(&o));
 }
@@ -1087,7 +1106,7 @@ fn a_key_in_two_parts_from_the_cli() {
             "--username",
             "MAPLIVOID01234567890",
         ],
-        "",
+        PW,
     );
     assert!(o.status.success(), "{}", err(&o));
     let o = usk(&vault, &["reveal", "plivo", "--yes"], PW);

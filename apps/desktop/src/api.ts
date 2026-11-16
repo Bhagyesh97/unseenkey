@@ -214,9 +214,9 @@ export const api = {
   attachSecret: (id: string, secret: string) => api.call<Project>("POST", `/v1/projects/${id}/secrets`, { secret }),
   detachSecret: (id: string, secretId: string) => api.call<Project>("DELETE", `/v1/projects/${id}/secrets/${secretId}`),
   deviceStatus: () => wrap(invoke<DeviceUnlock>("device_unlock_status")),
-  deviceEnroll: () => wrap(invoke<string>("device_unlock_enroll")),
+  deviceEnroll: () => withOwner(() => wrap(invoke<string>("device_unlock_enroll"))),
   deviceUnlock: () => wrap(invoke<void>("device_unlock")),
-  deviceRemove: () => wrap(invoke<void>("device_unlock_remove")),
+  deviceRemove: () => withOwner(() => wrap(invoke<void>("device_unlock_remove"))),
 };
 
 export type DaemonEvent =

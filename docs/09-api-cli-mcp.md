@@ -15,8 +15,8 @@ All responses are JSON. Errors: `{ "error": "<code>", "message": "…" }`.
 | GET | `/v1/secrets` | metadata list (no values) |
 | POST | `/v1/secrets` | `{name, type, value \| fields, provider?, upstreams?, tags?}` |
 | GET | `/v1/secrets/{id}` | metadata + policy summary + handles |
-| PATCH | `/v1/secrets/{id}` | metadata or new value (replaces the stored version). `upstreams`, `provider`, `allow_injection` and `no_scrub` are **owner** |
-| DELETE | `/v1/secrets/{id}` | erases every version of the value; a tombstone marks the metadata |
+| PATCH | `/v1/secrets/{id}` | metadata or new value (replaces the stored version). `value`, `username`, `name`, `upstreams`, `provider`, `allow_injection` and `no_scrub` are **owner**; `tags` and `notes` need only the session token |
+| DELETE | `/v1/secrets/{id}` | **owner**; erases every version of the value and revokes its handles; a tombstone marks the metadata |
 | POST | `/v1/secrets/{id}/reveal` | **owner**; requires `{confirm:true}`; returns value once; audit `reveal`; optional `reason` |
 | POST | `/v1/secrets/{id}/inject` | **owner**; plaintext for `usk run`, only with `allow_injection`; audit `inject` |
 | POST | `/v1/secrets/import` | multipart or `{format, content}` |
@@ -34,7 +34,7 @@ All responses are JSON. Errors: `{ "error": "<code>", "message": "…" }`.
 | POST | `/v1/projects` | `{name?, paths?, secrets?, cap_per_day?, notes?}`; the name defaults to the first folder's (`shop`, `shop 2`, …) |
 | GET/PATCH/DELETE | `/v1/projects/{id\|name}` | PATCH `{name?, paths?, cap_per_day?, notes?}` (`cap_per_day: null` removes the limit); DELETE keeps the secrets and handles |
 | POST | `/v1/projects/{ref}/secrets` | `{secret}` adds a secret; `DELETE /v1/projects/{ref}/secrets/{secret}` takes it out (it stays in the vault) |
-| GET/POST/DELETE | `/v1/unlock-methods`, `/v1/unlock-methods/{id}` | device unlock methods (Windows Hello); POST (enrolling) is **owner**; `POST /v1/unlock` and `/v1/confirm` also take `{wrap_id, kek}` |
+| GET/POST/DELETE | `/v1/unlock-methods`, `/v1/unlock-methods/{id}` | device unlock methods (Windows Hello); POST (enrolling) and DELETE are **owner**, and both need an unlocked vault; `POST /v1/unlock` and `/v1/confirm` also take `{wrap_id, kek}` |
 | GET | `/v1/callers` / POST / DELETE | manage MCP clients. POST `{name, replace?}` needs an unlocked vault and returns the client's token once; a new name needs only the session token, an existing one answers 409 `caller_exists` unless `replace` is set and the **owner** token is sent (the new token keeps everything approved for that name). A name the owner removed answers 409 `caller_removed` on the same terms, so a tool that registers itself cannot undo a disconnect. Audited as `caller_registered`, `caller_replaced`, `caller_removed`; each emits a `caller_changed` event |
 | GET | `/v1/callers-removed` | names the owner disconnected |
 | GET | `/v1/audit?since=&kind=&limit=&latest=` | decrypted events for the owner; `latest=true` gives the newest |
@@ -83,7 +83,7 @@ usk add --from-env .env          import & optionally replace with handles
 usk ls [--provider stripe] [--tag x]
 usk show <name>                  metadata only
 usk reveal <name> [--reason "…"] value, once, audited, requires confirmation and the password (owner)
-usk rm <name>                    also revokes every active handle of the secret
+usk rm <name>                    also revokes every active handle of the secret; asks for the vault password
 usk rotate <name>                (Phase 4) run provider adapter
 
 usk handle create <name> [--policy chat] [--label "cursor"] [--caller mcp:cursor] [--expires 30d]
@@ -106,7 +106,7 @@ usk run --with VAR=name [...] -- <cmd…>   inject secrets into a child's enviro
 usk secret set <name> [--allow-injection bool] [--no-scrub bool] [--notes …] [--tag …] [--upstream host] [--provider id]   # hosts are normalised (https://host/path → host); a new provider brings its hosts
 usk care [relaxed|balanced|strict]   show or set how careful the access Unseenkey hands out by itself is
 usk secret test <name>             one read-only request to the key's provider: works / refused / unclear
-usk secret replace <name> [--stdin]   new value under the same name (a rotated key); handles keep working
+usk secret replace <name> [--stdin]   new value under the same name (a rotated key); handles keep working; asks for the vault password (piped input: password line first, then the value)
 usk guard scan [.env]            which lines look like secrets, and which can become handles
 usk guard fix  [.env] [--dry-run] [--project p]  move them into the vault, rewrite the file with handles + base-URL variables
 usk project protect [dir] [--env .env] [--dry-run]   one step: project for the folder, keys out of its .env, handles for the project

@@ -391,6 +391,12 @@ fn device_unlock_enroll(state: tauri::State<'_, AppData>) -> Result<String, Stri
     if status["locked"].as_bool().unwrap_or(true) {
         return Err("locked: unlock the vault first".into());
     }
+    // A new way to open the vault is the owner's to add. Said before Windows
+    // Hello is shown, so the UI can ask for the password first and the person
+    // sees one Hello prompt, not two.
+    if c.owner().is_none() {
+        return Err("owner_required: confirm it is you to turn on Windows Hello".into());
+    }
     let vault_id = status["vault_id"].as_str().unwrap_or_default().to_string();
     hello::create_key(&vault_id)?;
     let salt = unseenkey_core::crypto::random_array::<32>();
@@ -440,7 +446,9 @@ fn device_unlock(state: tauri::State<'_, AppData>) -> Result<(), String> {
     Ok(())
 }
 
-/// Remove the Windows Hello enrollment (vault must be unlocked).
+/// Remove the Windows Hello enrollment (vault must be unlocked). The owner's
+/// to do: Hello, still enrolled at this point, can confirm it; otherwise the
+/// UI asks for the password and calls again.
 #[tauri::command(async)]
 fn device_unlock_remove(state: tauri::State<'_, AppData>) -> Result<(), String> {
     let c = client(&state)?;
@@ -450,8 +458,18 @@ fn device_unlock_remove(state: tauri::State<'_, AppData>) -> Result<(), String> 
     for m in methods.as_array().into_iter().flatten() {
         if m["kind"] == hello::KIND {
             if let Some(id) = m["id"].as_str() {
-                c.delete(&format!("/v1/unlock-methods/{id}"))
-                    .map_err(err_string)?;
+                let path = format!("/v1/unlock-methods/{id}");
+                match c.delete(&path) {
+                    Err(e) if e.kind == "owner_required" => {
+                        if !confirm_with_hello(&state, &c)? {
+                            return Err(err_string(e));
+                        }
+                        c.delete(&path).map_err(err_string)?;
+                    }
+                    r => {
+                        r.map_err(err_string)?;
+                    }
+                }
             }
         }
     }

@@ -719,6 +719,72 @@ async fn the_session_token_alone_cannot_reveal_approve_or_widen() {
     r.shutdown().await;
 }
 
+/// Swapping a key for one's own sends the owner's data to another account;
+/// a rename makes an approval prompt name the wrong key; a delete loses the key
+/// and removing a device unlock takes a way in away. None of these is for a
+/// program that merely read `daemon.token`.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_session_token_alone_cannot_replace_rename_or_delete() {
+    use base64::Engine as _;
+    const KEY: &str = "sk_live_51Habcdefghijklmnop";
+    let dir = tempfile::tempdir().unwrap();
+    let r = start(dir.path(), false).await;
+    let c = C::new(&r);
+    assert_eq!(c.post("/v1/unlock", json!({ "password": PW })).0, 200);
+    let (code, _) = c.post("/v1/secrets", json!({ "name": "stripe", "value": KEY }));
+    assert_eq!(code, 201);
+    let (code, m) = c.post(
+        "/v1/unlock-methods",
+        json!({ "kind": "hello", "label": "this pc",
+            "salt": base64::engine::general_purpose::STANDARD.encode([1u8; 32]),
+            "kek": base64::engine::general_purpose::STANDARD.encode([2u8; 32]) }),
+    );
+    assert_eq!(code, 200, "{m}");
+    let method = m["id"].as_str().unwrap().to_string();
+
+    c.forget_owner();
+    for body in [
+        json!({ "value": "sk_live_51Hsomebodyelseskey0" }),
+        json!({ "username": "somebody-else" }),
+        json!({ "name": "stripe-test" }),
+    ] {
+        let (code, b) = c.patch("/v1/secrets/stripe", body.clone());
+        assert_eq!(code, 403, "{body}: {b}");
+        assert_eq!(b["error"], "owner_required", "{body}");
+    }
+    let (code, b) = c.delete("/v1/secrets/stripe");
+    assert_eq!((code, b["error"].as_str()), (403, Some("owner_required")));
+    let (code, b) = c.delete(&format!("/v1/unlock-methods/{method}"));
+    assert_eq!((code, b["error"].as_str()), (403, Some("owner_required")));
+    // Tags and notes change nothing about where a key goes or what it is.
+    let (code, b) = c.patch("/v1/secrets/stripe", json!({ "notes": "billing" }));
+    assert_eq!(code, 200, "{b}");
+
+    // Nothing above took effect.
+    let m = c.get("/v1/secrets/stripe").1;
+    assert_eq!(m["name"], "stripe");
+    assert_eq!(m["value_version"], 1);
+    assert_eq!(c.get("/v1/unlock-methods").1.as_array().unwrap().len(), 1);
+    assert_eq!(c.post("/v1/confirm", json!({ "password": PW })).0, 200);
+    assert_eq!(
+        c.post("/v1/secrets/stripe/reveal", json!({ "confirm": true }))
+            .1["value"],
+        KEY
+    );
+
+    // The owner can do all of it.
+    let (code, b) = c.patch(
+        "/v1/secrets/stripe",
+        json!({ "value": "sk_live_51Hrotatedkey0000000", "name": "stripe-live" }),
+    );
+    assert_eq!(code, 200, "{b}");
+    assert_eq!(b["value_version"], 2);
+    assert_eq!(c.delete(&format!("/v1/unlock-methods/{method}")).0, 200);
+    assert_eq!(c.delete("/v1/secrets/stripe-live").0, 200);
+    assert_eq!(c.get("/v1/secrets").1.as_array().unwrap().len(), 0);
+    r.shutdown().await;
+}
+
 /// With several requests waiting, "latest" is ambiguous and refused: a tool
 /// could slip its own request in just before the owner answers.
 #[tokio::test(flavor = "multi_thread")]
