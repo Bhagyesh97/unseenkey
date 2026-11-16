@@ -16,6 +16,12 @@ export interface Status {
     secrets: number | null;
     idle_lock_minutes: number;
     care?: "relaxed" | "balanced" | "strict";
+    /** Lock when the computer sleeps. Missing from a service older than 0.1.10. */
+    lock_on_sleep?: boolean;
+    /** Lock when the screen is locked. */
+    lock_on_session_lock?: boolean;
+    /** Whether AI tools may add keys to the vault. */
+    mcp_allow_store?: boolean;
     /** Activity events that could not be written since the service started. */
     audit_lost?: number;
   };

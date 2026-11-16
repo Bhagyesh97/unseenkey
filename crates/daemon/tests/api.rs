@@ -553,10 +553,11 @@ abc
     r.shutdown().await;
 }
 
-/// The idle lock can be changed while the daemon runs, is kept in
-/// config.toml, and rejects nonsense.
+/// The idle lock can be changed while the daemon runs and rejects nonsense.
+/// It is kept in the vault, not in a file next to it (`tests/settings.rs`
+/// covers what survives a restart).
 #[tokio::test(flavor = "multi_thread")]
-async fn the_idle_lock_can_be_changed_and_is_saved() {
+async fn the_idle_lock_can_be_changed_and_rejects_nonsense() {
     let dir = tempfile::tempdir().unwrap();
     let r = start(dir.path(), false).await;
     let c = C::new(&r);
@@ -564,25 +565,24 @@ async fn the_idle_lock_can_be_changed_and_is_saved() {
     let (code, b) = c.patch("/v1/settings", json!({ "idle_lock_minutes": 5 }));
     assert_eq!(code, 200, "{b}");
     assert_eq!(c.get("/v1/status").1["idle_lock_minutes"], 5);
-    let saved = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
-    assert!(saved.contains("idle_lock_minutes = 5"), "{saved}");
-    // Other keys in the file survive.
-    std::fs::write(
-        dir.path().join("config.toml"),
-        format!("{saved}lock_on_sleep = false\n"),
-    )
-    .unwrap();
+    assert!(
+        !dir.path().join("config.toml").exists(),
+        "a changed setting writes no file next to the vault"
+    );
     assert_eq!(
         c.patch("/v1/settings", json!({ "idle_lock_minutes": 0 })).0,
         200
     );
-    let saved = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
-    assert!(
-        saved.contains("idle_lock_minutes = 0") && saved.contains("lock_on_sleep = false"),
-        "{saved}"
-    );
+    assert_eq!(c.get("/v1/status").1["idle_lock_minutes"], 0);
     let (code, e) = c.patch("/v1/settings", json!({ "idle_lock_minutes": 100000 }));
     assert_eq!(code, 400, "{e}");
+    assert_eq!(c.get("/v1/status").1["idle_lock_minutes"], 0);
+    let (code, e) = c.patch("/v1/settings", json!({ "care": "careless" }));
+    assert_eq!(code, 400, "{e}");
+    // Settings live in the vault: a locked one can neither show nor take them.
+    assert_eq!(c.post("/v1/lock", json!({})).0, 200);
+    let (code, e) = c.patch("/v1/settings", json!({ "idle_lock_minutes": 30 }));
+    assert_ne!(code, 200, "{e}");
     r.shutdown().await;
 }
 

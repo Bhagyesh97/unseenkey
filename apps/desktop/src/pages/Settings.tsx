@@ -47,7 +47,10 @@ export function Settings({ status, onLock, updater }: { status: Status; onLock: 
   };
 
 
-  const [care, setCare] = useState<string>(status.daemon?.care ?? "balanced");
+  // The settings are kept in the vault, so what the service reports changes
+  // with an unlock. A value saved here is shown until then.
+  const [careSaved, setCare] = useState<string | null>(null);
+  const care = careSaved ?? status.daemon?.care ?? "balanced";
   const [careMsg, setCareMsg] = useState<string | null>(null);
   const saveCare = async (c: string) => {
     setCareMsg(null);
@@ -67,11 +70,31 @@ export function Settings({ status, onLock, updater }: { status: Status; onLock: 
     try {
       await api.call("PATCH", "/v1/settings", { idle_lock_minutes: m });
       setLockAfter(m);
-      setLockMsg(m === 0 ? "The vault will only lock when you lock it, lock Windows or the computer sleeps." : "Saved.");
+      setLockMsg(m === 0 ? "Saved. The vault no longer locks after a time without use." : "Saved.");
     } catch (e) {
       setLockMsg((e as Error).message);
     }
   };
+  type Switch = "lock_on_sleep" | "lock_on_session_lock" | "mcp_allow_store";
+  const [switches, setSwitches] = useState<Partial<Record<Switch, boolean>>>({});
+  const [switchMsg, setSwitchMsg] = useState<string | null>(null);
+  const isOn = (k: Switch) => switches[k] ?? status.daemon?.[k] ?? false;
+  // A service older than 0.1.10 does not report these and cannot set them.
+  const fixed = (k: Switch) => !status.daemon || status.daemon.locked || status.daemon[k] === undefined;
+  const saveSwitch = async (k: Switch, on: boolean) => {
+    setSwitchMsg(null);
+    try {
+      const r = await api.call<Partial<Record<Switch, boolean>>>("PATCH", "/v1/settings", { [k]: on });
+      setSwitches((s) => ({ ...s, [k]: r[k] }));
+    } catch (e) {
+      setSwitchMsg((e as Error).message);
+    }
+  };
+  useEffect(() => {
+    setCare(null);
+    setLockAfter(null);
+    setSwitches({});
+  }, [status.daemon?.locked]);
   return (
     <div className="single">
       <header className="pane-head"><h2>Settings</h2></header>
@@ -90,7 +113,7 @@ export function Settings({ status, onLock, updater }: { status: Status; onLock: 
       <p className="muted small">In a terminal: <code>usk care {care}</code></p>
 
       <h3>Locking</h3>
-      <p className="muted small">The vault also locks when you lock Windows or the computer sleeps.</p>
+      <p className="muted small">A locked vault hands out no keys until you unlock it again.</p>
       <div className="row-main">
         <span>Lock when not used for</span>
         <select value={String(lockAfter ?? status.daemon?.idle_lock_minutes ?? 15)} disabled={!status.daemon || status.daemon.locked} onChange={(e) => void saveLock(Number(e.target.value))}>
@@ -99,13 +122,31 @@ export function Settings({ status, onLock, updater }: { status: Status; onLock: 
         {status.daemon && !status.daemon.locked && <button onClick={() => void onLock()}>Lock now</button>}
       </div>
       {lockMsg && <p className="muted small">{lockMsg}</p>}
+      <label className="check">
+        <input type="checkbox" checked={isOn("lock_on_sleep")} disabled={fixed("lock_on_sleep")} onChange={(e) => void saveSwitch("lock_on_sleep", e.target.checked)} />
+        Lock when the computer goes to sleep
+      </label>
+      <label className="check">
+        <input type="checkbox" checked={isOn("lock_on_session_lock")} disabled={fixed("lock_on_session_lock")} onChange={(e) => void saveSwitch("lock_on_session_lock", e.target.checked)} />
+        Lock when you lock Windows
+      </label>
+
+      <h3>Adding keys</h3>
+      <label className="check">
+        <input type="checkbox" checked={isOn("mcp_allow_store")} disabled={fixed("mcp_allow_store")} onChange={(e) => void saveSwitch("mcp_allow_store", e.target.checked)} />
+        Let AI tools add keys they come across to the vault
+      </label>
+      <p className="muted small">Off unless you turn it on. An AI tool that finds a key in your project can then put it in the vault; it still cannot read any key back.</p>
+      {switchMsg && <p className="muted small">{switchMsg}</p>}
+      {status.daemon && !status.daemon.locked && status.daemon.lock_on_sleep === undefined && <p className="muted small">The background service is older than this app; restart it to change these.</p>}
+      <p className="muted small">In a terminal: <code>usk settings</code></p>
       <details className="tech">
         <summary>Technical details</summary>
         <dl className="kv small">
           <dt>Vault file</dt><dd><code>{status.vault_path}</code></dd>
           <dt>Background service</dt><dd>{status.daemon ? `running, version ${status.daemon.version}, for ${Math.round(status.daemon.uptime_s / 60)} min, ${status.daemon.locked ? "locked" : "unlocked"}` : "not running"}</dd>
           <dt>App</dt><dd>version {status.app_version}</dd>
-          <dt>Settings file</dt><dd><code>config.toml</code> next to the vault file</dd>
+          <dt>Settings</dt><dd>kept in the vault, so only you can change them. <code>config.toml</code> next to the vault file sets the address the service listens on, nothing else once the vault has been unlocked</dd>
         </dl>
       </details>
       </section>

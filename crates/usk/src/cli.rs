@@ -171,6 +171,23 @@ enum Command {
         /// The level to set.
         level: Option<String>,
     },
+    /// When the vault locks and whether AI tools may add keys: show the
+    /// settings, or change them. They are kept in the vault, so only the
+    /// owner can change them.
+    Settings {
+        /// Lock after this many minutes without use; 0 means never.
+        #[arg(long, value_name = "MINUTES")]
+        idle_lock: Option<u64>,
+        /// Lock when the computer goes to sleep.
+        #[arg(long, value_name = "on|off")]
+        lock_on_sleep: Option<OnOff>,
+        /// Lock when the screen is locked.
+        #[arg(long, value_name = "on|off")]
+        lock_on_screen_lock: Option<OnOff>,
+        /// Let AI tools add keys they come across to the vault.
+        #[arg(long, value_name = "on|off")]
+        agents_may_store: Option<OnOff>,
+    },
     /// Group secrets by the code folder that uses them; agents started in a
     /// project's folder see only its secrets.
     Project {
@@ -251,7 +268,8 @@ enum DaemonAction {
         /// Loopback address (default from config or 127.0.0.1:7391).
         #[arg(long)]
         listen: Option<String>,
-        /// Lock after N idle minutes (0 disables).
+        /// Lock after N idle minutes (0 disables). Only a starting value: a
+        /// vault that holds its own settings uses those (`usk settings`).
         #[arg(long)]
         idle_lock_minutes: Option<u64>,
         /// Log to the vault's logs directory instead of stderr (used when spawned).
@@ -407,6 +425,27 @@ pub fn run() -> Result<(), CliError> {
         },
         Command::Project { action } => crate::project::run(&paths, action, cli.json),
         Command::Care { level } => care(&paths, level.as_deref()),
+        Command::Settings {
+            idle_lock,
+            lock_on_sleep,
+            lock_on_screen_lock,
+            agents_may_store,
+        } => {
+            let mut change = serde_json::Map::new();
+            if let Some(m) = idle_lock {
+                change.insert("idle_lock_minutes".into(), m.into());
+            }
+            for (key, value) in [
+                ("lock_on_sleep", lock_on_sleep),
+                ("lock_on_session_lock", lock_on_screen_lock),
+                ("mcp_allow_store", agents_may_store),
+            ] {
+                if let Some(v) = value {
+                    change.insert(key.into(), matches!(v, OnOff::On).into());
+                }
+            }
+            settings(&paths, change, cli.json)
+        }
         Command::Guard { action } => match action {
             GuardAction::Scan { path } => crate::guard::scan(&path, cli.json).map(|_| ()),
             GuardAction::Fix {
@@ -2099,6 +2138,75 @@ enum SecretAction {
         #[arg(long)]
         username: Option<String>,
     },
+}
+
+/// A switch on the command line.
+#[derive(Clone, Copy, ValueEnum)]
+enum OnOff {
+    On,
+    Off,
+}
+
+/// `usk settings`: show the owner's settings, or change the ones given.
+fn settings(
+    paths: &VaultPaths,
+    change: serde_json::Map<String, Value>,
+    json: bool,
+) -> Result<(), CliError> {
+    // The settings are in the vault; a locked one only shows what the daemon
+    // was started with.
+    let c = unlocked(paths)?;
+    let now = if change.is_empty() {
+        c.get("/v1/status")?
+    } else {
+        c.ensure_owner()?;
+        c.patch("/v1/settings", Value::Object(change.clone()))?
+    };
+    if json {
+        println!(
+            "{}",
+            json!({
+                "care": now["care"],
+                "idle_lock_minutes": now["idle_lock_minutes"],
+                "lock_on_sleep": now["lock_on_sleep"],
+                "lock_on_session_lock": now["lock_on_session_lock"],
+                "mcp_allow_store": now["mcp_allow_store"],
+            })
+        );
+        return Ok(());
+    }
+    let on = |key: &str| {
+        if now[key].as_bool().unwrap_or(false) {
+            "on"
+        } else {
+            "off"
+        }
+    };
+    let idle = match now["idle_lock_minutes"].as_u64().unwrap_or(0) {
+        0 => "never".to_string(),
+        1 => "after 1 minute".to_string(),
+        m => format!("after {m} minutes"),
+    };
+    if !change.is_empty() {
+        println!("Saved.");
+    }
+    println!(
+        "Care:                           {}",
+        now["care"].as_str().unwrap_or("balanced")
+    );
+    println!("Lock when not used:             {idle}");
+    println!("Lock when the computer sleeps:  {}", on("lock_on_sleep"));
+    println!(
+        "Lock when the screen locks:     {}",
+        on("lock_on_session_lock")
+    );
+    println!("AI tools may add keys:          {}", on("mcp_allow_store"));
+    if change.is_empty() {
+        println!();
+        println!("Change them with `usk settings --idle-lock <minutes>`, `--lock-on-sleep on|off`, `--lock-on-screen-lock on|off`, `--agents-may-store on|off`, and the care level with `usk care`.");
+        println!("They are kept in the vault: editing config.toml or restarting the service does not change them.");
+    }
+    Ok(())
 }
 
 fn care(paths: &VaultPaths, level: Option<&str>) -> Result<(), CliError> {

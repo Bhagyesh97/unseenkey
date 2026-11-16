@@ -171,10 +171,18 @@ Each vault record is encrypted with the vault key before upload. The relay sees 
 
 ```toml
 [daemon]
-listen = "127.0.0.1:7391"
+listen = "127.0.0.1:7391"    # read at every start
+
+# Starting values only (see below).
 idle_lock_minutes = 15
 lock_on_sleep = true
+lock_on_session_lock = true
+care = "balanced"            # relaxed | balanced | strict
 
+[mcp]
+allow_store = false          # starting value only
+
+# Planned, not read yet.
 [security]
 argon2_profile = "desktop"   # desktop | light
 allow_injection_default = false
@@ -186,3 +194,5 @@ relay = "https://relay.unseenkey.com"
 ```
 
 No secret material ever appears in config.
+
+Any program running as the user can edit this file, so it does not decide how an unlocked vault behaves. The care level, the three lock settings and `allow_store` are the owner's settings: they live in a record in the vault and are changed with `usk settings`, `usk care` or the app, which ask for the owner. The values in the file (and `--idle-lock-minutes`, `USK_IDLE_LOCK_MINUTES`) apply until the first unlock after a start, and a vault that has no settings yet stores them once at that unlock. From then on editing the file changes none of them. The daemon never writes the file.

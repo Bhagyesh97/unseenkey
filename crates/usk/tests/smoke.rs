@@ -1723,6 +1723,79 @@ fn restarting_the_service_locks_the_vault() {
     assert_eq!(s["daemon"]["version"], s["version"]);
 }
 
+/// The owner's settings are set from the CLI, kept in the vault, and not
+/// changed by a file next to it or by how the daemon is started.
+#[test]
+fn settings_from_the_cli_stay_in_the_vault() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.db");
+    let _stop = StopDaemon(&vault);
+    assert!(usk(&vault, &["init", "--profile", "light"], PW)
+        .status
+        .success());
+    let status = || -> serde_json::Value {
+        let o = usk(&vault, &["--json", "status"], "");
+        serde_json::from_str::<serde_json::Value>(&out(&o)).unwrap()["daemon"].clone()
+    };
+
+    // What the daemon started with (the tests start it with no idle lock).
+    let o = usk(&vault, &["settings"], PW);
+    assert!(o.status.success(), "{}", err(&o));
+    let shown = out(&o);
+    assert!(shown.contains("balanced"), "{shown}");
+    assert!(shown.contains("never"), "{shown}");
+    assert!(shown.contains("usk settings --"), "{shown}");
+
+    let o = usk(
+        &vault,
+        &[
+            "settings",
+            "--idle-lock",
+            "30",
+            "--lock-on-sleep",
+            "off",
+            "--agents-may-store",
+            "on",
+        ],
+        PW,
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(out(&o).contains("30 minutes"), "{}", out(&o));
+    let s = status();
+    assert_eq!(s["idle_lock_minutes"], 30, "{s}");
+    assert_eq!(s["lock_on_sleep"], false, "{s}");
+    assert_eq!(s["lock_on_session_lock"], true, "{s}");
+    assert_eq!(s["mcp_allow_store"], true, "{s}");
+
+    let o = usk(&vault, &["--json", "settings"], "");
+    let j: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
+    assert_eq!(j["idle_lock_minutes"], 30, "{j}");
+    assert_eq!(j["care"], "balanced", "{j}");
+
+    // Nonsense is refused and changes nothing.
+    let o = usk(&vault, &["settings", "--idle-lock", "5000"], PW);
+    assert!(!o.status.success());
+    assert!(err(&o).contains("1440"), "{}", err(&o));
+    assert_eq!(status()["idle_lock_minutes"], 30);
+
+    // A looser file next to the vault and a restart: the vault's own apply.
+    std::fs::write(
+        dir.path().join("config.toml"),
+        "[daemon]\nidle_lock_minutes = 0\nlock_on_sleep = true\nlock_on_session_lock = false\ncare = \"relaxed\"\n\n[mcp]\nallow_store = false\n",
+    )
+    .unwrap();
+    assert!(usk(&vault, &["daemon", "restart"], "").status.success());
+    let o = usk(&vault, &["unlock"], PW);
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(!err(&o).contains("warning"), "{}", err(&o));
+    let s = status();
+    assert_eq!(s["idle_lock_minutes"], 30, "{s}");
+    assert_eq!(s["lock_on_sleep"], false, "{s}");
+    assert_eq!(s["lock_on_session_lock"], true, "{s}");
+    assert_eq!(s["mcp_allow_store"], true, "{s}");
+    assert_eq!(s["care"], "balanced", "{s}");
+}
+
 #[test]
 fn the_log_shows_what_just_happened() {
     let dir = tempfile::tempdir().unwrap();

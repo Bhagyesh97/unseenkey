@@ -660,7 +660,7 @@ async fn request_access(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args
 }
 
 async fn store_secret(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args: &Value) -> Value {
-    if !s.mcp_allow_store {
+    if !s.mcp_allow_store() {
         return tool_text(
             "store_secret is disabled; ask the user to run `usk add <name>`",
             true,
@@ -757,7 +757,7 @@ pub async fn handle_message(
         // Notification: nothing to answer.
         return None;
     };
-    if let Some(result) = static_result(method, s.mcp_allow_store) {
+    if let Some(result) = static_result(method, s.mcp_allow_store()) {
         return Some(rpc_result(id, result));
     }
     let result = match method {

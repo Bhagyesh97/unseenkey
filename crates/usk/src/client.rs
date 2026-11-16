@@ -247,6 +247,16 @@ impl Client {
         if let Some(t) = reply["owner_token"].as_str() {
             self.set_owner(Some(t.to_string()));
         }
+        // An unlock also says where the settings now in force came from.
+        match reply["settings"].as_str() {
+            Some("reset") => eprintln!(
+                "warning: this vault's settings were missing or could not be read, so the cautious ones are in force (care strict, lock after 15 minutes, on sleep and on screen lock, AI tools may not add keys). `usk log --kind settings_tampered` says why; set them again with `usk settings` and `usk care`."
+            ),
+            Some("unsettled") => eprintln!(
+                "warning: this vault's settings could not be read or stored this time, so the cautious ones are in force until the next unlock. `usk status` and `usk doctor` may say why."
+            ),
+            _ => {}
+        }
     }
 
     /// Prove the owner with the password on an unlocked vault (`POST /v1/confirm`)

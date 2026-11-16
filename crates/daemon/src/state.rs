@@ -12,7 +12,7 @@ use unseenkey_core::policy::Usage;
 use unseenkey_core::presets::{self, Auth};
 use unseenkey_core::storage::sqlite::SqliteStorage;
 use unseenkey_core::time::SystemClock;
-use unseenkey_core::vault::{SecretKind, Vault, VaultError};
+use unseenkey_core::vault::{OwnerSettings, SecretKind, Vault, VaultError};
 
 use crate::api::ApiError;
 
@@ -331,12 +331,21 @@ pub struct AppState {
     pub events: broadcast::Sender<Event>,
     /// Daemon start time.
     pub started: Instant,
+    /// What the daemon was started with (flags, environment, `config.toml`).
+    /// In force until the first unlock, and taken over by a vault that has no
+    /// settings of its own yet. After that the vault's record decides; see
+    /// [`AppState::apply_settings`].
+    pub seed_settings: OwnerSettings,
     /// Idle lock timeout; zero disables.
     pub idle_lock_secs: std::sync::atomic::AtomicU64,
-    /// `config.toml` next to the vault, where a changed idle time is saved.
-    pub config_path: std::path::PathBuf,
     /// The care level as `Care as u8` (see [`AppState::care`]).
     pub care: std::sync::atomic::AtomicU8,
+    /// Lock when the machine goes to sleep.
+    pub lock_on_sleep: std::sync::atomic::AtomicBool,
+    /// Lock when the screen is locked.
+    pub lock_on_session_lock: std::sync::atomic::AtomicBool,
+    /// Whether the sleep and screen-lock watchers are running.
+    pub lock_watch_started: std::sync::atomic::AtomicBool,
     /// Becomes `true` once a shutdown was requested (API or signal).
     pub shutdown: watch::Sender<bool>,
     /// Secret values to guard, rebuilt on unlock and on secret changes.
@@ -357,8 +366,9 @@ pub struct AppState {
     pub approvals: Mutex<Approvals>,
     /// Registered MCP clients.
     pub callers: crate::callers::Callers,
-    /// Whether the MCP `store_secret` tool is enabled.
-    pub mcp_allow_store: bool,
+    /// Whether the MCP `store_secret` tool is enabled (see
+    /// [`AppState::mcp_allow_store`]).
+    pub mcp_allow_store: std::sync::atomic::AtomicBool,
     /// OAuth access tokens held for `oauth2_client` secrets. Memory only.
     pub oauth: Mutex<crate::oauth::TokenCache>,
     /// The same tokens for the scrubber: (`<secret>.access_token`, value).
@@ -565,6 +575,81 @@ impl AppState {
             Care::Strict => 2,
         };
         self.care.store(n, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether AI tools may add keys (the MCP `store_secret` tool).
+    pub fn mcp_allow_store(&self) -> bool {
+        self.mcp_allow_store
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The owner settings in force now.
+    pub fn settings(&self) -> OwnerSettings {
+        use std::sync::atomic::Ordering::Relaxed;
+        OwnerSettings {
+            care: self.care(),
+            idle_lock_minutes: self.idle_lock().as_secs() / 60,
+            lock_on_sleep: self.lock_on_sleep.load(Relaxed),
+            lock_on_session_lock: self.lock_on_session_lock.load(Relaxed),
+            mcp_allow_store: self.mcp_allow_store(),
+        }
+    }
+
+    /// Put settings in force. Called with what the daemon was started with,
+    /// then on every unlock with the vault's record, and when the owner
+    /// changes one. Needs a Tokio runtime (the watchers hand it the lock).
+    pub fn apply_settings(self: &std::sync::Arc<Self>, settings: &OwnerSettings) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.set_care(settings.care);
+        self.idle_lock_secs
+            .store(settings.idle_lock_minutes * 60, Relaxed);
+        self.lock_on_sleep.store(settings.lock_on_sleep, Relaxed);
+        self.lock_on_session_lock
+            .store(settings.lock_on_session_lock, Relaxed);
+        self.mcp_allow_store
+            .store(settings.mcp_allow_store, Relaxed);
+        self.ensure_lock_watch();
+    }
+
+    /// Start the OS hooks for suspend and screen lock the first time either
+    /// is wanted. They stay for the life of the process and ask the settings
+    /// each time they fire, so turning one off later needs no teardown. Each
+    /// fires on its own thread and hands the lock to the runtime;
+    /// `lock_vault` is a no-op when already locked.
+    fn ensure_lock_watch(self: &std::sync::Arc<Self>) {
+        use std::sync::atomic::Ordering::Relaxed;
+        if !(self.lock_on_sleep.load(Relaxed) || self.lock_on_session_lock.load(Relaxed)) {
+            return;
+        }
+        if self.lock_watch_started.swap(true, Relaxed) {
+            return;
+        }
+        let rt = tokio::runtime::Handle::current();
+        let state = std::sync::Arc::downgrade(self);
+        let handle = rt.clone();
+        if let Err(e) = crate::platform::watch_system(move |reason| {
+            let Some(s) = state.upgrade() else { return };
+            let wanted = (reason == crate::platform::REASON_SLEEP && s.lock_on_sleep.load(Relaxed))
+                || (reason == crate::platform::REASON_SESSION_LOCK
+                    && s.lock_on_session_lock.load(Relaxed));
+            if wanted {
+                handle.spawn(async move {
+                    s.lock_vault(reason).await;
+                });
+            }
+        }) {
+            tracing::warn!(error = %e, "system lock notifications unavailable");
+        }
+        // The portable fallback: a wall-clock jump means the machine slept.
+        let state = std::sync::Arc::downgrade(self);
+        crate::platform::watch_resume(move || {
+            let Some(s) = state.upgrade() else { return };
+            if s.lock_on_sleep.load(Relaxed) {
+                rt.spawn(async move {
+                    s.lock_vault(crate::platform::REASON_SLEEP).await;
+                });
+            }
+        });
     }
 
     /// Idle time after which the vault locks; zero means never.

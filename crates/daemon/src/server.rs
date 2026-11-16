@@ -106,7 +106,9 @@ pub struct ServeOptions {
     pub vault_path: PathBuf,
     /// Loopback `host:port`; port 0 for ephemeral.
     pub listen: String,
-    /// Idle lock in minutes; 0 disables.
+    /// Idle lock in minutes; 0 disables. Like the three switches below and
+    /// the care level in `config.toml`, this is a starting value: once the
+    /// vault holds the owner's settings, those apply on every unlock.
     pub idle_lock_minutes: u64,
     /// Write `daemon.token`, `daemon.addr`, `daemon.pid` next to the vault.
     pub write_runtime_files: bool,
@@ -228,11 +230,21 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
     }
     let storage = SqliteStorage::open(&opts.vault_path)?;
     let vault = Vault::open(storage, SystemClock)?;
-    // The care level lives in config.toml with the other owner settings.
-    let care = crate::config::load(&VaultPaths::from_vault_file(&opts.vault_path).config)
-        .ok()
-        .and_then(|c| presets::Care::parse(&c.daemon.care))
-        .unwrap_or_default();
+    // What this daemon was started with. It holds until the first unlock; a
+    // vault with settings of its own then replaces all of it, and a vault
+    // without takes it over once. `config.toml` can be edited by any program
+    // running as the user, so it must not be able to loosen an unlocked vault.
+    let seed = unseenkey_core::vault::OwnerSettings {
+        care: crate::config::load(&VaultPaths::from_vault_file(&opts.vault_path).config)
+            .ok()
+            .and_then(|c| presets::Care::parse(&c.daemon.care))
+            .unwrap_or_default(),
+        idle_lock_minutes: opts.idle_lock_minutes,
+        lock_on_sleep: opts.lock_on_sleep,
+        lock_on_session_lock: opts.lock_on_session_lock,
+        mcp_allow_store: opts.mcp_allow_store,
+    }
+    .clamped();
     // reqwest is built without a default TLS provider; use ring (pure Rust).
     let _ = rustls::crypto::ring::default_provider().install_default();
     let http = reqwest::Client::builder()
@@ -272,9 +284,12 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
         unlock_attempts: Mutex::new(Vec::new()),
         events,
         started: Instant::now(),
-        idle_lock_secs: std::sync::atomic::AtomicU64::new(opts.idle_lock_minutes * 60),
-        config_path: VaultPaths::from_vault_file(&opts.vault_path).config,
+        seed_settings: seed,
+        idle_lock_secs: Default::default(),
         care: std::sync::atomic::AtomicU8::new(1),
+        lock_on_sleep: Default::default(),
+        lock_on_session_lock: Default::default(),
+        lock_watch_started: Default::default(),
         shutdown: watch::channel(false).0,
         retired: RwLock::new(Vec::new()),
         requests_out: std::sync::Mutex::new(HashMap::new()),
@@ -292,10 +307,11 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
                 .mcp
                 .join("clients.json"),
         ),
-        mcp_allow_store: opts.mcp_allow_store,
+        mcp_allow_store: Default::default(),
         oauth: Mutex::new(Default::default()),
         live_tokens: RwLock::new(Vec::new()),
     });
+    state.apply_settings(&seed);
 
     let paths = if opts.write_runtime_files {
         let p = VaultPaths::from_vault_file(&opts.vault_path);
@@ -406,37 +422,6 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
         });
     }
 
-    // OS hooks: suspend and session lock. Each fires on its own thread and
-    // hands the lock to the runtime; `lock_vault` is a no-op when already locked.
-    if opts.lock_on_sleep || opts.lock_on_session_lock {
-        let (on_sleep, on_session) = (opts.lock_on_sleep, opts.lock_on_session_lock);
-        let s = state.clone();
-        let rt = tokio::runtime::Handle::current();
-        if let Err(e) = crate::platform::watch_system(move |reason| {
-            let wanted = (reason == crate::platform::REASON_SLEEP && on_sleep)
-                || (reason == crate::platform::REASON_SESSION_LOCK && on_session);
-            if wanted {
-                let s = s.clone();
-                rt.spawn(async move {
-                    s.lock_vault(reason).await;
-                });
-            }
-        }) {
-            tracing::warn!(error = %e, "system lock notifications unavailable");
-        }
-    }
-    if opts.lock_on_sleep {
-        let s = state.clone();
-        let rt = tokio::runtime::Handle::current();
-        crate::platform::watch_resume(move || {
-            let s = s.clone();
-            rt.spawn(async move {
-                s.lock_vault(crate::platform::REASON_SLEEP).await;
-            });
-        });
-    }
-
-    state.set_care(care);
     let mut shutdown_rx = state.shutdown.subscribe();
     let mut grace_rx = state.shutdown.subscribe();
     let handle = tokio::spawn(async move {

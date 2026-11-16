@@ -22,7 +22,10 @@ use unseenkey_core::policy::{explain, Policy};
 use unseenkey_core::presets;
 use unseenkey_core::providers;
 use unseenkey_core::vault::HandleOptions;
-use unseenkey_core::vault::{NewSecret, SecretKind, SecretMeta, VaultError};
+use unseenkey_core::vault::{
+    NewSecret, OwnerSettings, SecretKind, SecretMeta, SettingsOrigin, VaultError,
+    MAX_IDLE_LOCK_MINUTES,
+};
 use zeroize::Zeroizing;
 
 /// JSON error body: `{ "error": code, "message": text }`.
@@ -136,6 +139,12 @@ pub struct Status {
     pub idle_lock_minutes: u64,
     /// Care level: `relaxed`, `balanced` or `strict`.
     pub care: &'static str,
+    /// Lock when the machine goes to sleep.
+    pub lock_on_sleep: bool,
+    /// Lock when the screen is locked.
+    pub lock_on_session_lock: bool,
+    /// Whether AI tools may add keys (MCP `store_secret`).
+    pub mcp_allow_store: bool,
     /// Audit events that could not be written since the daemon started
     /// (disk full, file locked or damaged). 0 is the healthy value.
     pub audit_lost: u64,
@@ -144,14 +153,18 @@ pub struct Status {
 /// `GET /v1/status`
 pub async fn status(State(s): State<Arc<AppState>>) -> ApiResult<Status> {
     let v = s.vault.lock().await;
+    let settings = s.settings();
     Ok(Json(Status {
         locked: v.is_locked(),
         vault_id: v.vault_id().to_hex(),
         version: env!("CARGO_PKG_VERSION"),
         uptime_s: s.started.elapsed().as_secs(),
         secrets: if v.is_locked() { None } else { Some(v.len()) },
-        idle_lock_minutes: s.idle_lock().as_secs() / 60,
-        care: s.care().as_str(),
+        idle_lock_minutes: settings.idle_lock_minutes,
+        care: settings.care.as_str(),
+        lock_on_sleep: settings.lock_on_sleep,
+        lock_on_session_lock: settings.lock_on_session_lock,
+        mcp_allow_store: settings.mcp_allow_store,
         audit_lost: s.audit_lost(),
     }))
 }
@@ -164,6 +177,12 @@ pub struct PatchSettings {
     /// `relaxed`, `balanced` or `strict`; applied to every active handle whose
     /// policy Unseenkey handed out and nobody edited.
     pub care: Option<String>,
+    /// Lock when the machine goes to sleep.
+    pub lock_on_sleep: Option<bool>,
+    /// Lock when the screen is locked.
+    pub lock_on_session_lock: Option<bool>,
+    /// Let AI tools add keys they come across (MCP `store_secret`).
+    pub mcp_allow_store: Option<bool>,
 }
 
 /// Re-apply the care level to the handles that follow it. Handles made by AI
@@ -206,88 +225,131 @@ fn apply_care(v: &mut crate::state::DaemonVault, care: presets::Care) -> Result<
     Ok(targets.len())
 }
 
-/// `PATCH /v1/settings`: change the idle lock now and keep it in `config.toml`.
-/// Owner only: a longer idle lock or a looser care level widens what every
-/// tool may do.
+/// `PATCH /v1/settings`: change the owner's settings. They are written to
+/// the vault's own record and take effect at once. Owner only: a longer idle
+/// lock, a looser care level or a switch turned off widens what every tool
+/// may do. `config.toml` is not written and, once the vault has this record,
+/// no longer read for any of them.
 pub async fn patch_settings(
     State(s): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(p): Json<PatchSettings>,
 ) -> ApiResult<serde_json::Value> {
     require_owner(&s, &headers)?;
-    if let Some(m) = p.idle_lock_minutes {
-        if m > 24 * 60 {
-            return Err(ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "invalid",
-                "the idle lock is at most 1440 minutes (a day); 0 turns it off",
-            ));
-        }
-        crate::config::set_daemon_value(
-            &s.config_path,
-            "idle_lock_minutes",
-            toml::Value::Integer(m as i64),
-        )
-        .map_err(|e| {
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "config_error",
-                e.to_string(),
-            )
-        })?;
-        s.idle_lock_secs
-            .store(m * 60, std::sync::atomic::Ordering::Relaxed);
-        s.touch().await;
-        let mut v = s.vault.lock().await;
-        s.audit_note(
-            &mut v,
-            kinds::SETTINGS_CHANGED,
-            serde_json::json!({ "idle_lock_minutes": m }),
-        );
-        tracing::info!(minutes = m, "idle lock changed");
+    if p.idle_lock_minutes
+        .is_some_and(|m| m > MAX_IDLE_LOCK_MINUTES)
+    {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid",
+            "the idle lock is at most 1440 minutes (a day); 0 turns it off",
+        ));
     }
-    let mut applied = None;
-    if let Some(c) = p.care.as_deref() {
-        let care = presets::Care::parse(c).ok_or_else(|| {
+    let care = match p.care.as_deref() {
+        None => None,
+        Some(c) => Some(presets::Care::parse(c).ok_or_else(|| {
             ApiError::new(
                 StatusCode::BAD_REQUEST,
                 "invalid",
                 "care is relaxed, balanced or strict",
             )
-        })?;
-        crate::config::set_daemon_value(
-            &s.config_path,
-            "care",
-            toml::Value::String(care.as_str().into()),
-        )
-        .map_err(|e| {
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "config_error",
-                e.to_string(),
-            )
-        })?;
-        s.set_care(care);
-        let mut v = s.vault.lock().await;
-        let n = if v.is_locked() {
-            0
-        } else {
-            apply_care(&mut v, care)?
-        };
+        })?),
+    };
+    let mut v = s.vault.lock().await;
+    if v.is_locked() {
+        return Err(VaultError::Locked.into());
+    }
+    // Since the unlock, what is in force is what the vault holds.
+    let mut settings = s.settings();
+    let mut changed = serde_json::Map::new();
+    if let Some(m) = p.idle_lock_minutes {
+        settings.idle_lock_minutes = m;
+        changed.insert("idle_lock_minutes".into(), m.into());
+    }
+    if let Some(c) = care {
+        settings.care = c;
+        changed.insert("care".into(), c.as_str().into());
+    }
+    if let Some(on) = p.lock_on_sleep {
+        settings.lock_on_sleep = on;
+        changed.insert("lock_on_sleep".into(), on.into());
+    }
+    if let Some(on) = p.lock_on_session_lock {
+        settings.lock_on_session_lock = on;
+        changed.insert("lock_on_session_lock".into(), on.into());
+    }
+    if let Some(on) = p.mcp_allow_store {
+        settings.mcp_allow_store = on;
+        changed.insert("mcp_allow_store".into(), on.into());
+    }
+    let mut handles_updated = None;
+    if !changed.is_empty() {
+        // The record first: a setting that could not be kept is not applied.
+        v.set_owner_settings(&settings)?;
+        s.apply_settings(&settings);
+        if let Some(c) = care {
+            let n = apply_care(&mut v, c)?;
+            changed.insert("handles_updated".into(), n.into());
+            handles_updated = Some(n);
+        }
+        tracing::info!(changed = %serde_json::Value::Object(changed.clone()), "settings changed");
         s.audit_note(
             &mut v,
             kinds::SETTINGS_CHANGED,
-            serde_json::json!({ "care": care.as_str(), "handles_updated": n }),
+            serde_json::Value::Object(changed),
         );
-        tracing::info!(care = care.as_str(), handles = n, "care level changed");
-        applied = Some(n);
+    }
+    drop(v);
+    if p.idle_lock_minutes.is_some() {
+        s.touch().await;
     }
     Ok(Json(serde_json::json!({
         "ok": true,
-        "idle_lock_minutes": s.idle_lock().as_secs() / 60,
-        "care": s.care().as_str(),
-        "handles_updated": applied,
+        "idle_lock_minutes": settings.idle_lock_minutes,
+        "care": settings.care.as_str(),
+        "lock_on_sleep": settings.lock_on_sleep,
+        "lock_on_session_lock": settings.lock_on_session_lock,
+        "mcp_allow_store": settings.mcp_allow_store,
+        "handles_updated": handles_updated,
     })))
+}
+
+/// After an unlock: put the vault's own settings in force, whatever the
+/// daemon was started with (see [`unseenkey_core::vault::Vault::settle_owner_settings`]).
+fn settle_settings(s: &Arc<AppState>, v: &mut crate::state::DaemonVault) -> &'static str {
+    match v.settle_owner_settings(&s.seed_settings) {
+        Ok((settings, origin)) => {
+            s.apply_settings(&settings);
+            match origin {
+                SettingsOrigin::Stored => "stored",
+                SettingsOrigin::Adopted => {
+                    tracing::info!(
+                        ?settings,
+                        "this vault had no settings of its own; it now keeps the ones in force"
+                    );
+                    "adopted"
+                }
+                SettingsOrigin::Reset(reason) => {
+                    tracing::error!(
+                        reason,
+                        ?settings,
+                        "the vault's settings were missing or unreadable; the cautious values are in force (see the settings_tampered event)"
+                    );
+                    if let Err(e) = apply_care(v, settings.care) {
+                        tracing::warn!(error = %e.message, "could not re-apply the care level");
+                    }
+                    "reset"
+                }
+            }
+        }
+        Err(e) => {
+            // Nothing was read and nothing could be written (the log, most
+            // likely): not a reason to fall back on a file anyone can edit.
+            tracing::error!(error = %e, "the vault's settings could not be settled; the cautious values are in force until the next unlock");
+            s.apply_settings(&OwnerSettings::cautious());
+            "unsettled"
+        }
+    }
 }
 
 /// `POST /v1/unlock` body: either the password, or a device unlock method's
@@ -397,6 +459,7 @@ pub async fn unlock(
         kinds::UNLOCK,
         serde_json::json!({ "method": method }),
     );
+    let settings = settle_settings(&s, &mut v);
     s.rebuild_scrubber(&v);
     // Per-minute and per-day windows live in memory; refill them from the log
     // so a restart does not hand a capped handle a fresh allowance.
@@ -412,9 +475,13 @@ pub async fn unlock(
     // Unlocking proved the owner is here: the same call hands out the owner
     // token, so the client that unlocked needs no second prompt.
     let owner_token = s.issue_owner_token();
-    Ok(Json(
-        serde_json::json!({ "ok": true, "owner_token": owner_token }),
-    ))
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "owner_token": owner_token,
+        // `stored`, `adopted`, `reset` or `unsettled`: where the settings now
+        // in force came from.
+        "settings": settings,
+    })))
 }
 
 /// `POST /v1/confirm`: prove the owner is present without touching the lock
