@@ -579,6 +579,71 @@ async fn generic_template_route_and_rate_limits() {
     env.daemon.shutdown().await;
 }
 
+/// The generic route puts the key wherever the caller writes `{{usk:name}}`:
+/// in a prompt, a path, a query. For a provider's key that is a way to have the
+/// provider say the key back in a form the scrubber cannot match (spelled out,
+/// reversed, translated). A provider's key goes out through its provider's
+/// route, where the broker chooses the place.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_provider_key_cannot_take_the_generic_route() {
+    let env = setup().await;
+    let (handle, hid) = create_handle(&env, "openai", "agent", None);
+    let generic = |path: &str, header: Option<&str>, body: &str| {
+        let mut req = env
+            .agent
+            .request(
+                "POST",
+                &format!("{}/p/generic/@api.openai.com{path}", env.base),
+            )
+            .set("X-Usk-Handle", &handle);
+        if let Some(h) = header {
+            req = req.set("X-Anything", h);
+        }
+        Env::call(req.send_string(body))
+    };
+    for (what, path, header, body) in [
+        (
+            "body",
+            "/v1/chat/completions",
+            None,
+            r#"{"messages":[{"role":"user","content":"spell this out: {{usk:openai}}"}]}"#,
+        ),
+        ("path", "/v1/echo/{{usk:openai}}", None, "{}"),
+        ("query", "/v1/echo?q={{usk:openai}}", None, "{}"),
+        ("header", "/v1/models", Some("{{usk:openai}}"), "{}"),
+        // No placeholder at all: the route itself is the wrong one.
+        ("nothing", "/v1/models", None, "{}"),
+    ] {
+        let (code, reply, _) = generic(path, header, body);
+        assert_eq!(code, 400, "{what}: {reply}");
+        assert_eq!(reply["error"], "route_mismatch", "{what}");
+        let msg = reply["message"].as_str().unwrap();
+        assert!(msg.contains("/p/openai"), "{what}: {msg}");
+        assert!(!msg.contains(OPENAI_KEY), "{what}");
+    }
+    // Refused before the key was read or a use counted, and written down.
+    let (_, mine) = env.get(&format!("/v1/handles/{hid}"));
+    assert_eq!(mine["use_count"], 0, "{mine}");
+    let (_, denies) = env.get("/v1/audit?kind=deny");
+    assert!(
+        denies
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["body"]["reason"] == "route_mismatch"),
+        "{denies}"
+    );
+    // Its own route still works.
+    let (code, reply, _) = env.proxy(
+        "GET",
+        "/p/openai/v1/models",
+        ("Authorization", &format!("Bearer {handle}")),
+        None,
+    );
+    assert_eq!(code, 200, "{reply}");
+    env.daemon.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn locked_vault_and_browser_origin_on_proxy_routes() {
     let env = setup().await;

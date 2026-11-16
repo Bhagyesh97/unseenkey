@@ -590,6 +590,45 @@ async fn pinned_upstream(s: &AppState, handle_ref: &HandleRef, preset: &Preset) 
         )
 }
 
+/// Routes a secret must not take, with the words for the refusal.
+///
+/// A Basic route builds its header from the secret's own provider, and the
+/// scrubber guards that header: on another provider's route it would go out
+/// with a username nothing guards.
+///
+/// The generic route puts the value wherever the caller wrote `{{usk:name}}`,
+/// which includes a prompt, a path or a query. With a provider's key that is a
+/// way to make the provider say the key back in a form the scrubber cannot
+/// match (spelled out, reversed, translated), so a key that has a provider
+/// goes out through that provider's route, where the broker chooses the place.
+/// OAuth clients and service accounts are exempt: what they send is an access
+/// token in `Authorization`, never the stored value, on any route.
+fn route_mismatch(preset: &Preset, meta: &SecretMeta) -> Option<String> {
+    match &preset.auth {
+        Auth::Basic { .. } if meta.provider.as_deref() != Some(&preset.id) => Some(format!(
+            "{} is not a {} key; if it is, run `usk secret set {} --provider {}`",
+            meta.name, preset.display, meta.name, preset.id
+        )),
+        Auth::Template
+            if !matches!(
+                meta.kind,
+                SecretKind::Oauth2Client | SecretKind::GcpServiceAccount
+            ) =>
+        {
+            let own = meta
+                .provider
+                .as_deref()
+                .and_then(presets::get)
+                .filter(|p| !matches!(p.auth, Auth::Template))?;
+            Some(format!(
+                "{} is a {} key, so it goes through {}'s own route (/p/{}/...), where Unseenkey puts the key in its place. The generic route, which fills in {{{{usk:...}}}} wherever the caller writes it, is for keys without a provider",
+                meta.name, own.display, own.display, own.id
+            ))
+        }
+        _ => None,
+    }
+}
+
 /// Run the pipeline. Returns the upstream's (scrubbed) response, or an error
 /// response from the broker itself.
 pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest) -> Response {
@@ -773,6 +812,30 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
                 );
             }
             return broker_err(e);
+        }
+        // The route has to suit the secret, and that is settled here: before an
+        // approval is asked for, a use is counted or the value is read.
+        if let Some(msg) = route_mismatch(preset, &meta) {
+            let _ = vault.audit(
+                kinds::DENY,
+                json!({
+                    "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
+                    "caller": call.caller, "reason": "route_mismatch", "route": preset.id,
+                    "host": upstream.host, "method": call.method, "path": pol_path,
+                }),
+            );
+            after_denial(
+                &s,
+                vault,
+                &handle,
+                &meta.name,
+                &call,
+                &upstream.host,
+                &pol_path,
+                now,
+            )
+            .await;
+            return err(StatusCode::BAD_REQUEST, "route_mismatch", msg);
         }
         let usage = s.usage_for(&handle.handle_id, handle.use_count).await;
         if matches!(standing, HandleStatus::Throttled { .. })
@@ -1050,19 +1113,8 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
 
     // A bearer-kind secret (OAuth token, PAT) is always sent as `Authorization:
     // Bearer`, even for providers whose API keys travel in another header or in
-    // the query string. Template and basic styles keep their own shape.
-    // The scrubber guards a Basic header built by the secret's own provider. On
-    // another provider's route it would go out with a username nothing guards.
-    if matches!(preset.auth, Auth::Basic { .. }) && meta.provider.as_deref() != Some(&preset.id) {
-        return err(
-            StatusCode::BAD_REQUEST,
-            "route_mismatch",
-            format!(
-                "{} is not a {} key; if it is, run `usk secret set {} --provider {}`",
-                meta.name, preset.display, meta.name, preset.id
-            ),
-        );
-    }
+    // the query string. Template and basic styles keep their own shape (phase 1
+    // refused the routes on which those shapes would be wrong for this secret).
     let auth = match (&preset.auth, meta.kind) {
         (
             Auth::Header { .. } | Auth::Query { .. } | Auth::Scheme { .. },
