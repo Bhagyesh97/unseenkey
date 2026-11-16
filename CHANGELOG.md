@@ -2,6 +2,35 @@
 
 The top section of this file becomes the release notes when a `v*` tag is pushed.
 
+## 0.1.10 — 2026-11-17
+
+Security fixes, for every earlier version. They come from a review of the whole project; nothing here was reported from outside. Please update. **After updating, run `usk daemon restart`:** the background service keeps running the old code until it restarts.
+
+- **A provider's key could be read back through the generic route.** On `/p/generic` the caller decides where `{{usk:name}}` is filled in: a prompt, a path, a query. With a provider's key (OpenAI, Stripe and the rest), a program holding only a handle could have the provider repeat the key in a form the scrubber does not match, spelled out or reversed. A key whose provider has its own route is now refused on the generic one (400 `route_mismatch`, with a line in the log) and goes through `/p/<provider>/…`, where Unseenkey chooses where the key goes. Keys with no provider, OAuth clients and service accounts are unchanged.
+- **The session token was enough to replace, rename or delete a key.** `daemon.token` can be read by any program running as you. It was enough to put another value or username under an existing name, so that your tools' calls went out with a key of that program's choosing, and to rename or delete a key or remove a device unlock method. These now need the owner: your password or Windows Hello.
+- **Settings could be loosened by editing a file.** The care level, the idle lock, lock on sleep, lock on screen lock and whether AI tools may add keys were read from `config.toml` at every start, and any program running as you can write that file and restart the service. The five now live in the vault and change only with the owner's confirmation. The first unlock after updating takes over the values you have now, once, and writes `settings_adopted` in the log. If the stored settings are later missing or damaged, Unseenkey falls back to the cautious values (strict, 15 minutes, both locks on, storing off), writes `settings_tampered`, and `usk` and the app say so.
+- **Limits could be passed by sending requests together.** A request was checked against its handle's limits at one moment and counted at a later one, so 40 requests arriving at once against a limit of 4 let 6 through, and a project's daily limit of 5 let 10 through. A request now takes its place at the moment it is checked, and gives it back if it is never sent.
+- **A log that could not be written lost events without a word.** With a full disk or a locked vault file, refusals, changes, reveals and `usk run` injections went unrecorded. Reveal and injection now write their line first: no record, no value. Any other lost event is counted and shown as `audit_lost` in `usk status` and in a banner in the app, the broker stops sending keys while the log is broken, and when the log works again the first line written is an `audit_gap` saying how many events are missing.
+- **One request could stop the service.** An AWS request with a chunk size near the top of the number range crashed the daemon. A program holding any AWS handle could do it. It is now an ordinary error.
+- **Unlocking could hang for good.** With a row missing from the audit log, which is what editing the vault file leaves behind, the unlock never finished and the service answered nothing more until it was killed. It now unlocks and reports the damaged log.
+- **The app could show one key's value under another's name.** A value revealed for one key stayed on screen when you selected another key, and a new value typed in an open Replace box could be saved over the wrong key.
+
+What behaves differently:
+
+- `usk rm`, `usk secret replace` and `usk secret set --username` ask for the vault password. A script that pipes a value into `usk secret replace <name> --stdin` must send the password on the first line and the value after it. The app asks through Windows Hello or the password box.
+- A provider's key on `/p/generic` is refused; the error names the route to use instead. `call_api` and the provider routes are not affected.
+- `config.toml`, `--idle-lock-minutes` and `USK_IDLE_LOCK_MINUTES` no longer change the five settings once the vault has been unlocked for the first time on this version. Use `usk care`, the new `usk settings` (`--idle-lock <minutes>`, `--lock-on-sleep on|off`, `--lock-on-screen-lock on|off`, `--agents-may-store on|off`) or the app's Settings page. The service no longer writes `config.toml`; the address it listens on is still read from it.
+- A request counts toward its handle's limits from the moment it is checked, not from when the reply arrives. One that is refused further on gives its place back.
+
+Releases and downloads:
+
+- **`SHA256SUMS` covers every file on a release**, installers included, and is signed by the release workflow through Sigstore. The README has the two commands under "Verify a download". Up to 0.1.9 it listed only the CLI archives and the MCP bundle.
+- The release is built from a commit on `main` only, with nothing restored from a cache and a read-only token outside the jobs that publish. Dependencies are checked against the advisory database every day, not only when code changes.
+- The website sends a content security policy and has a `/.well-known/security.txt`.
+- The docs no longer claim what does not exist yet: fuzzing, reproducible builds, SLSA provenance and code-signed installers. [docs/12](docs/12-testing-and-assurance.md) lists what is tested and what a release has today.
+
+Known and not fixed: someone who can write the vault file itself, and knows its layout, can cut the audit log back to before `settings_adopted` and remove the stored settings, after which the values in `config.toml` are taken over again; putting back an older copy of the settings is not noticed either. Both need the vault file to carry a signed header, which is planned. It is listed in SECURITY.md.
+
 ## 0.1.9 — 2026-11-11
 
 - **Google service account keys.** `usk add gsc --file key.json --scope webmasters.readonly`: the broker signs in with the key file and sends Google a short-lived access token, so the file itself never leaves the vault. Search Console, Tag Manager, Analytics and the other Google APIs work through handles and through AI tools. Scopes can be changed with `usk secret set <name> --scope …`; the key test signs in and reports what Google said.
