@@ -45,6 +45,12 @@ impl ApiError {
             message: message.into(),
         }
     }
+
+    /// 500 `audit_failure`: the audit log could not be written, and what was
+    /// asked for must not happen without a record.
+    pub fn audit_failure(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, "audit_failure", message)
+    }
 }
 
 impl IntoResponse for ApiError {
@@ -130,6 +136,9 @@ pub struct Status {
     pub idle_lock_minutes: u64,
     /// Care level: `relaxed`, `balanced` or `strict`.
     pub care: &'static str,
+    /// Audit events that could not be written since the daemon started
+    /// (disk full, file locked or damaged). 0 is the healthy value.
+    pub audit_lost: u64,
 }
 
 /// `GET /v1/status`
@@ -143,6 +152,7 @@ pub async fn status(State(s): State<Arc<AppState>>) -> ApiResult<Status> {
         secrets: if v.is_locked() { None } else { Some(v.len()) },
         idle_lock_minutes: s.idle_lock().as_secs() / 60,
         care: s.care().as_str(),
+        audit_lost: s.audit_lost(),
     }))
 }
 
@@ -229,7 +239,8 @@ pub async fn patch_settings(
             .store(m * 60, std::sync::atomic::Ordering::Relaxed);
         s.touch().await;
         let mut v = s.vault.lock().await;
-        let _ = v.audit(
+        s.audit_note(
+            &mut v,
             kinds::SETTINGS_CHANGED,
             serde_json::json!({ "idle_lock_minutes": m }),
         );
@@ -263,7 +274,8 @@ pub async fn patch_settings(
         } else {
             apply_care(&mut v, care)?
         };
-        let _ = v.audit(
+        s.audit_note(
+            &mut v,
             kinds::SETTINGS_CHANGED,
             serde_json::json!({ "care": care.as_str(), "handles_updated": n }),
         );
@@ -380,7 +392,11 @@ pub async fn unlock(
             "the audit log was cut short or rewritten while the vault was locked; see the audit_tampered event"
         );
     }
-    let _ = v.audit(kinds::UNLOCK, serde_json::json!({ "method": method }));
+    s.audit_note(
+        &mut v,
+        kinds::UNLOCK,
+        serde_json::json!({ "method": method }),
+    );
     s.rebuild_scrubber(&v);
     // Per-minute and per-day windows live in memory; refill them from the log
     // so a restart does not hand a capped handle a fresh allowance.
@@ -565,7 +581,8 @@ pub async fn unlock_methods_add(
     let kek = SecretBytes::from_slice(kek.as_slice());
     let mut v = s.vault.lock().await;
     let id = v.add_key_wrap(kind, label, *salt, &kek)?;
-    let _ = v.audit(
+    s.audit_note(
+        &mut v,
         kinds::UNLOCK_METHOD_ADDED,
         serde_json::json!({ "id": id.to_hex(), "kind": kind, "label": label }),
     );
@@ -594,7 +611,8 @@ pub async fn unlock_methods_remove(
     })?;
     let mut v = s.vault.lock().await;
     v.remove_key_wrap(&id)?;
-    let _ = v.audit(
+    s.audit_note(
+        &mut v,
         kinds::UNLOCK_METHOD_REMOVED,
         serde_json::json!({ "id": id.to_hex() }),
     );
@@ -909,7 +927,8 @@ pub async fn create_secret(
     let id = {
         let mut v = s.vault.lock().await;
         let id = v.add(new)?;
-        let _ = v.audit(
+        s.audit_note(
+            &mut v,
             kinds::SECRET_CREATED,
             serde_json::json!({ "id": id.to_hex(), "name": req.name.trim(), "provider": provider }),
         );
@@ -1420,7 +1439,8 @@ pub async fn patch_secret(
             }
         })?;
     }
-    let _ = v.audit(
+    s.audit_note(
+        &mut v,
         kinds::SECRET_UPDATED,
         serde_json::json!({ "id": id.to_hex(), "value_changed": p.value.is_some(), "scope": p.scope, "username_changed": p.username.is_some() }),
     );
@@ -1452,12 +1472,14 @@ pub async fn delete_secret(
     s.retire(&v, &id);
     let revoked = v.delete(&id)?;
     for hid in &revoked {
-        let _ = v.audit(
+        s.audit_note(
+            &mut v,
             kinds::HANDLE_REVOKED,
             serde_json::json!({ "id": hid.to_hex(), "reason": "secret_deleted", "secret": id.to_hex() }),
         );
     }
-    let _ = v.audit(
+    s.audit_note(
+        &mut v,
         kinds::SECRET_DELETED,
         serde_json::json!({ "id": id.to_hex(), "handles_revoked": revoked.len() }),
     );
@@ -1519,10 +1541,12 @@ pub async fn reveal_secret(
     let mut v = s.vault.lock().await;
     let id = resolve(&v, &r)?;
     let revealed = v.reveal(&id)?;
-    let _ = v.audit(
+    // In the log before it leaves: no record, no value.
+    s.audit_must(
+        &mut v,
         kinds::REVEAL,
         serde_json::json!({ "id": id.to_hex(), "reason": req.reason.as_deref().unwrap_or("") }),
-    );
+    )?;
     s.emit(Event::Revealed { id: id.to_hex() });
     tracing::info!(secret = %id, reason = req.reason.as_deref().unwrap_or(""), "secret revealed");
     Ok(Json(RevealResponse {
@@ -1594,14 +1618,15 @@ pub async fn inject_secret(
         ));
     }
     let revealed = v.reveal(&id)?;
-    let _ = v.audit(
+    s.audit_must(
+        &mut v,
         kinds::INJECT,
         serde_json::json!({
             "id": id.to_hex(), "name": meta.name,
             "var": req.var.as_deref().unwrap_or(""),
             "command": req.command.as_deref().unwrap_or(""),
         }),
-    );
+    )?;
     tracing::info!(secret = %id, var = req.var.as_deref().unwrap_or(""), "secret injected into a process");
     Ok(Json(RevealResponse {
         value: text_or_hex(&revealed.value),
@@ -1859,7 +1884,8 @@ pub async fn create_handle(
         format.as_ref(),
         opts,
     )?;
-    let _ = v.audit(
+    s.audit_note(
+        &mut v,
         kinds::HANDLE_CREATED,
         serde_json::json!({
             "id": record.handle_id.to_hex(), "label": record.label, "secret": meta.name,
@@ -1964,14 +1990,16 @@ pub async fn patch_handle(
     };
     if let Some(policy) = policy {
         v.set_handle_policy(&id, policy)?;
-        let _ = v.audit(
+        s.audit_note(
+            &mut v,
             kinds::POLICY_CHANGED,
             serde_json::json!({ "id": id.to_hex() }),
         );
     }
     if let Some(r) = p.on_anomaly {
         v.set_handle_response(&id, r)?;
-        let _ = v.audit(
+        s.audit_note(
+            &mut v,
             kinds::POLICY_CHANGED,
             serde_json::json!({ "id": id.to_hex(), "on_anomaly": r.as_str() }),
         );
@@ -1993,7 +2021,8 @@ pub async fn resume_handle(
     let changed = v.resume_handle(&id)?;
     s.reset_denials(&id).await;
     if changed {
-        let _ = v.audit(
+        s.audit_note(
+            &mut v,
             kinds::HANDLE_RESUMED,
             serde_json::json!({ "id": id.to_hex() }),
         );
@@ -2020,7 +2049,8 @@ pub async fn forget_handle_rules(
     let id = resolve_handle(&v, &r)?;
     let removed = v.forget_rules(&id, rule.as_deref())?;
     if removed > 0 {
-        let _ = v.audit(
+        s.audit_note(
+            &mut v,
             kinds::APPROVAL_FORGOTTEN,
             serde_json::json!({ "id": id.to_hex(), "rule": rule, "removed": removed }),
         );
@@ -2036,7 +2066,8 @@ pub async fn revoke_handle(
     let mut v = s.vault.lock().await;
     let id = resolve_handle(&v, &r)?;
     v.revoke_handle(&id)?;
-    let _ = v.audit(
+    s.audit_note(
+        &mut v,
         kinds::HANDLE_REVOKED,
         serde_json::json!({ "id": id.to_hex() }),
     );
@@ -2204,7 +2235,7 @@ pub async fn callers_create(
     } else {
         (kinds::CALLER_REGISTERED, "registered")
     };
-    let _ = v.audit(kind, serde_json::json!({ "name": req.name }));
+    s.audit_note(&mut v, kind, serde_json::json!({ "name": req.name }));
     drop(v);
     s.emit(Event::CallerChanged {
         name: req.name.clone(),
@@ -2254,11 +2285,14 @@ pub async fn callers_remove(
     }
     // Removing only takes access away, so it works while locked too; the
     // audit entry is written when the vault is open to write it.
-    let _ = s
-        .vault
-        .lock()
-        .await
-        .audit(kinds::CALLER_REMOVED, serde_json::json!({ "name": name }));
+    {
+        let mut v = s.vault.lock().await;
+        s.audit_note(
+            &mut v,
+            kinds::CALLER_REMOVED,
+            serde_json::json!({ "name": name }),
+        );
+    }
     s.emit(Event::CallerChanged {
         name,
         change: "removed",

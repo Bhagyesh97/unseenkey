@@ -12,7 +12,9 @@ use unseenkey_core::policy::Usage;
 use unseenkey_core::presets::{self, Auth};
 use unseenkey_core::storage::sqlite::SqliteStorage;
 use unseenkey_core::time::SystemClock;
-use unseenkey_core::vault::{SecretKind, Vault};
+use unseenkey_core::vault::{SecretKind, Vault, VaultError};
+
+use crate::api::ApiError;
 
 /// The vault type the daemon holds.
 pub type DaemonVault = Vault<SqliteStorage, SystemClock>;
@@ -198,6 +200,15 @@ pub struct UsageWindow {
     in_flight: u32,
 }
 
+/// How the audit log has fared since the daemon started.
+#[derive(Debug, Default)]
+pub struct AuditHealth {
+    /// Events that could not be written.
+    lost: std::sync::atomic::AtomicU64,
+    /// Of those, the ones the log does not mention yet.
+    gap: std::sync::atomic::AtomicU64,
+}
+
 /// Every handle's counters, and how often they were rebuilt from the log.
 #[derive(Debug, Default)]
 pub struct UsageMap {
@@ -332,6 +343,8 @@ pub struct AppState {
     pub scrubber: RwLock<Scrubber>,
     /// Per-handle sliding windows. Never held across an await.
     pub usage: std::sync::Mutex<UsageMap>,
+    /// Audit events that could not be written (see [`AppState::audit_note`]).
+    pub audit_health: AuditHealth,
     /// Per-handle policy refusals, for the burst detector.
     pub denials: Mutex<HashMap<Id, DenialWindow>>,
     /// Outbound HTTP client (rustls, no redirects).
@@ -389,7 +402,11 @@ impl Drop for RequestOut {
             rt.spawn(async move {
                 let mut vault = state.vault.lock().await;
                 if !vault.is_locked() {
-                    let _ = vault.audit(unseenkey_core::audit::kinds::USE_UNFINISHED, event);
+                    state.audit_note(
+                        &mut vault,
+                        unseenkey_core::audit::kinds::USE_UNFINISHED,
+                        event,
+                    );
                 }
             });
         }
@@ -473,7 +490,8 @@ impl AppState {
                 return false;
             }
             self.log_requests_out(&mut v, "locked");
-            let _ = v.audit(
+            self.audit_note(
+                &mut v,
                 unseenkey_core::audit::kinds::LOCK,
                 serde_json::json!({ "reason": reason }),
             );
@@ -796,8 +814,102 @@ impl AppState {
         let out = std::mem::take(&mut *self.requests_out.lock().unwrap_or_else(|e| e.into_inner()));
         for (_, mut event) in out {
             event["why"] = serde_json::json!(why);
-            if let Err(e) = vault.audit(unseenkey_core::audit::kinds::USE_UNFINISHED, event) {
-                tracing::warn!(error = %e, "could not log a request still out");
+            self.audit_note(vault, unseenkey_core::audit::kinds::USE_UNFINISHED, event);
+        }
+    }
+
+    /// Audit events that could not be written since the daemon started.
+    pub fn audit_lost(&self) -> u64 {
+        self.audit_health
+            .lost
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The log says how many events are missing before anything else is
+    /// written after them. Every caller holds the vault lock, so the count
+    /// and the log change together.
+    fn close_audit_gap(&self, vault: &mut DaemonVault) -> Result<(), VaultError> {
+        use std::sync::atomic::Ordering::SeqCst;
+        let lost = self.audit_health.gap.load(SeqCst);
+        if lost == 0 {
+            return Ok(());
+        }
+        vault.audit(
+            unseenkey_core::audit::kinds::AUDIT_GAP,
+            serde_json::json!({ "lost": lost }),
+        )?;
+        self.audit_health.gap.fetch_sub(lost, SeqCst);
+        tracing::warn!(
+            lost,
+            "the audit log can be written again; it now says what is missing"
+        );
+        Ok(())
+    }
+
+    /// Write an event for something that has happened. When the log cannot
+    /// take it, the loss is counted (`audit_lost` on the status), logged, and
+    /// written into the log itself as `audit_gap` once it works again. A
+    /// locked vault is not a broken log: the lock has said what it had to.
+    pub fn audit_write(
+        &self,
+        vault: &mut DaemonVault,
+        kind: &str,
+        body: serde_json::Value,
+    ) -> Result<(), VaultError> {
+        use std::sync::atomic::Ordering::SeqCst;
+        let written = self
+            .close_audit_gap(vault)
+            .and_then(|()| vault.audit(kind, body).map(|_| ()));
+        if let Err(e) = &written {
+            if !matches!(e, VaultError::Locked) {
+                self.audit_health.lost.fetch_add(1, SeqCst);
+                self.audit_health.gap.fetch_add(1, SeqCst);
+                tracing::error!(kind, error = %e, "an audit event could not be written");
+            }
+        }
+        written
+    }
+
+    /// [`Self::audit_write`] for a refusal or a change that stands either way.
+    pub fn audit_note(&self, vault: &mut DaemonVault, kind: &str, body: serde_json::Value) {
+        let _ = self.audit_write(vault, kind, body);
+    }
+
+    /// Write the event first, for what must not happen unrecorded: a value
+    /// leaving the vault. On failure nothing has happened, so nothing is lost.
+    pub fn audit_must(
+        &self,
+        vault: &mut DaemonVault,
+        kind: &str,
+        body: serde_json::Value,
+    ) -> Result<(), ApiError> {
+        match self
+            .close_audit_gap(vault)
+            .and_then(|()| vault.audit(kind, body))
+        {
+            Ok(_) => Ok(()),
+            Err(VaultError::Locked) => Err(VaultError::Locked.into()),
+            Err(e) => {
+                tracing::error!(kind, error = %e, "refused: the audit log could not be written");
+                Err(ApiError::audit_failure(
+                    "the audit log could not be written, so this was not done",
+                ))
+            }
+        }
+    }
+
+    /// Before a key is read for a request: if events are missing from the
+    /// log, it has to take the note of that first. A broker that cannot keep
+    /// its record sends nothing.
+    pub fn audit_ready(&self, vault: &mut DaemonVault) -> Result<(), ApiError> {
+        match self.close_audit_gap(vault) {
+            Ok(()) => Ok(()),
+            Err(VaultError::Locked) => Err(VaultError::Locked.into()),
+            Err(e) => {
+                tracing::error!(error = %e, "request refused: the audit log cannot be written");
+                Err(ApiError::audit_failure(
+                    "the audit log cannot be written, so nothing was sent",
+                ))
             }
         }
     }

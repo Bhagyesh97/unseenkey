@@ -203,6 +203,11 @@ export function App() {
             <span className="muted small"> (the vault locks; unlock it again afterwards)</span>
           </div>
         )}
+        {!!status?.daemon?.audit_lost && (
+          <div className="banner error">
+            {status.daemon.audit_lost === 1 ? "1 activity event" : `${status.daemon.audit_lost} activity events`} could not be written since the service started. Check that the disk is not full and that no other program holds the vault file. Keys are not sent while the log cannot be written.
+          </div>
+        )}
         {toast && <div className="banner info">{toast}</div>}
         {updater.error ? (
           <div className="banner error">

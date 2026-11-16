@@ -89,7 +89,7 @@ Folders are stored normalised: forward slashes, no trailing slash, lower case fo
 |---|---|---|
 | seq | int PK | |
 | ts | ts | cleartext (needed for range queries) |
-| kind | text | cleartext: `use`, `deny`, `egress_blocked`, `approval_requested`, `approval_decided`, `reveal`, `inject`, `unlock`, `lock`, `secret_created`, `secret_updated`, `secret_deleted`, `handle_created`, `handle_revoked`, `handle_resumed`, `policy_changed`, `anomaly`, `canary_tripped`, `audit_tampered`, `grant_*`, `sync_*` |
+| kind | text | cleartext: `use`, `deny`, `egress_blocked`, `approval_requested`, `approval_decided`, `reveal`, `inject`, `unlock`, `lock`, `secret_created`, `secret_updated`, `secret_deleted`, `handle_created`, `handle_revoked`, `handle_resumed`, `policy_changed`, `anomaly`, `canary_tripped`, `audit_tampered`, `audit_gap`, `grant_*`, `sync_*` |
 | prev_hash | blob(32) | cleartext chain |
 | this_hash | blob(32) | BLAKE3 of canonical event |
 | nonce, ciphertext | blob | encrypted event body |

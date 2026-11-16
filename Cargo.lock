@@ -2505,6 +2505,7 @@ dependencies = [
  "percent-encoding",
  "reqwest",
  "ring",
+ "rusqlite",
  "rustls",
  "serde",
  "serde_json",

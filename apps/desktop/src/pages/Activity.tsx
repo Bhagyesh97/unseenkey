@@ -9,7 +9,7 @@ const FILTERS: { id: string; label: string; kinds: string[] }[] = [
   { id: "all", label: "Everything", kinds: [] },
   { id: "used", label: "Keys used", kinds: ["use", "use_unfinished", "key_tested"] },
   { id: "blocked", label: "Blocked", kinds: ["deny", "egress_blocked"] },
-  { id: "alerts", label: "Alerts", kinds: ["anomaly", "canary_tripped", "audit_tampered"] },
+  { id: "alerts", label: "Alerts", kinds: ["anomaly", "canary_tripped", "audit_tampered", "audit_gap"] },
   { id: "asks", label: "Requests to you", kinds: ["approval_required", "approval_decided", "access_requested"] },
   { id: "changes", label: "Changes", kinds: ["secret_created", "secret_updated", "secret_deleted", "handle_created", "handle_revoked", "handle_resumed", "policy_changed", "project_created", "project_changed", "project_deleted", "settings_changed", "password_changed", "unlock_method_added", "unlock_method_removed", "approval_forgotten", "reveal", "inject", "caller_registered", "caller_replaced", "caller_removed"] },
   { id: "signins", label: "Lock and unlock", kinds: ["unlock", "lock"] },
@@ -48,6 +48,8 @@ function sentence(e: AuditEvent, names: Map<string, string>): Line {
       return { text: `A tripwire key was used. ${s("detail")}`, result: responseWords(b.response), tone: "bad" };
     case "audit_tampered":
       return { text: "The activity log was cut short or rewritten while the vault was locked", tone: "bad" };
+    case "audit_gap":
+      return { text: `${b.lost === 1 ? "1 event is" : `${Number(b.lost) || "Some"} events are`} missing just before this: the activity log could not be written for a while`, tone: "bad" };
     case "key_tested": {
       const ok = b.ok === true ? "works" : b.ok === false ? "was refused" : "result unclear";
       return { text: `Tested ${key}: it ${ok}`, tone: b.ok === true ? "ok" : b.ok === false ? "bad" : "plain" };
@@ -164,7 +166,7 @@ export function Activity({ tick }: { tick: number }) {
   const today = lines.filter(({ e }) => dayLabel(e.ts) === "Today");
   const usedToday = today.filter(({ e }) => e.kind === "use").length;
   const blockedToday = today.filter(({ e }) => e.kind === "deny" || e.kind === "egress_blocked").length;
-  const alertsToday = today.filter(({ e }) => ["anomaly", "canary_tripped", "audit_tampered"].includes(e.kind)).length;
+  const alertsToday = today.filter(({ e }) => ["anomaly", "canary_tripped", "audit_tampered", "audit_gap"].includes(e.kind)).length;
 
   const groups: { day: string; items: typeof visible }[] = [];
   for (const it of visible.slice(0, shown)) {

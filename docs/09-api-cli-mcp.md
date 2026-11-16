@@ -8,7 +8,7 @@ All responses are JSON. Errors: `{ "error": "<code>", "message": "…" }`.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/v1/status` | `{locked, vault_id, version, uptime, cloud: {enabled, synced_at}}` |
+| GET | `/v1/status` | `{locked, vault_id, version, uptime_s, secrets, idle_lock_minutes, care, audit_lost}`. `audit_lost` counts the audit events that could not be written since the daemon started (0 when healthy); the log records the gap itself as `audit_gap` once it can be written again |
 | POST | `/v1/unlock` | body `{password}` or `{wrap_id, kek}`; returns `{ok, owner_token}`; rate limited (5/min) |
 | POST | `/v1/confirm` | same body as `/v1/unlock`, on an unlocked vault: checks the credential without touching the lock and returns `{ok, owner_token}`; shares the unlock rate limit. The owner token goes in `X-Usk-Owner` on the routes marked **owner** below; it lives in the client's memory and every lock invalidates it |
 | POST | `/v1/lock` | |

@@ -170,7 +170,11 @@ impl Running {
             let mut v = self.state.vault.lock().await;
             if !v.is_locked() {
                 self.state.log_requests_out(&mut v, "stopped");
-                let _ = v.audit(kinds::LOCK, serde_json::json!({ "reason": "shutdown" }));
+                self.state.audit_note(
+                    &mut v,
+                    kinds::LOCK,
+                    serde_json::json!({ "reason": "shutdown" }),
+                );
             }
             v.lock();
         }
@@ -277,6 +281,7 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
         next_request: std::sync::atomic::AtomicU64::new(0),
         scrubber: RwLock::new(Scrubber::empty()),
         usage: Default::default(),
+        audit_health: Default::default(),
         denials: Mutex::new(HashMap::new()),
         http,
         upstream_overrides: opts.upstream_overrides.iter().cloned().collect(),

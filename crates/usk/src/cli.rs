@@ -1236,7 +1236,7 @@ fn status(paths: &VaultPaths, json: bool) -> Result<(), CliError> {
         if exists { "yes" } else { "no (run `usk init`)" }
     );
     println!("version: {}", env!("CARGO_PKG_VERSION"));
-    match daemon_status {
+    match &daemon_status {
         Some(s) => println!(
             "daemon:  running, {} (idle lock {} min)",
             if s["locked"].as_bool().unwrap_or(true) {
@@ -1247,6 +1247,15 @@ fn status(paths: &VaultPaths, json: bool) -> Result<(), CliError> {
             s["idle_lock_minutes"]
         ),
         None => println!("daemon:  not running (starts on first use)"),
+    }
+    let lost = daemon_status
+        .as_ref()
+        .and_then(|s| s["audit_lost"].as_u64())
+        .unwrap_or(0);
+    if lost > 0 {
+        println!(
+            "audit:   {lost} event(s) could not be written since the daemon started. Is the disk full, or the vault file locked by another program? Keys are not sent while the log cannot be written; `usk audit` shows the gap once it can."
+        );
     }
     Ok(())
 }

@@ -16,6 +16,8 @@ export interface Status {
     secrets: number | null;
     idle_lock_minutes: number;
     care?: "relaxed" | "balanced" | "strict";
+    /** Activity events that could not be written since the service started. */
+    audit_lost?: number;
   };
   app_version: string;
 }

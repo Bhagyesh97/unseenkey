@@ -146,6 +146,10 @@ pub mod kinds {
     pub const USE_UNFINISHED: &str = "use_unfinished";
     /// The vault password was changed.
     pub const PASSWORD_CHANGED: &str = "password_changed";
+    /// The log could not be written for a while: `lost` events from just
+    /// before this one are missing (refusals, changes, or a request that went
+    /// out). It is the first thing written when the log works again.
+    pub const AUDIT_GAP: &str = "audit_gap";
 }
 
 /// Genesis `prev_hash` for a vault.
