@@ -276,7 +276,7 @@ pub async fn serve(opts: ServeOptions) -> Result<Running, ServeError> {
         requests_out: std::sync::Mutex::new(HashMap::new()),
         next_request: std::sync::atomic::AtomicU64::new(0),
         scrubber: RwLock::new(Scrubber::empty()),
-        usage: Mutex::new(HashMap::new()),
+        usage: Default::default(),
         denials: Mutex::new(HashMap::new()),
         http,
         upstream_overrides: opts.upstream_overrides.iter().cloned().collect(),

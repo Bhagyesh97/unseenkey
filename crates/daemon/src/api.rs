@@ -388,7 +388,7 @@ pub async fn unlock(
     let recent = v.recent_uses(now_ms - 86_400_000);
     drop(v);
     match recent {
-        Ok(uses) => s.seed_usage(&uses, now_ms).await,
+        Ok(uses) => s.seed_usage(&uses, now_ms),
         Err(e) => tracing::warn!(error = %e, "could not rebuild usage windows from the audit log"),
     }
     s.emit(Event::Unlocked);

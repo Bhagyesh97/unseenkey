@@ -10,7 +10,9 @@
 //! phases, never while waiting for an approval or for the upstream.
 
 use crate::api::ApiError;
-use crate::state::{AppState, DaemonVault, Event, PendingApproval, THROTTLE_PER_MINUTE};
+use crate::state::{
+    AppState, DaemonVault, Event, PendingApproval, UseReservation, THROTTLE_PER_MINUTE,
+};
 use axum::body::{Body, Bytes};
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri};
@@ -666,7 +668,7 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
     let now = now_ms();
 
     // Phase 1 (vault lock): handle, secret, host lock, policy.
-    let (handle, meta, decision): (HandleRecord, SecretMeta, Decision) = {
+    let (handle, meta, decision, place): (HandleRecord, SecretMeta, Decision, UseReservation) = {
         let mut vault = s.vault.lock().await;
         if vault.is_locked() {
             return err(
@@ -837,7 +839,7 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
             .await;
             return err(StatusCode::BAD_REQUEST, "route_mismatch", msg);
         }
-        let usage = s.usage_for(&handle.handle_id, handle.use_count).await;
+        let usage = s.usage_for(&handle.handle_id, handle.use_count);
         if matches!(standing, HandleStatus::Throttled { .. })
             && usage.last_minute >= THROTTLE_PER_MINUTE
         {
@@ -865,7 +867,7 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
         {
             let ids =
                 crate::projects::project_handle_ids(&vault, &handle.project.expect("checked"));
-            if s.day_count(&ids).await >= cap {
+            if s.day_count(&ids) >= cap {
                 let _ = vault.audit(
                     kinds::DENY,
                     json!({
@@ -949,7 +951,11 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
         } else {
             decision
         };
-        (handle, meta, decision)
+        // Counted here, under the lock that judged the limits: a request
+        // arriving at the same moment sees this one. Given back if this
+        // request is refused further on and never sent.
+        let place = s.reserve_use(&handle.handle_id);
+        (handle, meta, decision, place)
     };
 
     // Approval, if the policy asks for one. The vault lock is not held while waiting.
@@ -1102,8 +1108,12 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
                 Ok(r) => r,
                 Err(e) => return ApiError::from(e).into_response(),
             };
-            s.record_use(&handle.handle_id).await;
-            let _ = vault.touch_handle(&handle.handle_id, now);
+            // A use the vault cannot count is not made: the limit on uses
+            // ever is kept there.
+            if let Err(e) = vault.touch_handle(&handle.handle_id, now) {
+                return ApiError::from(e).into_response();
+            }
+            place.keep();
             // A request the policy let through is activity: an agent working
             // through the broker should not find the vault locked under it
             // because nobody ran a management command for fifteen minutes.

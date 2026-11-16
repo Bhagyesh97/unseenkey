@@ -644,6 +644,147 @@ async fn a_provider_key_cannot_take_the_generic_route() {
     env.daemon.shutdown().await;
 }
 
+/// Many requests at once, each on its own connection and all let go at the same
+/// moment: how many got through.
+fn burst(env: &Env, handles: &[String], n: usize) -> (usize, usize, Vec<Value>) {
+    let start = std::sync::Barrier::new(n);
+    let replies: Vec<(u16, Value)> = std::thread::scope(|scope| {
+        let threads: Vec<_> = (0..n)
+            .map(|i| {
+                let handle = &handles[i % handles.len()];
+                let start = &start;
+                scope.spawn(move || {
+                    start.wait();
+                    let (code, body, _) = env.proxy(
+                        "GET",
+                        "/p/openai/v1/models",
+                        ("Authorization", &format!("Bearer {handle}")),
+                        None,
+                    );
+                    (code, body)
+                })
+            })
+            .collect();
+        threads.into_iter().map(|t| t.join().unwrap()).collect()
+    });
+    let passed = replies.iter().filter(|(c, _)| *c == 200).count();
+    let limited = replies.iter().filter(|(c, _)| *c == 429).count();
+    let other = replies
+        .into_iter()
+        .filter(|(c, _)| *c != 200 && *c != 429)
+        .map(|(_, b)| b)
+        .collect();
+    (passed, limited, other)
+}
+
+/// A limit is a hard stop: requests arriving together are counted one by one,
+/// not all judged against the count as it stood before any of them.
+#[tokio::test(flavor = "multi_thread")]
+async fn limits_hold_when_requests_arrive_together() {
+    let env = setup().await;
+    const N: usize = 40;
+
+    // A daily limit on one handle.
+    let (code, h) = env.post(
+        "/v1/handles",
+        json!({ "secret": "openai", "label": "daily", "cap_per_day": 3 }),
+    );
+    assert_eq!(code, 201, "{h}");
+    let daily = h["handle"].as_str().unwrap().to_string();
+    let (passed, limited, other) = burst(&env, std::slice::from_ref(&daily), N);
+    assert!(other.is_empty(), "{other:?}");
+    assert_eq!((passed, limited), (3, N - 3), "a limit of 3 a day");
+
+    // A limit a minute.
+    let (code, h) = env.post(
+        "/v1/handles",
+        json!({ "secret": "openai", "label": "minute", "cap_per_minute": 2 }),
+    );
+    assert_eq!(code, 201, "{h}");
+    let minute = h["handle"].as_str().unwrap().to_string();
+    let (passed, limited, other) = burst(&env, std::slice::from_ref(&minute), N);
+    assert!(other.is_empty(), "{other:?}");
+    assert_eq!((passed, limited), (2, N - 2), "a limit of 2 a minute");
+
+    // A limit on uses ever: the count lives in the vault, not in memory.
+    let mut policy = unseenkey_core::policy::Policy::allow_all();
+    policy.limits.requests_total = Some(4);
+    let (code, h) = env.post(
+        "/v1/handles",
+        json!({ "secret": "openai", "label": "ever", "policy": serde_json::from_str::<Value>(&policy.to_json()).unwrap() }),
+    );
+    assert_eq!(code, 201, "{h}");
+    let ever = h["handle"].as_str().unwrap().to_string();
+    let ever_id = h["id"].as_str().unwrap().to_string();
+    let (passed, _, other) = burst(&env, std::slice::from_ref(&ever), N);
+    assert_eq!(passed, 4, "a limit of 4 uses: {other:?}");
+    assert_eq!(other.len(), N - 4);
+    assert!(
+        other.iter().all(|b| b["error"] == "total_limit_reached"),
+        "{other:?}"
+    );
+    assert_eq!(env.get(&format!("/v1/handles/{ever_id}")).1["use_count"], 4);
+
+    // A project's daily limit, shared by its handles.
+    let (code, e) = env.post(
+        "/v1/projects",
+        json!({ "name": "shop", "secrets": ["openai"], "cap_per_day": 5 }),
+    );
+    assert_eq!(code, 201, "{e}");
+    let shop: Vec<String> = ["web", "worker"]
+        .iter()
+        .map(|label| {
+            let (code, h) = env.post(
+                "/v1/handles",
+                json!({ "secret": "openai", "label": label, "project": "shop" }),
+            );
+            assert_eq!(code, 201, "{h}");
+            h["handle"].as_str().unwrap().to_string()
+        })
+        .collect();
+    let (passed, limited, other) = burst(&env, &shop, N);
+    assert!(other.is_empty(), "{other:?}");
+    assert_eq!((passed, limited), (5, N - 5), "a project limit of 5 a day");
+
+    env.daemon.shutdown().await;
+}
+
+/// A request that was let through the limit and then stopped for another reason
+/// was never sent, so it does not use up the limit.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_request_that_is_not_sent_does_not_count() {
+    let env = setup().await;
+    let (code, h) = env.post(
+        "/v1/handles",
+        json!({ "secret": "openai", "label": "daily", "cap_per_day": 2 }),
+    );
+    assert_eq!(code, 201, "{h}");
+    let handle = h["handle"].as_str().unwrap().to_string();
+    let id = h["id"].as_str().unwrap().to_string();
+    let auth = format!("Bearer {handle}");
+    // Stopped by the egress guard, after the limit was checked.
+    for _ in 0..5 {
+        let (code, body, _) = Env::call(
+            env.agent
+                .request("GET", &format!("{}/p/openai/v1/models", env.base))
+                .set("Authorization", &auth)
+                .set("X-Debug", STRIPE_KEY)
+                .call(),
+        );
+        assert_eq!(code, 403, "{body}");
+        assert_eq!(body["error"], "egress_blocked");
+    }
+    assert_eq!(env.get(&format!("/v1/handles/{id}")).1["use_count"], 0);
+    for _ in 0..2 {
+        let (code, body, _) =
+            env.proxy("GET", "/p/openai/v1/models", ("Authorization", &auth), None);
+        assert_eq!(code, 200, "{body}");
+    }
+    let (code, body, _) = env.proxy("GET", "/p/openai/v1/models", ("Authorization", &auth), None);
+    assert_eq!(code, 429, "{body}");
+    env.daemon.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn locked_vault_and_browser_origin_on_proxy_routes() {
     let env = setup().await;

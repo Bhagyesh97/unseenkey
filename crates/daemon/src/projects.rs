@@ -112,7 +112,7 @@ fn view_now(v: &DaemonVault, p: &ProjectRecord) -> (ProjectView, Vec<Id>) {
 async fn finish(s: &AppState, parts: Vec<(ProjectView, Vec<Id>)>) -> Vec<ProjectView> {
     let mut out = Vec::with_capacity(parts.len());
     for (mut pv, ids) in parts {
-        pv.requests_today = s.day_count(&ids).await;
+        pv.requests_today = s.day_count(&ids);
         out.push(pv);
     }
     out

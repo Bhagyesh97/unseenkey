@@ -193,6 +193,72 @@ pub struct Approvals {
 pub struct UsageWindow {
     minute: VecDeque<Instant>,
     day: VecDeque<Instant>,
+    /// Requests let through the limits whose use the vault has not counted
+    /// yet (see [`UseReservation`]). They are in `minute` and `day` already.
+    in_flight: u32,
+}
+
+/// Every handle's counters, and how often they were rebuilt from the log.
+#[derive(Debug, Default)]
+pub struct UsageMap {
+    windows: HashMap<Id, UsageWindow>,
+    /// Goes up with each [`AppState::seed_usage`]: a reservation made before
+    /// a rebuild is no longer in the windows.
+    epoch: u64,
+}
+
+/// One request's place under its handle's limits, taken in the same critical
+/// section that judged them (phase 1 of the broker, under the vault lock), so
+/// requests arriving together are counted one by one. Dropped without
+/// [`UseReservation::keep`] (refused later, approval denied, caller gone), the
+/// place is given back: a request that was never sent uses up no limit.
+pub struct UseReservation {
+    state: std::sync::Arc<AppState>,
+    handle: Id,
+    at: Instant,
+    epoch: u64,
+    kept: bool,
+}
+
+impl UseReservation {
+    /// The request is going out and the vault has counted it
+    /// (`Vault::touch_handle`). Hold the vault lock when calling this, so the
+    /// vault's count and this one change hands in one step.
+    pub fn keep(mut self) {
+        self.kept = true;
+        let mut map = self.state.usage_map();
+        let rebuilt = map.epoch != self.epoch;
+        let w = map.windows.entry(self.handle).or_default();
+        if rebuilt {
+            // The windows were rebuilt from the log while this request waited
+            // (a lock and an unlock); the log did not hold it yet.
+            let now = Instant::now();
+            w.minute.push_back(now);
+            w.day.push_back(now);
+        } else {
+            w.in_flight = w.in_flight.saturating_sub(1);
+        }
+    }
+}
+
+impl Drop for UseReservation {
+    fn drop(&mut self) {
+        if self.kept {
+            return;
+        }
+        let mut map = self.state.usage_map();
+        if map.epoch != self.epoch {
+            return;
+        }
+        if let Some(w) = map.windows.get_mut(&self.handle) {
+            w.in_flight = w.in_flight.saturating_sub(1);
+            for q in [&mut w.minute, &mut w.day] {
+                if let Some(i) = q.iter().rposition(|t| *t == self.at) {
+                    q.remove(i);
+                }
+            }
+        }
+    }
 }
 
 impl UsageWindow {
@@ -264,8 +330,8 @@ pub struct AppState {
     pub shutdown: watch::Sender<bool>,
     /// Secret values to guard, rebuilt on unlock and on secret changes.
     pub scrubber: RwLock<Scrubber>,
-    /// Per-handle sliding windows.
-    pub usage: Mutex<HashMap<Id, UsageWindow>>,
+    /// Per-handle sliding windows. Never held across an await.
+    pub usage: std::sync::Mutex<UsageMap>,
     /// Per-handle policy refusals, for the burst detector.
     pub denials: Mutex<HashMap<Id, DenialWindow>>,
     /// Outbound HTTP client (rustls, no redirects).
@@ -523,16 +589,22 @@ impl AppState {
         self.unlock_attempts.lock().await.push(Instant::now());
     }
 
+    fn usage_map(&self) -> std::sync::MutexGuard<'_, UsageMap> {
+        self.usage.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Current usage snapshot for a handle (before counting this request).
-    pub async fn usage_for(&self, handle: &Id, total: u64) -> Usage {
+    /// `total` is the vault's count of uses; requests let through and not yet
+    /// counted there are added to it.
+    pub fn usage_for(&self, handle: &Id, total: u64) -> Usage {
         let now = Instant::now();
-        let mut map = self.usage.lock().await;
-        let w = map.entry(*handle).or_default();
+        let mut map = self.usage_map();
+        let w = map.windows.entry(*handle).or_default();
         w.prune(now);
         Usage {
             last_minute: w.minute.len() as u32,
             last_day: w.day.len() as u32,
-            total,
+            total: total + u64::from(w.in_flight),
         }
     }
 
@@ -540,26 +612,28 @@ impl AppState {
     /// happened in the last day (`uses` from `Vault::recent_uses`, oldest
     /// first). Called on unlock, so per-minute and per-day caps hold across a
     /// daemon restart instead of starting from zero.
-    pub async fn seed_usage(&self, uses: &[(Id, i64)], now_ms: i64) {
+    pub fn seed_usage(&self, uses: &[(Id, i64)], now_ms: i64) {
         let now = Instant::now();
         let mut by_handle: HashMap<Id, Vec<i64>> = HashMap::new();
         for (id, ts) in uses {
             by_handle.entry(*id).or_default().push(*ts);
         }
-        let mut map = self.usage.lock().await;
-        map.clear();
+        let mut map = self.usage_map();
+        map.windows.clear();
+        map.epoch += 1;
         for (id, times) in by_handle {
-            map.insert(id, UsageWindow::seeded(&times, now_ms, now));
+            map.windows
+                .insert(id, UsageWindow::seeded(&times, now_ms, now));
         }
     }
 
     /// Requests in the last 24 hours across these handles.
-    pub async fn day_count(&self, handles: &[Id]) -> u64 {
+    pub fn day_count(&self, handles: &[Id]) -> u64 {
         let now = Instant::now();
-        let mut map = self.usage.lock().await;
+        let mut map = self.usage_map();
         let mut n = 0u64;
         for h in handles {
-            if let Some(w) = map.get_mut(h) {
+            if let Some(w) = map.windows.get_mut(h) {
                 w.prune(now);
                 n += w.day.len() as u64;
             }
@@ -567,13 +641,24 @@ impl AppState {
         n
     }
 
-    /// Count a request for a handle.
-    pub async fn record_use(&self, handle: &Id) {
-        let now = Instant::now();
-        let mut map = self.usage.lock().await;
-        let w = map.entry(*handle).or_default();
-        w.minute.push_back(now);
-        w.day.push_back(now);
+    /// Count a request for a handle now, before it is sent. Call it under the
+    /// vault lock, right after the limits were judged with [`Self::usage_for`]
+    /// and [`Self::day_count`]: the next request then sees this one.
+    pub fn reserve_use(self: &std::sync::Arc<Self>, handle: &Id) -> UseReservation {
+        let at = Instant::now();
+        let mut map = self.usage_map();
+        let epoch = map.epoch;
+        let w = map.windows.entry(*handle).or_default();
+        w.minute.push_back(at);
+        w.day.push_back(at);
+        w.in_flight += 1;
+        UseReservation {
+            state: self.clone(),
+            handle: *handle,
+            at,
+            epoch,
+            kept: false,
+        }
     }
 
     /// Count a policy refusal for a handle. Returns how many refusals the
