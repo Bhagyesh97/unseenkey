@@ -1,0 +1,5 @@
+# The image is built from the three things the CLI needs and nothing else.
+*
+!Cargo.toml
+!Cargo.lock
+!crates
