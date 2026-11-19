@@ -28,7 +28,7 @@ zeroize = { version = "1", features = ["zeroize_derive", "serde"] }
 bip39 = { version = "3", default-features = false, features = ["alloc"] }
 
 # storage
-rusqlite = { version = "0.41", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 
 # daemon
 # gzip/brotli/deflate: the broker asks providers for compressed replies itself and
@@ -60,7 +60,7 @@ ureq = { version = "2", default-features = false, features = ["json"] }
 
 # broker: scrubbing and encodings
 aho-corasick = "1"
-base64 = "0.22"
+base64 = "0.23"
 percent-encoding = "2"
 
 # time zones for policy schedules (bundled tzdb so behaviour is identical on every OS)
