@@ -11,11 +11,9 @@ on:
       - "apps/desktop/**"
       - "crates/**"
       - ".github/workflows/desktop.yml"
+  # No path filter on pull requests: `main` requires these checks by name, and
+  # a check that never starts would leave an unrelated pull request waiting forever.
   pull_request:
-    paths:
-      - "apps/desktop/**"
-      - "crates/**"
-      - ".github/workflows/desktop.yml"
 
 # Every action is pinned to a commit (its tag is in the comment), so a moved
 # tag cannot change what runs here. Cargo runs with --locked: the app's own
