@@ -165,7 +165,7 @@ impl Schedule {
         let Ok(ts) = jiff::Timestamp::from_millisecond(now_unix_ms) else {
             return false;
         };
-        let z = ts.to_zoned(tz);
+        let z = ts.to_zoned_datetime(tz);
         let weekday = match z.weekday() {
             jiff::civil::Weekday::Monday => 0,
             jiff::civil::Weekday::Tuesday => 1,
