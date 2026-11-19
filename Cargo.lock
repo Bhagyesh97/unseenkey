@@ -2469,7 +2469,7 @@ version = "0.1.10"
 dependencies = [
  "aho-corasick",
  "argon2",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bip39",
  "blake3",
  "chacha20poly1305",
@@ -2499,7 +2499,7 @@ name = "unseenkey-daemon"
 version = "0.1.10"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "dirs",
  "hex",
  "percent-encoding",

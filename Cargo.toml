@@ -60,7 +60,7 @@ ureq = { version = "2", default-features = false, features = ["json"] }
 
 # broker: scrubbing and encodings
 aho-corasick = "1"
-base64 = "0.22"
+base64 = "0.23"
 percent-encoding = "2"
 
 # time zones for policy schedules (bundled tzdb so behaviour is identical on every OS)
