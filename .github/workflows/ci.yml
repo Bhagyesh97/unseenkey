@@ -8,11 +8,9 @@ on:
       - "site/**"
       - "docs/**"
       - "**.md"
+  # No path filter on pull requests: `main` requires these checks by name, and
+  # a check that never starts would leave a docs-only pull request waiting forever.
   pull_request:
-    paths-ignore:
-      - "site/**"
-      - "docs/**"
-      - "**.md"
 
 # Every action is pinned to a commit (its tag is in the comment), so a moved
 # tag cannot change what runs here. Cargo runs with --locked: a build that
