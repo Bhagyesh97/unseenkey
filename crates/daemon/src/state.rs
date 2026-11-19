@@ -12,7 +12,9 @@ use unseenkey_core::policy::Usage;
 use unseenkey_core::presets::{self, Auth};
 use unseenkey_core::storage::sqlite::SqliteStorage;
 use unseenkey_core::time::SystemClock;
-use unseenkey_core::vault::{SecretKind, Vault};
+use unseenkey_core::vault::{OwnerSettings, SecretKind, Vault, VaultError};
+
+use crate::api::ApiError;
 
 /// The vault type the daemon holds.
 pub type DaemonVault = Vault<SqliteStorage, SystemClock>;
@@ -193,6 +195,81 @@ pub struct Approvals {
 pub struct UsageWindow {
     minute: VecDeque<Instant>,
     day: VecDeque<Instant>,
+    /// Requests let through the limits whose use the vault has not counted
+    /// yet (see [`UseReservation`]). They are in `minute` and `day` already.
+    in_flight: u32,
+}
+
+/// How the audit log has fared since the daemon started.
+#[derive(Debug, Default)]
+pub struct AuditHealth {
+    /// Events that could not be written.
+    lost: std::sync::atomic::AtomicU64,
+    /// Of those, the ones the log does not mention yet.
+    gap: std::sync::atomic::AtomicU64,
+}
+
+/// Every handle's counters, and how often they were rebuilt from the log.
+#[derive(Debug, Default)]
+pub struct UsageMap {
+    windows: HashMap<Id, UsageWindow>,
+    /// Goes up with each [`AppState::seed_usage`]: a reservation made before
+    /// a rebuild is no longer in the windows.
+    epoch: u64,
+}
+
+/// One request's place under its handle's limits, taken in the same critical
+/// section that judged them (phase 1 of the broker, under the vault lock), so
+/// requests arriving together are counted one by one. Dropped without
+/// [`UseReservation::keep`] (refused later, approval denied, caller gone), the
+/// place is given back: a request that was never sent uses up no limit.
+pub struct UseReservation {
+    state: std::sync::Arc<AppState>,
+    handle: Id,
+    at: Instant,
+    epoch: u64,
+    kept: bool,
+}
+
+impl UseReservation {
+    /// The request is going out and the vault has counted it
+    /// (`Vault::touch_handle`). Hold the vault lock when calling this, so the
+    /// vault's count and this one change hands in one step.
+    pub fn keep(mut self) {
+        self.kept = true;
+        let mut map = self.state.usage_map();
+        let rebuilt = map.epoch != self.epoch;
+        let w = map.windows.entry(self.handle).or_default();
+        if rebuilt {
+            // The windows were rebuilt from the log while this request waited
+            // (a lock and an unlock); the log did not hold it yet.
+            let now = Instant::now();
+            w.minute.push_back(now);
+            w.day.push_back(now);
+        } else {
+            w.in_flight = w.in_flight.saturating_sub(1);
+        }
+    }
+}
+
+impl Drop for UseReservation {
+    fn drop(&mut self) {
+        if self.kept {
+            return;
+        }
+        let mut map = self.state.usage_map();
+        if map.epoch != self.epoch {
+            return;
+        }
+        if let Some(w) = map.windows.get_mut(&self.handle) {
+            w.in_flight = w.in_flight.saturating_sub(1);
+            for q in [&mut w.minute, &mut w.day] {
+                if let Some(i) = q.iter().rposition(|t| *t == self.at) {
+                    q.remove(i);
+                }
+            }
+        }
+    }
 }
 
 impl UsageWindow {
@@ -254,18 +331,29 @@ pub struct AppState {
     pub events: broadcast::Sender<Event>,
     /// Daemon start time.
     pub started: Instant,
+    /// What the daemon was started with (flags, environment, `config.toml`).
+    /// In force until the first unlock, and taken over by a vault that has no
+    /// settings of its own yet. After that the vault's record decides; see
+    /// [`AppState::apply_settings`].
+    pub seed_settings: OwnerSettings,
     /// Idle lock timeout; zero disables.
     pub idle_lock_secs: std::sync::atomic::AtomicU64,
-    /// `config.toml` next to the vault, where a changed idle time is saved.
-    pub config_path: std::path::PathBuf,
     /// The care level as `Care as u8` (see [`AppState::care`]).
     pub care: std::sync::atomic::AtomicU8,
+    /// Lock when the machine goes to sleep.
+    pub lock_on_sleep: std::sync::atomic::AtomicBool,
+    /// Lock when the screen is locked.
+    pub lock_on_session_lock: std::sync::atomic::AtomicBool,
+    /// Whether the sleep and screen-lock watchers are running.
+    pub lock_watch_started: std::sync::atomic::AtomicBool,
     /// Becomes `true` once a shutdown was requested (API or signal).
     pub shutdown: watch::Sender<bool>,
     /// Secret values to guard, rebuilt on unlock and on secret changes.
     pub scrubber: RwLock<Scrubber>,
-    /// Per-handle sliding windows.
-    pub usage: Mutex<HashMap<Id, UsageWindow>>,
+    /// Per-handle sliding windows. Never held across an await.
+    pub usage: std::sync::Mutex<UsageMap>,
+    /// Audit events that could not be written (see [`AppState::audit_note`]).
+    pub audit_health: AuditHealth,
     /// Per-handle policy refusals, for the burst detector.
     pub denials: Mutex<HashMap<Id, DenialWindow>>,
     /// Outbound HTTP client (rustls, no redirects).
@@ -278,8 +366,9 @@ pub struct AppState {
     pub approvals: Mutex<Approvals>,
     /// Registered MCP clients.
     pub callers: crate::callers::Callers,
-    /// Whether the MCP `store_secret` tool is enabled.
-    pub mcp_allow_store: bool,
+    /// Whether the MCP `store_secret` tool is enabled (see
+    /// [`AppState::mcp_allow_store`]).
+    pub mcp_allow_store: std::sync::atomic::AtomicBool,
     /// OAuth access tokens held for `oauth2_client` secrets. Memory only.
     pub oauth: Mutex<crate::oauth::TokenCache>,
     /// The same tokens for the scrubber: (`<secret>.access_token`, value).
@@ -323,7 +412,11 @@ impl Drop for RequestOut {
             rt.spawn(async move {
                 let mut vault = state.vault.lock().await;
                 if !vault.is_locked() {
-                    let _ = vault.audit(unseenkey_core::audit::kinds::USE_UNFINISHED, event);
+                    state.audit_note(
+                        &mut vault,
+                        unseenkey_core::audit::kinds::USE_UNFINISHED,
+                        event,
+                    );
                 }
             });
         }
@@ -407,7 +500,8 @@ impl AppState {
                 return false;
             }
             self.log_requests_out(&mut v, "locked");
-            let _ = v.audit(
+            self.audit_note(
+                &mut v,
                 unseenkey_core::audit::kinds::LOCK,
                 serde_json::json!({ "reason": reason }),
             );
@@ -483,6 +577,81 @@ impl AppState {
         self.care.store(n, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Whether AI tools may add keys (the MCP `store_secret` tool).
+    pub fn mcp_allow_store(&self) -> bool {
+        self.mcp_allow_store
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The owner settings in force now.
+    pub fn settings(&self) -> OwnerSettings {
+        use std::sync::atomic::Ordering::Relaxed;
+        OwnerSettings {
+            care: self.care(),
+            idle_lock_minutes: self.idle_lock().as_secs() / 60,
+            lock_on_sleep: self.lock_on_sleep.load(Relaxed),
+            lock_on_session_lock: self.lock_on_session_lock.load(Relaxed),
+            mcp_allow_store: self.mcp_allow_store(),
+        }
+    }
+
+    /// Put settings in force. Called with what the daemon was started with,
+    /// then on every unlock with the vault's record, and when the owner
+    /// changes one. Needs a Tokio runtime (the watchers hand it the lock).
+    pub fn apply_settings(self: &std::sync::Arc<Self>, settings: &OwnerSettings) {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.set_care(settings.care);
+        self.idle_lock_secs
+            .store(settings.idle_lock_minutes * 60, Relaxed);
+        self.lock_on_sleep.store(settings.lock_on_sleep, Relaxed);
+        self.lock_on_session_lock
+            .store(settings.lock_on_session_lock, Relaxed);
+        self.mcp_allow_store
+            .store(settings.mcp_allow_store, Relaxed);
+        self.ensure_lock_watch();
+    }
+
+    /// Start the OS hooks for suspend and screen lock the first time either
+    /// is wanted. They stay for the life of the process and ask the settings
+    /// each time they fire, so turning one off later needs no teardown. Each
+    /// fires on its own thread and hands the lock to the runtime;
+    /// `lock_vault` is a no-op when already locked.
+    fn ensure_lock_watch(self: &std::sync::Arc<Self>) {
+        use std::sync::atomic::Ordering::Relaxed;
+        if !(self.lock_on_sleep.load(Relaxed) || self.lock_on_session_lock.load(Relaxed)) {
+            return;
+        }
+        if self.lock_watch_started.swap(true, Relaxed) {
+            return;
+        }
+        let rt = tokio::runtime::Handle::current();
+        let state = std::sync::Arc::downgrade(self);
+        let handle = rt.clone();
+        if let Err(e) = crate::platform::watch_system(move |reason| {
+            let Some(s) = state.upgrade() else { return };
+            let wanted = (reason == crate::platform::REASON_SLEEP && s.lock_on_sleep.load(Relaxed))
+                || (reason == crate::platform::REASON_SESSION_LOCK
+                    && s.lock_on_session_lock.load(Relaxed));
+            if wanted {
+                handle.spawn(async move {
+                    s.lock_vault(reason).await;
+                });
+            }
+        }) {
+            tracing::warn!(error = %e, "system lock notifications unavailable");
+        }
+        // The portable fallback: a wall-clock jump means the machine slept.
+        let state = std::sync::Arc::downgrade(self);
+        crate::platform::watch_resume(move || {
+            let Some(s) = state.upgrade() else { return };
+            if s.lock_on_sleep.load(Relaxed) {
+                rt.spawn(async move {
+                    s.lock_vault(crate::platform::REASON_SLEEP).await;
+                });
+            }
+        });
+    }
+
     /// Idle time after which the vault locks; zero means never.
     pub fn idle_lock(&self) -> Duration {
         Duration::from_secs(
@@ -523,16 +692,22 @@ impl AppState {
         self.unlock_attempts.lock().await.push(Instant::now());
     }
 
+    fn usage_map(&self) -> std::sync::MutexGuard<'_, UsageMap> {
+        self.usage.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Current usage snapshot for a handle (before counting this request).
-    pub async fn usage_for(&self, handle: &Id, total: u64) -> Usage {
+    /// `total` is the vault's count of uses; requests let through and not yet
+    /// counted there are added to it.
+    pub fn usage_for(&self, handle: &Id, total: u64) -> Usage {
         let now = Instant::now();
-        let mut map = self.usage.lock().await;
-        let w = map.entry(*handle).or_default();
+        let mut map = self.usage_map();
+        let w = map.windows.entry(*handle).or_default();
         w.prune(now);
         Usage {
             last_minute: w.minute.len() as u32,
             last_day: w.day.len() as u32,
-            total,
+            total: total + u64::from(w.in_flight),
         }
     }
 
@@ -540,26 +715,28 @@ impl AppState {
     /// happened in the last day (`uses` from `Vault::recent_uses`, oldest
     /// first). Called on unlock, so per-minute and per-day caps hold across a
     /// daemon restart instead of starting from zero.
-    pub async fn seed_usage(&self, uses: &[(Id, i64)], now_ms: i64) {
+    pub fn seed_usage(&self, uses: &[(Id, i64)], now_ms: i64) {
         let now = Instant::now();
         let mut by_handle: HashMap<Id, Vec<i64>> = HashMap::new();
         for (id, ts) in uses {
             by_handle.entry(*id).or_default().push(*ts);
         }
-        let mut map = self.usage.lock().await;
-        map.clear();
+        let mut map = self.usage_map();
+        map.windows.clear();
+        map.epoch += 1;
         for (id, times) in by_handle {
-            map.insert(id, UsageWindow::seeded(&times, now_ms, now));
+            map.windows
+                .insert(id, UsageWindow::seeded(&times, now_ms, now));
         }
     }
 
     /// Requests in the last 24 hours across these handles.
-    pub async fn day_count(&self, handles: &[Id]) -> u64 {
+    pub fn day_count(&self, handles: &[Id]) -> u64 {
         let now = Instant::now();
-        let mut map = self.usage.lock().await;
+        let mut map = self.usage_map();
         let mut n = 0u64;
         for h in handles {
-            if let Some(w) = map.get_mut(h) {
+            if let Some(w) = map.windows.get_mut(h) {
                 w.prune(now);
                 n += w.day.len() as u64;
             }
@@ -567,13 +744,24 @@ impl AppState {
         n
     }
 
-    /// Count a request for a handle.
-    pub async fn record_use(&self, handle: &Id) {
-        let now = Instant::now();
-        let mut map = self.usage.lock().await;
-        let w = map.entry(*handle).or_default();
-        w.minute.push_back(now);
-        w.day.push_back(now);
+    /// Count a request for a handle now, before it is sent. Call it under the
+    /// vault lock, right after the limits were judged with [`Self::usage_for`]
+    /// and [`Self::day_count`]: the next request then sees this one.
+    pub fn reserve_use(self: &std::sync::Arc<Self>, handle: &Id) -> UseReservation {
+        let at = Instant::now();
+        let mut map = self.usage_map();
+        let epoch = map.epoch;
+        let w = map.windows.entry(*handle).or_default();
+        w.minute.push_back(at);
+        w.day.push_back(at);
+        w.in_flight += 1;
+        UseReservation {
+            state: self.clone(),
+            handle: *handle,
+            at,
+            epoch,
+            kept: false,
+        }
     }
 
     /// Count a policy refusal for a handle. Returns how many refusals the
@@ -711,8 +899,102 @@ impl AppState {
         let out = std::mem::take(&mut *self.requests_out.lock().unwrap_or_else(|e| e.into_inner()));
         for (_, mut event) in out {
             event["why"] = serde_json::json!(why);
-            if let Err(e) = vault.audit(unseenkey_core::audit::kinds::USE_UNFINISHED, event) {
-                tracing::warn!(error = %e, "could not log a request still out");
+            self.audit_note(vault, unseenkey_core::audit::kinds::USE_UNFINISHED, event);
+        }
+    }
+
+    /// Audit events that could not be written since the daemon started.
+    pub fn audit_lost(&self) -> u64 {
+        self.audit_health
+            .lost
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The log says how many events are missing before anything else is
+    /// written after them. Every caller holds the vault lock, so the count
+    /// and the log change together.
+    fn close_audit_gap(&self, vault: &mut DaemonVault) -> Result<(), VaultError> {
+        use std::sync::atomic::Ordering::SeqCst;
+        let lost = self.audit_health.gap.load(SeqCst);
+        if lost == 0 {
+            return Ok(());
+        }
+        vault.audit(
+            unseenkey_core::audit::kinds::AUDIT_GAP,
+            serde_json::json!({ "lost": lost }),
+        )?;
+        self.audit_health.gap.fetch_sub(lost, SeqCst);
+        tracing::warn!(
+            lost,
+            "the audit log can be written again; it now says what is missing"
+        );
+        Ok(())
+    }
+
+    /// Write an event for something that has happened. When the log cannot
+    /// take it, the loss is counted (`audit_lost` on the status), logged, and
+    /// written into the log itself as `audit_gap` once it works again. A
+    /// locked vault is not a broken log: the lock has said what it had to.
+    pub fn audit_write(
+        &self,
+        vault: &mut DaemonVault,
+        kind: &str,
+        body: serde_json::Value,
+    ) -> Result<(), VaultError> {
+        use std::sync::atomic::Ordering::SeqCst;
+        let written = self
+            .close_audit_gap(vault)
+            .and_then(|()| vault.audit(kind, body).map(|_| ()));
+        if let Err(e) = &written {
+            if !matches!(e, VaultError::Locked) {
+                self.audit_health.lost.fetch_add(1, SeqCst);
+                self.audit_health.gap.fetch_add(1, SeqCst);
+                tracing::error!(kind, error = %e, "an audit event could not be written");
+            }
+        }
+        written
+    }
+
+    /// [`Self::audit_write`] for a refusal or a change that stands either way.
+    pub fn audit_note(&self, vault: &mut DaemonVault, kind: &str, body: serde_json::Value) {
+        let _ = self.audit_write(vault, kind, body);
+    }
+
+    /// Write the event first, for what must not happen unrecorded: a value
+    /// leaving the vault. On failure nothing has happened, so nothing is lost.
+    pub fn audit_must(
+        &self,
+        vault: &mut DaemonVault,
+        kind: &str,
+        body: serde_json::Value,
+    ) -> Result<(), ApiError> {
+        match self
+            .close_audit_gap(vault)
+            .and_then(|()| vault.audit(kind, body))
+        {
+            Ok(_) => Ok(()),
+            Err(VaultError::Locked) => Err(VaultError::Locked.into()),
+            Err(e) => {
+                tracing::error!(kind, error = %e, "refused: the audit log could not be written");
+                Err(ApiError::audit_failure(
+                    "the audit log could not be written, so this was not done",
+                ))
+            }
+        }
+    }
+
+    /// Before a key is read for a request: if events are missing from the
+    /// log, it has to take the note of that first. A broker that cannot keep
+    /// its record sends nothing.
+    pub fn audit_ready(&self, vault: &mut DaemonVault) -> Result<(), ApiError> {
+        match self.close_audit_gap(vault) {
+            Ok(()) => Ok(()),
+            Err(VaultError::Locked) => Err(VaultError::Locked.into()),
+            Err(e) => {
+                tracing::error!(error = %e, "request refused: the audit log cannot be written");
+                Err(ApiError::audit_failure(
+                    "the audit log cannot be written, so nothing was sent",
+                ))
             }
         }
     }

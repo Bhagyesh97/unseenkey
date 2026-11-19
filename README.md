@@ -132,6 +132,22 @@ cargo install --locked --git https://github.com/Bhagyesh97/unseenkey usk        
 
 Archives and installers for every platform are on the [Releases](https://github.com/Bhagyesh97/unseenkey/releases) page: CLI for Windows x64, macOS arm64/x64 and Linux x64/arm64; NSIS/MSI, DMG, deb/rpm/AppImage for the desktop app. Every archive has a Sigstore signature, every installer a minisign signature, and each release ships an SBOM. The installers are not yet code-signed, so Windows SmartScreen and macOS Gatekeeper warn on first launch.
 
+### Verify a download
+
+From 0.1.10, `SHA256SUMS` on a release lists every archive, bundle and installer on it, and is signed by the release workflow itself through [Sigstore](https://www.sigstore.dev): there is no key of ours to steal, and the signature names the workflow and the tag it ran for. With [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) installed, download `SHA256SUMS`, `SHA256SUMS.sig` and `SHA256SUMS.pem` beside your file, then (with the version you downloaded in place of `0.1.10`):
+
+```sh
+cosign verify-blob SHA256SUMS \
+  --signature SHA256SUMS.sig --certificate SHA256SUMS.pem \
+  --certificate-identity https://github.com/Bhagyesh97/unseenkey/.github/workflows/release.yml@refs/tags/v0.1.10 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+sha256sum --check --ignore-missing SHA256SUMS      # Linux, Git Bash
+shasum -a 256 --check --ignore-missing SHA256SUMS  # macOS
+```
+
+In PowerShell, on one line, `cosign` takes the same arguments; then compare `(Get-FileHash <file>).Hash` with the file's line in `SHA256SUMS`. `Verified OK` from cosign says the list was made by this repository's release workflow for that tag; the second command says your file is the one on the list. Each CLI archive also has its own `.sig` and `.pem`, checked the same way. Up to 0.1.9, `SHA256SUMS` covers the CLI archives and the MCP bundle only. Scoop, Homebrew and winget check the hash in their manifest for you.
+
 ## Providers
 
 | Provider | Presets | | Provider | Presets |

@@ -112,7 +112,7 @@ fn view_now(v: &DaemonVault, p: &ProjectRecord) -> (ProjectView, Vec<Id>) {
 async fn finish(s: &AppState, parts: Vec<(ProjectView, Vec<Id>)>) -> Vec<ProjectView> {
     let mut out = Vec::with_capacity(parts.len());
     for (mut pv, ids) in parts {
-        pv.requests_today = s.day_count(&ids).await;
+        pv.requests_today = s.day_count(&ids);
         out.push(pv);
     }
     out
@@ -229,7 +229,8 @@ pub async fn create(
             },
         )?;
     }
-    let _ = v.audit(
+    s.audit_note(
+        &mut v,
         kinds::PROJECT_CREATED,
         json!({ "id": p.project_id.to_hex(), "name": p.name, "paths": p.paths, "secrets": p.secrets.len() }),
     );
@@ -278,7 +279,8 @@ pub async fn patch(
             notes: req.notes,
         },
     )?;
-    let _ = v.audit(
+    s.audit_note(
+        &mut v,
         kinds::PROJECT_CHANGED,
         json!({ "id": id.to_hex(), "name": p.name, "paths": p.paths, "cap_per_day": p.cap_per_day }),
     );
@@ -300,7 +302,8 @@ pub async fn delete(
     let id = resolve_project(&v, &r)?;
     let name = v.project(&id)?.name.clone();
     v.delete_project(&id)?;
-    let _ = v.audit(
+    s.audit_note(
+        &mut v,
         kinds::PROJECT_DELETED,
         json!({ "id": id.to_hex(), "name": name }),
     );
@@ -330,7 +333,8 @@ pub async fn attach(
     let had = v.project(&id)?.has_secret(&sid);
     let p = v.attach_secret(&id, &sid)?;
     if !had {
-        let _ = v.audit(
+        s.audit_note(
+            &mut v,
             kinds::PROJECT_CHANGED,
             json!({ "id": id.to_hex(), "name": p.name, "added": sid.to_hex() }),
         );
@@ -355,7 +359,8 @@ pub async fn detach(
     let had = v.project(&id)?.has_secret(&sid);
     let p = v.detach_secret(&id, &sid)?;
     if had {
-        let _ = v.audit(
+        s.audit_note(
+            &mut v,
             kinds::PROJECT_CHANGED,
             json!({ "id": id.to_hex(), "name": p.name, "removed": sid.to_hex() }),
         );

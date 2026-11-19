@@ -9,9 +9,9 @@ const FILTERS: { id: string; label: string; kinds: string[] }[] = [
   { id: "all", label: "Everything", kinds: [] },
   { id: "used", label: "Keys used", kinds: ["use", "use_unfinished", "key_tested"] },
   { id: "blocked", label: "Blocked", kinds: ["deny", "egress_blocked"] },
-  { id: "alerts", label: "Alerts", kinds: ["anomaly", "canary_tripped", "audit_tampered"] },
+  { id: "alerts", label: "Alerts", kinds: ["anomaly", "canary_tripped", "audit_tampered", "audit_gap", "settings_tampered"] },
   { id: "asks", label: "Requests to you", kinds: ["approval_required", "approval_decided", "access_requested"] },
-  { id: "changes", label: "Changes", kinds: ["secret_created", "secret_updated", "secret_deleted", "handle_created", "handle_revoked", "handle_resumed", "policy_changed", "project_created", "project_changed", "project_deleted", "settings_changed", "password_changed", "unlock_method_added", "unlock_method_removed", "approval_forgotten", "reveal", "inject", "caller_registered", "caller_replaced", "caller_removed"] },
+  { id: "changes", label: "Changes", kinds: ["secret_created", "secret_updated", "secret_deleted", "handle_created", "handle_revoked", "handle_resumed", "policy_changed", "project_created", "project_changed", "project_deleted", "settings_changed", "settings_adopted", "password_changed", "unlock_method_added", "unlock_method_removed", "approval_forgotten", "reveal", "inject", "caller_registered", "caller_replaced", "caller_removed"] },
   { id: "signins", label: "Lock and unlock", kinds: ["unlock", "lock"] },
 ];
 
@@ -48,6 +48,8 @@ function sentence(e: AuditEvent, names: Map<string, string>): Line {
       return { text: `A tripwire key was used. ${s("detail")}`, result: responseWords(b.response), tone: "bad" };
     case "audit_tampered":
       return { text: "The activity log was cut short or rewritten while the vault was locked", tone: "bad" };
+    case "audit_gap":
+      return { text: `${b.lost === 1 ? "1 event is" : `${Number(b.lost) || "Some"} events are`} missing just before this: the activity log could not be written for a while`, tone: "bad" };
     case "key_tested": {
       const ok = b.ok === true ? "works" : b.ok === false ? "was refused" : "result unclear";
       return { text: `Tested ${key}: it ${ok}`, tone: b.ok === true ? "ok" : b.ok === false ? "bad" : "plain" };
@@ -74,8 +76,19 @@ function sentence(e: AuditEvent, names: Map<string, string>): Line {
       return { text: `Project ${s("name")} changed${b.added ? ": key added" : b.removed ? ": key removed" : ""}`, tone: "plain" };
     case "project_deleted":
       return { text: `Project ${s("name")} deleted (its keys stay)`, tone: "plain" };
-    case "settings_changed":
-      return { text: b.idle_lock_minutes === 0 ? "Auto-lock turned off" : `Auto-lock set to ${b.idle_lock_minutes} minutes`, tone: "plain" };
+    case "settings_changed": {
+      const parts: string[] = [];
+      if (typeof b.care === "string") parts.push(`care level set to ${b.care}`);
+      if (typeof b.idle_lock_minutes === "number") parts.push(b.idle_lock_minutes === 0 ? "auto-lock turned off" : `auto-lock set to ${b.idle_lock_minutes} minutes`);
+      if (typeof b.lock_on_sleep === "boolean") parts.push(`locking when the computer sleeps turned ${b.lock_on_sleep ? "on" : "off"}`);
+      if (typeof b.lock_on_session_lock === "boolean") parts.push(`locking with the screen turned ${b.lock_on_session_lock ? "on" : "off"}`);
+      if (typeof b.mcp_allow_store === "boolean") parts.push(b.mcp_allow_store ? "AI tools may now add keys" : "AI tools may no longer add keys");
+      return { text: parts.length ? `Settings: ${parts.join("; ")}` : "A setting changed", tone: "plain" };
+    }
+    case "settings_adopted":
+      return { text: "This vault now keeps its own settings, starting with the ones that were in use", tone: "plain" };
+    case "settings_tampered":
+      return { text: `The vault's settings were ${b.reason === "record_unreadable" ? "damaged" : b.reason === "log_damaged" ? "missing, and the activity log is damaged," : "removed"} while it was locked. The cautious settings are in force now; set yours again in Settings`, tone: "bad" };
     case "caller_registered":
       return { text: `New AI tool connected: ${who(`mcp:${s("name")}`)}`, tone: "warn" };
     case "caller_replaced":
@@ -164,7 +177,7 @@ export function Activity({ tick }: { tick: number }) {
   const today = lines.filter(({ e }) => dayLabel(e.ts) === "Today");
   const usedToday = today.filter(({ e }) => e.kind === "use").length;
   const blockedToday = today.filter(({ e }) => e.kind === "deny" || e.kind === "egress_blocked").length;
-  const alertsToday = today.filter(({ e }) => ["anomaly", "canary_tripped", "audit_tampered"].includes(e.kind)).length;
+  const alertsToday = today.filter(({ e }) => ["anomaly", "canary_tripped", "audit_tampered", "audit_gap", "settings_tampered"].includes(e.kind)).length;
 
   const groups: { day: string; items: typeof visible }[] = [];
   for (const it of visible.slice(0, shown)) {

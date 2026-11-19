@@ -546,11 +546,14 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         if last.ts < since_ts {
             return Ok(Vec::new());
         }
+        // The lowest position from which every row is recent enough. `hi`
+        // moves to `mid`, not to the row found: in a log with a row missing
+        // that row can be `hi` itself, and the search would never end.
         let (mut lo, mut hi) = (1u64, last.seq);
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
             match self.storage.audit_rows(mid, 1)?.first() {
-                Some(r) if r.ts >= since_ts => hi = r.seq,
+                Some(r) if r.ts >= since_ts => hi = mid,
                 Some(r) => lo = r.seq + 1,
                 None => lo = mid + 1,
             }
@@ -846,5 +849,37 @@ mod tests {
         let h = v.handles.get(&hid).unwrap();
         assert_eq!(h.use_count, 5, "not doubled");
         assert!(h.counted_seq > 0, "pinned to the log's end");
+    }
+
+    /// A log with a row removed is damaged; looking for the recent uses in
+    /// it still has to end. The daemon does this on every unlock, holding the
+    /// vault.
+    #[test]
+    fn recent_uses_end_on_a_log_with_a_hole() {
+        use crate::crypto::kdf::Argon2Profile;
+        use crate::storage::memory::MemoryStorage;
+        use crate::time::FixedClock;
+        for hole in 1..=6u64 {
+            let (mut v, _) = Vault::create(
+                MemoryStorage::new(),
+                FixedClock(1_000),
+                &SecretBytes::from("a-log-with-a-hole"),
+                Argon2Profile::MINIMUM,
+            )
+            .unwrap();
+            while v.audit_count().unwrap() < 6 {
+                v.audit(audit::kinds::UNLOCK, serde_json::json!({}))
+                    .unwrap();
+            }
+            v.storage.drop_audit_row(hole);
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(v.recent_uses(0).map(|uses| uses.len()));
+            });
+            let found = rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap_or_else(|_| panic!("the search never ended with row {hole} gone"));
+            assert_eq!(found.unwrap(), 0);
+        }
     }
 }

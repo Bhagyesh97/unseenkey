@@ -8,6 +8,10 @@ use unseenkey_daemon::{config, ServeOptions, VaultPaths};
 
 /// Resolve listen address and idle timeout: CLI flag, then `USK_LISTEN` /
 /// `USK_IDLE_LOCK_MINUTES`, then `config.toml`, then defaults.
+///
+/// Everything here except `listen` is a starting value. It holds until the
+/// first unlock and is taken over by a vault that has no settings of its own;
+/// a vault that has them uses those (`usk settings`, `usk care`).
 pub fn resolve_options(
     paths: &VaultPaths,
     listen: Option<String>,

@@ -10,7 +10,9 @@
 //! phases, never while waiting for an approval or for the upstream.
 
 use crate::api::ApiError;
-use crate::state::{AppState, DaemonVault, Event, PendingApproval, THROTTLE_PER_MINUTE};
+use crate::state::{
+    AppState, DaemonVault, Event, PendingApproval, UseReservation, THROTTLE_PER_MINUTE,
+};
 use axum::body::{Body, Bytes};
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri};
@@ -344,7 +346,8 @@ fn raise_incident(
     } else {
         kinds::ANOMALY
     };
-    let _ = vault.audit(
+    s.audit_note(
+        vault,
         kind,
         json!({
             "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": secret,
@@ -590,6 +593,45 @@ async fn pinned_upstream(s: &AppState, handle_ref: &HandleRef, preset: &Preset) 
         )
 }
 
+/// Routes a secret must not take, with the words for the refusal.
+///
+/// A Basic route builds its header from the secret's own provider, and the
+/// scrubber guards that header: on another provider's route it would go out
+/// with a username nothing guards.
+///
+/// The generic route puts the value wherever the caller wrote `{{usk:name}}`,
+/// which includes a prompt, a path or a query. With a provider's key that is a
+/// way to make the provider say the key back in a form the scrubber cannot
+/// match (spelled out, reversed, translated), so a key that has a provider
+/// goes out through that provider's route, where the broker chooses the place.
+/// OAuth clients and service accounts are exempt: what they send is an access
+/// token in `Authorization`, never the stored value, on any route.
+fn route_mismatch(preset: &Preset, meta: &SecretMeta) -> Option<String> {
+    match &preset.auth {
+        Auth::Basic { .. } if meta.provider.as_deref() != Some(&preset.id) => Some(format!(
+            "{} is not a {} key; if it is, run `usk secret set {} --provider {}`",
+            meta.name, preset.display, meta.name, preset.id
+        )),
+        Auth::Template
+            if !matches!(
+                meta.kind,
+                SecretKind::Oauth2Client | SecretKind::GcpServiceAccount
+            ) =>
+        {
+            let own = meta
+                .provider
+                .as_deref()
+                .and_then(presets::get)
+                .filter(|p| !matches!(p.auth, Auth::Template))?;
+            Some(format!(
+                "{} is a {} key, so it goes through {}'s own route (/p/{}/...), where Unseenkey puts the key in its place. The generic route, which fills in {{{{usk:...}}}} wherever the caller writes it, is for keys without a provider",
+                meta.name, own.display, own.display, own.id
+            ))
+        }
+        _ => None,
+    }
+}
+
 /// Run the pipeline. Returns the upstream's (scrubbed) response, or an error
 /// response from the broker itself.
 pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest) -> Response {
@@ -627,7 +669,7 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
     let now = now_ms();
 
     // Phase 1 (vault lock): handle, secret, host lock, policy.
-    let (handle, meta, decision): (HandleRecord, SecretMeta, Decision) = {
+    let (handle, meta, decision, place): (HandleRecord, SecretMeta, Decision, UseReservation) = {
         let mut vault = s.vault.lock().await;
         if vault.is_locked() {
             return err(
@@ -704,7 +746,8 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
         // they do not feed the burst detector.
         let standing = handle.status_at(now);
         if standing == HandleStatus::Paused {
-            let _ = vault.audit(
+            s.audit_note(
+                &mut vault,
                 kinds::DENY,
                 json!({
                     "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
@@ -723,7 +766,8 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
         if let Some((p, t)) = presets::unpinned(meta.provider.as_deref(), &meta.upstreams)
             .and_then(|p| p.tenant.as_ref().map(|t| (p, t)))
         {
-            let _ = vault.audit(
+            s.audit_note(
+                &mut vault,
                 kinds::DENY,
                 json!({
                     "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
@@ -742,7 +786,8 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
         }
         // Host lock (INV-2) on the logical host, before any override.
         if let Err(e) = check_host(&meta.upstreams, &handle.policy.upstreams, &upstream.host) {
-            let _ = vault.audit(
+            s.audit_note(
+                &mut vault,
                 kinds::DENY,
                 json!({
                     "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
@@ -774,11 +819,37 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
             }
             return broker_err(e);
         }
-        let usage = s.usage_for(&handle.handle_id, handle.use_count).await;
+        // The route has to suit the secret, and that is settled here: before an
+        // approval is asked for, a use is counted or the value is read.
+        if let Some(msg) = route_mismatch(preset, &meta) {
+            s.audit_note(
+                &mut vault,
+                kinds::DENY,
+                json!({
+                    "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
+                    "caller": call.caller, "reason": "route_mismatch", "route": preset.id,
+                    "host": upstream.host, "method": call.method, "path": pol_path,
+                }),
+            );
+            after_denial(
+                &s,
+                vault,
+                &handle,
+                &meta.name,
+                &call,
+                &upstream.host,
+                &pol_path,
+                now,
+            )
+            .await;
+            return err(StatusCode::BAD_REQUEST, "route_mismatch", msg);
+        }
+        let usage = s.usage_for(&handle.handle_id, handle.use_count);
         if matches!(standing, HandleStatus::Throttled { .. })
             && usage.last_minute >= THROTTLE_PER_MINUTE
         {
-            let _ = vault.audit(
+            s.audit_note(
+                &mut vault,
                 kinds::DENY,
                 json!({
                     "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
@@ -802,8 +873,9 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
         {
             let ids =
                 crate::projects::project_handle_ids(&vault, &handle.project.expect("checked"));
-            if s.day_count(&ids).await >= cap {
-                let _ = vault.audit(
+            if s.day_count(&ids) >= cap {
+                s.audit_note(
+                    &mut vault,
                     kinds::DENY,
                     json!({
                         "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
@@ -844,7 +916,8 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
                 }
                 _ => StatusCode::FORBIDDEN,
             };
-            let _ = vault.audit(
+            s.audit_note(
+                &mut vault,
                 kinds::DENY,
                 json!({
                     "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
@@ -886,7 +959,11 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
         } else {
             decision
         };
-        (handle, meta, decision)
+        // Counted here, under the lock that judged the limits: a request
+        // arriving at the same moment sees this one. Given back if this
+        // request is refused further on and never sent.
+        let place = s.reserve_use(&handle.handle_id);
+        (handle, meta, decision, place)
     };
 
     // Approval, if the policy asks for one. The vault lock is not held while waiting.
@@ -931,7 +1008,7 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
             let approval_id = pending.id;
             {
                 let mut vault = s.vault.lock().await;
-                let _ = vault.audit(kinds::APPROVAL_REQUIRED, json!({
+                s.audit_note(&mut vault, kinds::APPROVAL_REQUIRED, json!({
                     "approval": approval_id.to_hex(), "handle": handle.handle_id.to_hex(),
                     "label": handle.label, "secret": meta.name, "caller": call.caller,
                     "host": upstream.host, "method": call.method, "path": pol_path, "scope": scope_text,
@@ -966,7 +1043,8 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
             };
             {
                 let mut vault = s.vault.lock().await;
-                let _ = vault.audit(
+                s.audit_note(
+                    &mut vault,
                     kinds::APPROVAL_DECIDED,
                     json!({
                         "approval": approval_id.to_hex(), "handle": handle.handle_id.to_hex(),
@@ -1001,6 +1079,9 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
                     "the vault was locked while waiting",
                 );
             }
+            if let Err(e) = s.audit_ready(&mut vault) {
+                return e.into_response();
+            }
             let scrubber = s.scrubber_snapshot();
             let mut hits = scrubber.find(&call.body);
             for (name, value) in call.headers.iter() {
@@ -1017,7 +1098,7 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
             }
             if !hits.is_empty() {
                 hits.dedup();
-                let _ = vault.audit(kinds::EGRESS_BLOCKED, json!({
+                s.audit_note(&mut vault, kinds::EGRESS_BLOCKED, json!({
                 "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
                 "caller": call.caller, "leaked": hits, "host": upstream.host,
                 "method": call.method, "path": pol_path,
@@ -1039,8 +1120,12 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
                 Ok(r) => r,
                 Err(e) => return ApiError::from(e).into_response(),
             };
-            s.record_use(&handle.handle_id).await;
-            let _ = vault.touch_handle(&handle.handle_id, now);
+            // A use the vault cannot count is not made: the limit on uses
+            // ever is kept there.
+            if let Err(e) = vault.touch_handle(&handle.handle_id, now) {
+                return ApiError::from(e).into_response();
+            }
+            place.keep();
             // A request the policy let through is activity: an agent working
             // through the broker should not find the vault locked under it
             // because nobody ran a management command for fifteen minutes.
@@ -1050,19 +1135,8 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
 
     // A bearer-kind secret (OAuth token, PAT) is always sent as `Authorization:
     // Bearer`, even for providers whose API keys travel in another header or in
-    // the query string. Template and basic styles keep their own shape.
-    // The scrubber guards a Basic header built by the secret's own provider. On
-    // another provider's route it would go out with a username nothing guards.
-    if matches!(preset.auth, Auth::Basic { .. }) && meta.provider.as_deref() != Some(&preset.id) {
-        return err(
-            StatusCode::BAD_REQUEST,
-            "route_mismatch",
-            format!(
-                "{} is not a {} key; if it is, run `usk secret set {} --provider {}`",
-                meta.name, preset.display, meta.name, preset.id
-            ),
-        );
-    }
+    // the query string. Template and basic styles keep their own shape (phase 1
+    // refused the routes on which those shapes would be wrong for this secret).
     let auth = match (&preset.auth, meta.kind) {
         (
             Auth::Header { .. } | Auth::Query { .. } | Auth::Scheme { .. },
@@ -1088,7 +1162,7 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
             Ok(token) => Some(token),
             Err(e) => {
                 let mut vault = s.vault.lock().await;
-                let _ = vault.audit(kinds::USE, json!({
+                s.audit_note(&mut vault, kinds::USE, json!({
                     "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
                     "caller": call.caller, "host": upstream.host, "method": call.method, "path": call.path,
                     "status": e.status.as_u16(), "error": e.code, "latency_ms": started.elapsed().as_millis() as u64,
@@ -1398,7 +1472,7 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
         Err(e) => {
             let mut vault = s.vault.lock().await;
             request_out.answered();
-            let _ = vault.audit(kinds::USE, json!({
+            s.audit_note(&mut vault, kinds::USE, json!({
                 "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
                 "caller": call.caller, "host": upstream.host, "method": call.method, "path": call.path,
                 "status": 502, "error": "upstream_unreachable", "latency_ms": started.elapsed().as_millis() as u64,
@@ -1429,7 +1503,7 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
     if still_encoded {
         let mut vault = s.vault.lock().await;
         request_out.answered();
-        let _ = vault.audit(kinds::USE, json!({
+        s.audit_note(&mut vault, kinds::USE, json!({
             "handle": handle.handle_id.to_hex(), "label": handle.label, "secret": meta.name,
             "caller": call.caller, "host": upstream.host, "method": call.method, "path": call.path,
             "status": 502, "error": "undecodable_response", "upstream_status": status.as_u16(),
@@ -1474,7 +1548,7 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
                 event["action"] = json!(action);
             }
         }
-        let audit = vault.audit(kinds::USE, event);
+        let audit = s.audit_write(&mut vault, kinds::USE, event);
         // Locked while the request was out: the lock wrote it in the log already.
         if audit.is_err() && vault.is_locked() {
             return err(
@@ -1487,7 +1561,7 @@ pub async fn execute(s: Arc<AppState>, handle_ref: HandleRef, call: CallRequest)
             return err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "audit_failure",
-                "could not record this request; refusing to proceed",
+                "the request went out but could not be written to the audit log; its answer was withheld",
             );
         }
     }

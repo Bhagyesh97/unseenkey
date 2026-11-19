@@ -98,7 +98,7 @@ enum Command {
         #[arg(long)]
         reason: Option<String>,
     },
-    /// Delete a secret.
+    /// Delete a secret and revoke its handles. Asks for the vault password.
     Rm {
         name: String,
         #[arg(long)]
@@ -170,6 +170,23 @@ enum Command {
     Care {
         /// The level to set.
         level: Option<String>,
+    },
+    /// When the vault locks and whether AI tools may add keys: show the
+    /// settings, or change them. They are kept in the vault, so only the
+    /// owner can change them.
+    Settings {
+        /// Lock after this many minutes without use; 0 means never.
+        #[arg(long, value_name = "MINUTES")]
+        idle_lock: Option<u64>,
+        /// Lock when the computer goes to sleep.
+        #[arg(long, value_name = "on|off")]
+        lock_on_sleep: Option<OnOff>,
+        /// Lock when the screen is locked.
+        #[arg(long, value_name = "on|off")]
+        lock_on_screen_lock: Option<OnOff>,
+        /// Let AI tools add keys they come across to the vault.
+        #[arg(long, value_name = "on|off")]
+        agents_may_store: Option<OnOff>,
     },
     /// Group secrets by the code folder that uses them; agents started in a
     /// project's folder see only its secrets.
@@ -251,7 +268,8 @@ enum DaemonAction {
         /// Loopback address (default from config or 127.0.0.1:7391).
         #[arg(long)]
         listen: Option<String>,
-        /// Lock after N idle minutes (0 disables).
+        /// Lock after N idle minutes (0 disables). Only a starting value: a
+        /// vault that holds its own settings uses those (`usk settings`).
         #[arg(long)]
         idle_lock_minutes: Option<u64>,
         /// Log to the vault's logs directory instead of stderr (used when spawned).
@@ -407,6 +425,27 @@ pub fn run() -> Result<(), CliError> {
         },
         Command::Project { action } => crate::project::run(&paths, action, cli.json),
         Command::Care { level } => care(&paths, level.as_deref()),
+        Command::Settings {
+            idle_lock,
+            lock_on_sleep,
+            lock_on_screen_lock,
+            agents_may_store,
+        } => {
+            let mut change = serde_json::Map::new();
+            if let Some(m) = idle_lock {
+                change.insert("idle_lock_minutes".into(), m.into());
+            }
+            for (key, value) in [
+                ("lock_on_sleep", lock_on_sleep),
+                ("lock_on_session_lock", lock_on_screen_lock),
+                ("mcp_allow_store", agents_may_store),
+            ] {
+                if let Some(v) = value {
+                    change.insert(key.into(), matches!(v, OnOff::On).into());
+                }
+            }
+            settings(&paths, change, cli.json)
+        }
         Command::Guard { action } => match action {
             GuardAction::Scan { path } => crate::guard::scan(&path, cli.json).map(|_| ()),
             GuardAction::Fix {
@@ -1068,6 +1107,9 @@ fn rm(paths: &VaultPaths, name: &str, yes: bool) -> Result<(), CliError> {
         println!("Cancelled.");
         return Ok(());
     }
+    // Deleting a key also revokes its handles: the owner's call, not that of
+    // whatever program holds the daemon token.
+    c.ensure_owner()?;
     let out = c.delete(&format!("/v1/secrets/{name}"))?;
     match out["handles_revoked"].as_u64().unwrap_or(0) {
         0 => println!("Deleted {name}."),
@@ -1233,7 +1275,7 @@ fn status(paths: &VaultPaths, json: bool) -> Result<(), CliError> {
         if exists { "yes" } else { "no (run `usk init`)" }
     );
     println!("version: {}", env!("CARGO_PKG_VERSION"));
-    match daemon_status {
+    match &daemon_status {
         Some(s) => println!(
             "daemon:  running, {} (idle lock {} min)",
             if s["locked"].as_bool().unwrap_or(true) {
@@ -1244,6 +1286,15 @@ fn status(paths: &VaultPaths, json: bool) -> Result<(), CliError> {
             s["idle_lock_minutes"]
         ),
         None => println!("daemon:  not running (starts on first use)"),
+    }
+    let lost = daemon_status
+        .as_ref()
+        .and_then(|s| s["audit_lost"].as_u64())
+        .unwrap_or(0);
+    if lost > 0 {
+        println!(
+            "audit:   {lost} event(s) could not be written since the daemon started. Is the disk full, or the vault file locked by another program? Keys are not sent while the log cannot be written; `usk audit` shows the gap once it can."
+        );
     }
     Ok(())
 }
@@ -2046,10 +2097,13 @@ enum SecretAction {
         name: String,
     },
     /// Replace a secret's value (a new or rotated key). Handles keep working.
+    /// Asks for the vault password.
     Replace {
         /// Secret name.
         name: String,
-        /// Read the new value from standard input instead of prompting.
+        /// Read the new value from standard input instead of prompting. When
+        /// the input is piped, its first line is the vault password and the
+        /// rest is the value.
         #[arg(long)]
         stdin: bool,
     },
@@ -2084,6 +2138,75 @@ enum SecretAction {
         #[arg(long)]
         username: Option<String>,
     },
+}
+
+/// A switch on the command line.
+#[derive(Clone, Copy, ValueEnum)]
+enum OnOff {
+    On,
+    Off,
+}
+
+/// `usk settings`: show the owner's settings, or change the ones given.
+fn settings(
+    paths: &VaultPaths,
+    change: serde_json::Map<String, Value>,
+    json: bool,
+) -> Result<(), CliError> {
+    // The settings are in the vault; a locked one only shows what the daemon
+    // was started with.
+    let c = unlocked(paths)?;
+    let now = if change.is_empty() {
+        c.get("/v1/status")?
+    } else {
+        c.ensure_owner()?;
+        c.patch("/v1/settings", Value::Object(change.clone()))?
+    };
+    if json {
+        println!(
+            "{}",
+            json!({
+                "care": now["care"],
+                "idle_lock_minutes": now["idle_lock_minutes"],
+                "lock_on_sleep": now["lock_on_sleep"],
+                "lock_on_session_lock": now["lock_on_session_lock"],
+                "mcp_allow_store": now["mcp_allow_store"],
+            })
+        );
+        return Ok(());
+    }
+    let on = |key: &str| {
+        if now[key].as_bool().unwrap_or(false) {
+            "on"
+        } else {
+            "off"
+        }
+    };
+    let idle = match now["idle_lock_minutes"].as_u64().unwrap_or(0) {
+        0 => "never".to_string(),
+        1 => "after 1 minute".to_string(),
+        m => format!("after {m} minutes"),
+    };
+    if !change.is_empty() {
+        println!("Saved.");
+    }
+    println!(
+        "Care:                           {}",
+        now["care"].as_str().unwrap_or("balanced")
+    );
+    println!("Lock when not used:             {idle}");
+    println!("Lock when the computer sleeps:  {}", on("lock_on_sleep"));
+    println!(
+        "Lock when the screen locks:     {}",
+        on("lock_on_session_lock")
+    );
+    println!("AI tools may add keys:          {}", on("mcp_allow_store"));
+    if change.is_empty() {
+        println!();
+        println!("Change them with `usk settings --idle-lock <minutes>`, `--lock-on-sleep on|off`, `--lock-on-screen-lock on|off`, `--agents-may-store on|off`, and the care level with `usk care`.");
+        println!("They are kept in the vault: editing config.toml or restarting the service does not change them.");
+    }
+    Ok(())
 }
 
 fn care(paths: &VaultPaths, level: Option<&str>) -> Result<(), CliError> {
@@ -2129,6 +2252,23 @@ fn secret_replace(paths: &VaultPaths, name: &str, stdin: bool) -> Result<(), Cli
             "{name} holds several values; remove it with `usk rm {name}` and add it again"
         )));
     }
+    // A new value under an old name and its handles is the owner's to give.
+    // Asked before the value is read, so piped input is always the password
+    // line first and then the value, whether or not the vault was locked.
+    c.ensure_owner().map_err(|e| {
+        if e.kind == "wrong_password" && !uio::is_tty() {
+            CliError::with_code(
+                e.code,
+                e.kind,
+                format!(
+                    "{}; the first line of piped input is the vault password, the rest is the new value. Nothing changed",
+                    e.message
+                ),
+            )
+        } else {
+            e
+        }
+    })?;
     let value = if stdin {
         uio::read_secret_rest()?
     } else {
@@ -2236,8 +2376,10 @@ fn secret_set(
             "nothing to change; pass --allow-injection, --no-scrub, --notes, --tag, --upstream, --scope or --username",
         ));
     }
-    // Where a key may go and how it may leave the vault are the owner's to change.
+    // Where a key may go, how it may leave the vault and the half of a
+    // two-part key that is sent with it are the owner's to change.
     if [
+        "username",
         "provider",
         "allow_injection",
         "no_scrub",

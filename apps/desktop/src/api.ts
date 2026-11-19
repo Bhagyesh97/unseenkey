@@ -16,6 +16,14 @@ export interface Status {
     secrets: number | null;
     idle_lock_minutes: number;
     care?: "relaxed" | "balanced" | "strict";
+    /** Lock when the computer sleeps. Missing from a service older than 0.1.10. */
+    lock_on_sleep?: boolean;
+    /** Lock when the screen is locked. */
+    lock_on_session_lock?: boolean;
+    /** Whether AI tools may add keys to the vault. */
+    mcp_allow_store?: boolean;
+    /** Activity events that could not be written since the service started. */
+    audit_lost?: number;
   };
   app_version: string;
 }
@@ -214,9 +222,9 @@ export const api = {
   attachSecret: (id: string, secret: string) => api.call<Project>("POST", `/v1/projects/${id}/secrets`, { secret }),
   detachSecret: (id: string, secretId: string) => api.call<Project>("DELETE", `/v1/projects/${id}/secrets/${secretId}`),
   deviceStatus: () => wrap(invoke<DeviceUnlock>("device_unlock_status")),
-  deviceEnroll: () => wrap(invoke<string>("device_unlock_enroll")),
+  deviceEnroll: () => withOwner(() => wrap(invoke<string>("device_unlock_enroll"))),
   deviceUnlock: () => wrap(invoke<void>("device_unlock")),
-  deviceRemove: () => wrap(invoke<void>("device_unlock_remove")),
+  deviceRemove: () => withOwner(() => wrap(invoke<void>("device_unlock_remove"))),
 };
 
 export type DaemonEvent =

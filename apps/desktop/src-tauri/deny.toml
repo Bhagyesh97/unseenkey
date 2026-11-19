@@ -1,0 +1,59 @@
+# cargo-deny policy for the desktop app, which has its own lockfile (Tauri's
+# dependency tree). The same rules as the workspace's deny.toml at the
+# repository root; each difference is marked "Desktop:" with its reason.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+# Desktop: a crate that is only unmaintained fails the check when we depend on
+# it ourselves, not when it sits somewhere under Tauri (its Linux D-Bus and
+# GTK crates), where the only fix is Tauri's. Vulnerabilities and unsound
+# crates fail anywhere in the tree.
+unmaintained = "workspace"
+ignore = []
+
+[licenses]
+version = 2
+allow = [
+  "Apache-2.0",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "Zlib",
+  "CC0-1.0",
+  # File-level copyleft only. Does not affect our licence.
+  "MPL-2.0",
+  # Permissive data licence for the Mozilla root-certificate store.
+  "CDLA-Permissive-2.0",
+  # Desktop: Apache-2.0 with LLVM's exception, which only adds permissions.
+  # `target-lexicon`, used by GTK's build scripts on Linux.
+  "Apache-2.0 WITH LLVM-exception",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Desktop: the app depends on the workspace's crates by path, with no version;
+# that is not a wildcard anyone else can fill. Allowed for crates that are
+# never published (`publish = false` in Cargo.toml).
+allow-wildcard-paths = true
+# Our own crypto is RustCrypto only. `ring` is allowed solely as the rustls TLS
+# provider; OpenSSL is never allowed.
+deny = [
+  { name = "openssl" },
+  { name = "openssl-sys" },
+  { name = "native-tls" },
+  { name = "rustc-serialize" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

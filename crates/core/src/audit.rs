@@ -120,8 +120,15 @@ pub mod kinds {
     pub const CANARY_TRIPPED: &str = "canary_tripped";
     /// The owner put a handle back to normal after an incident.
     pub const HANDLE_RESUMED: &str = "handle_resumed";
-    /// An owner setting changed (idle lock).
+    /// The owner changed a setting; the body holds what changed.
     pub const SETTINGS_CHANGED: &str = "settings_changed";
+    /// A vault without stored settings took over the ones the daemon was
+    /// started with; the body holds them. Once per vault.
+    pub const SETTINGS_ADOPTED: &str = "settings_adopted";
+    /// The stored settings were gone or unreadable, or the log could not say
+    /// whether the vault ever had any (`reason`). The cautious values in the
+    /// body were stored in their place.
+    pub const SETTINGS_TAMPERED: &str = "settings_tampered";
     /// A stored key was tested with one read-only request to its provider.
     pub const KEY_TESTED: &str = "key_tested";
     /// A project was created.
@@ -146,6 +153,10 @@ pub mod kinds {
     pub const USE_UNFINISHED: &str = "use_unfinished";
     /// The vault password was changed.
     pub const PASSWORD_CHANGED: &str = "password_changed";
+    /// The log could not be written for a while: `lost` events from just
+    /// before this one are missing (refusals, changes, or a request that went
+    /// out). It is the first thing written when the log works again.
+    pub const AUDIT_GAP: &str = "audit_gap";
 }
 
 /// Genesis `prev_hash` for a vault.

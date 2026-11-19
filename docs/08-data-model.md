@@ -49,6 +49,14 @@ Encrypted payloads (as JSON inside ciphertext):
 
 Splitting value and metadata lets the UI list secrets after unlock without decrypting values, and lets scrubber-automaton rebuilds decrypt values in one pass.
 
+**setting** (one record per vault, id derived from the vault id)
+```json
+{ "care": "balanced", "idle_lock_minutes": 15, "lock_on_sleep": true,
+  "lock_on_session_lock": true, "mcp_allow_store": false }
+```
+
+The owner's settings are a record, not a file, so changing them needs the vault key. A vault without the record takes the values the daemon was started with at its first unlock and says so in the log (`settings_adopted`); the log is how a removed record is told from a first time. A record that is missing after that, or unreadable, or missing while the log fails its check, is replaced by the cautious values with a `settings_tampered` event (`reason`: `record_missing`, `record_unreadable`, `log_damaged`).
+
 **policy** — the YAML document from [07](07-broker-and-policy.md) as JSON, plus `policy_id`, `name`.
 
 **handle**
@@ -89,7 +97,7 @@ Folders are stored normalised: forward slashes, no trailing slash, lower case fo
 |---|---|---|
 | seq | int PK | |
 | ts | ts | cleartext (needed for range queries) |
-| kind | text | cleartext: `use`, `deny`, `egress_blocked`, `approval_requested`, `approval_decided`, `reveal`, `inject`, `unlock`, `lock`, `secret_created`, `secret_updated`, `secret_deleted`, `handle_created`, `handle_revoked`, `handle_resumed`, `policy_changed`, `anomaly`, `canary_tripped`, `audit_tampered`, `grant_*`, `sync_*` |
+| kind | text | cleartext: `use`, `deny`, `egress_blocked`, `approval_requested`, `approval_decided`, `reveal`, `inject`, `unlock`, `lock`, `secret_created`, `secret_updated`, `secret_deleted`, `handle_created`, `handle_revoked`, `handle_resumed`, `policy_changed`, `settings_changed`, `settings_adopted`, `settings_tampered`, `anomaly`, `canary_tripped`, `audit_tampered`, `audit_gap`, `grant_*`, `sync_*` |
 | prev_hash | blob(32) | cleartext chain |
 | this_hash | blob(32) | BLAKE3 of canonical event |
 | nonce, ciphertext | blob | encrypted event body |

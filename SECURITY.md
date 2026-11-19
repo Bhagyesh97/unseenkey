@@ -91,6 +91,14 @@ Low severity, known and not yet fixed. We add to this list as we find things.
 
 - **Older vault copies.** Swapping in a complete older copy of the vault file is
   not detected. That needs state stored outside the file.
+- **Stored settings can be rolled back by editing the vault file.** The care level
+  and the lock settings live in the vault and change only with the owner's
+  confirmation. A program that edits the vault file directly can cut the audit log
+  back to before `settings_adopted` and remove the stored settings, and the values
+  in `config.toml` are then taken over again; an older copy of the settings put
+  back in place is not noticed either. Closing this needs a signed header on the
+  vault file. Removing or damaging the settings without also cutting the log is
+  caught: the cautious values apply and the log says `settings_tampered`.
 - **A crash leaves no record.** A request that is under way when the service
   crashes, as opposed to a lock, a stop or the caller leaving, has no line in the log.
 - **Token files on Windows with a custom vault folder.** Outside your user profile,
@@ -113,6 +121,7 @@ Details are in [CHANGELOG.md](CHANGELOG.md).
 
 | Version | Fixed |
 |---|---|
+| 0.1.10 | A provider's key could be read back through the generic route; the session token was enough to replace, rename or delete a key; settings could be loosened by editing `config.toml`; limits could be passed by requests arriving together; audit events were lost silently when the log could not be written; one AWS request could crash the service; unlocking hung on a log with a missing row. From a review of the whole project |
 | 0.1.9 | A handle could send the real key to another host; a Supabase or Jira key could go to a stranger's project; a failed key test could show the key; `..` got past policies; some requests went unrecorded; a preset file could send a key to another host during a key test; a host name starting with `127.` could get a key in cleartext; paths could slip past deny rules and approvals; a wildcard host such as `*.co.uk` or `api.example.*` could reach domains anyone can register |
 | 0.1.6 | A program with the session token could take over a connected AI tool's identity |
 | 0.1.5 | The session token was enough to reveal keys and approve requests; compressed replies were not scrubbed. From a full review of the code |

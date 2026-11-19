@@ -8,15 +8,15 @@ All responses are JSON. Errors: `{ "error": "<code>", "message": "…" }`.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/v1/status` | `{locked, vault_id, version, uptime, cloud: {enabled, synced_at}}` |
+| GET | `/v1/status` | `{locked, vault_id, version, uptime_s, secrets, idle_lock_minutes, care, lock_on_sleep, lock_on_session_lock, mcp_allow_store, audit_lost}`. The five settings are what is in force: before the first unlock after a start, what the daemon was started with; from the unlock on, the vault's own (see `PATCH /v1/settings`). `audit_lost` counts the audit events that could not be written since the daemon started (0 when healthy); the log records the gap itself as `audit_gap` once it can be written again |
 | POST | `/v1/unlock` | body `{password}` or `{wrap_id, kek}`; returns `{ok, owner_token}`; rate limited (5/min) |
 | POST | `/v1/confirm` | same body as `/v1/unlock`, on an unlocked vault: checks the credential without touching the lock and returns `{ok, owner_token}`; shares the unlock rate limit. The owner token goes in `X-Usk-Owner` on the routes marked **owner** below; it lives in the client's memory and every lock invalidates it |
 | POST | `/v1/lock` | |
 | GET | `/v1/secrets` | metadata list (no values) |
 | POST | `/v1/secrets` | `{name, type, value \| fields, provider?, upstreams?, tags?}` |
 | GET | `/v1/secrets/{id}` | metadata + policy summary + handles |
-| PATCH | `/v1/secrets/{id}` | metadata or new value (replaces the stored version). `upstreams`, `provider`, `allow_injection` and `no_scrub` are **owner** |
-| DELETE | `/v1/secrets/{id}` | erases every version of the value; a tombstone marks the metadata |
+| PATCH | `/v1/secrets/{id}` | metadata or new value (replaces the stored version). `value`, `username`, `name`, `upstreams`, `provider`, `allow_injection` and `no_scrub` are **owner**; `tags` and `notes` need only the session token |
+| DELETE | `/v1/secrets/{id}` | **owner**; erases every version of the value and revokes its handles; a tombstone marks the metadata |
 | POST | `/v1/secrets/{id}/reveal` | **owner**; requires `{confirm:true}`; returns value once; audit `reveal`; optional `reason` |
 | POST | `/v1/secrets/{id}/inject` | **owner**; plaintext for `usk run`, only with `allow_injection`; audit `inject` |
 | POST | `/v1/secrets/import` | multipart or `{format, content}` |
@@ -28,13 +28,13 @@ All responses are JSON. Errors: `{ "error": "<code>", "message": "…" }`.
 | PATCH | `/v1/handles/{id}` | **owner**; `{preset_policy \| policy}` replaces the policy (and forgets remembered rules); `{on_anomaly}` changes the incident response alone |
 | POST | `/v1/handles/{id}/resume` | **owner**; back to normal after an incident: ends a throttle, approval mode or pause, restarts the burst detector |
 | GET | `/v1/projects[?dir=…]` | projects with their folders, secrets, `cap_per_day`, `requests_today`, active `handles`; `dir` returns only the project whose folder most closely contains it |
-| PATCH | `/v1/settings` | **owner**; `{care}` (`relaxed` \| `balanced` \| `strict`): what Unseenkey hands out by itself; re-applied to handles that follow it, returns `handles_updated`. `{idle_lock_minutes}` (0 = never, at most 1440): takes effect at once and is saved to `config.toml`; audited as `settings_changed`. Polling reads (`GET /v1/status`, `/approvals`, `/events`, `/callers`) do not count as activity for the idle lock |
+| PATCH | `/v1/settings` | **owner**; `{care}` (`relaxed` \| `balanced` \| `strict`): what Unseenkey hands out by itself; re-applied to handles that follow it, returns `handles_updated`. `{idle_lock_minutes}` (0 = never, at most 1440), `{lock_on_sleep}`, `{lock_on_session_lock}`, `{mcp_allow_store}` (booleans): any of them in one call. They take effect at once and are stored as a record in the vault (401 `vault_locked` on a locked one); one `settings_changed` event holds the fields given. The reply has all five. `config.toml` is neither written nor, once the vault has this record, read for them: at the first unlock of a vault without settings the daemon stores the ones it started with (`settings_adopted`); if the record is later missing or unreadable, it stores the cautious ones (care `strict`, 15 minutes, both locks on, `mcp_allow_store` off) and writes `settings_tampered` with a `reason`. `POST /v1/unlock` answers `settings: stored | adopted | reset | unsettled` accordingly. Polling reads (`GET /v1/status`, `/approvals`, `/events`, `/callers`) do not count as activity for the idle lock |
 | POST | `/v1/detect` | `{value?, name?}` → `{recognised: {provider, display, how: shape\|name, note, testable} \| null}`; stores and sends nothing |
 | POST | `/v1/secrets/{ref}/test` | one read-only request from the provider preset's `[verify]`, on a host the secret is locked to → `{tested, ok, status, provider, message}`; audited as `key_tested` |
 | POST | `/v1/projects` | `{name?, paths?, secrets?, cap_per_day?, notes?}`; the name defaults to the first folder's (`shop`, `shop 2`, …) |
 | GET/PATCH/DELETE | `/v1/projects/{id\|name}` | PATCH `{name?, paths?, cap_per_day?, notes?}` (`cap_per_day: null` removes the limit); DELETE keeps the secrets and handles |
 | POST | `/v1/projects/{ref}/secrets` | `{secret}` adds a secret; `DELETE /v1/projects/{ref}/secrets/{secret}` takes it out (it stays in the vault) |
-| GET/POST/DELETE | `/v1/unlock-methods`, `/v1/unlock-methods/{id}` | device unlock methods (Windows Hello); POST (enrolling) is **owner**; `POST /v1/unlock` and `/v1/confirm` also take `{wrap_id, kek}` |
+| GET/POST/DELETE | `/v1/unlock-methods`, `/v1/unlock-methods/{id}` | device unlock methods (Windows Hello); POST (enrolling) and DELETE are **owner**, and both need an unlocked vault; `POST /v1/unlock` and `/v1/confirm` also take `{wrap_id, kek}` |
 | GET | `/v1/callers` / POST / DELETE | manage MCP clients. POST `{name, replace?}` needs an unlocked vault and returns the client's token once; a new name needs only the session token, an existing one answers 409 `caller_exists` unless `replace` is set and the **owner** token is sent (the new token keeps everything approved for that name). A name the owner removed answers 409 `caller_removed` on the same terms, so a tool that registers itself cannot undo a disconnect. Audited as `caller_registered`, `caller_replaced`, `caller_removed`; each emits a `caller_changed` event |
 | GET | `/v1/callers-removed` | names the owner disconnected |
 | GET | `/v1/audit?since=&kind=&limit=&latest=` | decrypted events for the owner; `latest=true` gives the newest |
@@ -83,7 +83,7 @@ usk add --from-env .env          import & optionally replace with handles
 usk ls [--provider stripe] [--tag x]
 usk show <name>                  metadata only
 usk reveal <name> [--reason "…"] value, once, audited, requires confirmation and the password (owner)
-usk rm <name>                    also revokes every active handle of the secret
+usk rm <name>                    also revokes every active handle of the secret; asks for the vault password
 usk rotate <name>                (Phase 4) run provider adapter
 
 usk handle create <name> [--policy chat] [--label "cursor"] [--caller mcp:cursor] [--expires 30d]
@@ -105,8 +105,9 @@ usk env <name> [--policy chat] [--shell sh|powershell|cmd|dotenv]   print the va
 usk run --with VAR=name [...] -- <cmd…>   inject secrets into a child's environment (needs --allow-injection); output scrubbed; exit code propagates
 usk secret set <name> [--allow-injection bool] [--no-scrub bool] [--notes …] [--tag …] [--upstream host] [--provider id]   # hosts are normalised (https://host/path → host); a new provider brings its hosts
 usk care [relaxed|balanced|strict]   show or set how careful the access Unseenkey hands out by itself is
+usk settings [--idle-lock <minutes>] [--lock-on-sleep on|off] [--lock-on-screen-lock on|off] [--agents-may-store on|off]   show or change when the vault locks and whether AI tools may add keys; changing asks for the vault password; kept in the vault, not in config.toml
 usk secret test <name>             one read-only request to the key's provider: works / refused / unclear
-usk secret replace <name> [--stdin]   new value under the same name (a rotated key); handles keep working
+usk secret replace <name> [--stdin]   new value under the same name (a rotated key); handles keep working; asks for the vault password (piped input: password line first, then the value)
 usk guard scan [.env]            which lines look like secrets, and which can become handles
 usk guard fix  [.env] [--dry-run] [--project p]  move them into the vault, rewrite the file with handles + base-URL variables
 usk project protect [dir] [--env .env] [--dry-run]   one step: project for the folder, keys out of its .env, handles for the project
@@ -174,7 +175,7 @@ A bridge with no token file registers its client itself with the session token (
 
 **explain_policy** → `{ "text": "You can: … You cannot: … Limits: … Expires: …" }`
 
-**store_secret** (disabled unless `mcp.allow_store = true`)
+**store_secret** (disabled unless the owner turned it on: `usk settings --agents-may-store on`, or Settings in the app)
 ```json
 { "required":["name","value"], "properties": { "name":{}, "value":{}, "provider":{} } }
 → { "ok": true, "name": "…" }

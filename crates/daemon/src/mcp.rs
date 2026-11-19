@@ -161,6 +161,7 @@ fn find_handle(
 /// metadata with it, so callers never look the secret up a second time and
 /// a handle whose secret is gone cannot read as "a secret without a preset".
 fn ensure_handle(
+    s: &AppState,
     v: &mut crate::state::DaemonVault,
     caller: &str,
     secret_name: &str,
@@ -204,7 +205,8 @@ fn ensure_handle(
             ..Default::default()
         },
     )?;
-    let _ = v.audit(
+    s.audit_note(
+        v,
         kinds::HANDLE_CREATED,
         json!({ "id": record.handle_id.to_hex(), "label": record.label, "secret": meta.name, "caller": caller, "auto": true, "project": project.map(|p| p.name.clone()) }),
     );
@@ -361,7 +363,7 @@ async fn call_api(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args: &Val
             );
         }
         let project = scope_of(&v, dir);
-        match ensure_handle(&mut v, caller, name, project.as_ref(), s.care()) {
+        match ensure_handle(s, &mut v, caller, name, project.as_ref(), s.care()) {
             Ok((h, meta)) => (h, meta.provider),
             Err(e) if e.code == "not_found" => return unknown_secret(name),
             Err(e) => return tool_text(e.message, true),
@@ -502,7 +504,7 @@ async fn request_access(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args
             );
         }
         let project = scope_of(&v, dir);
-        match ensure_handle(&mut v, caller, name, project.as_ref(), s.care()) {
+        match ensure_handle(s, &mut v, caller, name, project.as_ref(), s.care()) {
             Ok((h, meta)) => {
                 let t = h.policy.approval.timeout_seconds;
                 (h, meta.name, t)
@@ -590,7 +592,7 @@ async fn request_access(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args
     let approval_id = pending.id;
     {
         let mut v = s.vault.lock().await;
-        let _ = v.audit(kinds::ACCESS_REQUESTED, json!({
+        s.audit_note(&mut v, kinds::ACCESS_REQUESTED, json!({
             "approval": approval_id.to_hex(), "handle": handle.handle_id.to_hex(), "label": handle.label,
             "secret": secret, "caller": caller, "scope": pending.scope, "reason": reason,
         }));
@@ -621,7 +623,7 @@ async fn request_access(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args
             if let Some(h) = &new_host {
                 match v.update_meta(&handle.secret_id, |m| m.upstreams.push(h.clone())) {
                     Ok(()) => {
-                        let _ = v.audit(kinds::SECRET_UPDATED, json!({
+                        s.audit_note(&mut v, kinds::SECRET_UPDATED, json!({
                             "id": handle.secret_id.to_hex(), "value_changed": false,
                             "upstream_added": h, "approval": approval_id.to_hex(), "caller": caller,
                         }));
@@ -636,7 +638,7 @@ async fn request_access(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args
     };
     {
         let mut v = s.vault.lock().await;
-        let _ = v.audit(kinds::APPROVAL_DECIDED, json!({
+        s.audit_note(&mut v, kinds::APPROVAL_DECIDED, json!({
             "approval": approval_id.to_hex(), "handle": handle.handle_id.to_hex(), "label": handle.label,
             "secret": secret, "caller": caller, "allowed": allowed, "status": status,
         }));
@@ -658,7 +660,7 @@ async fn request_access(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args
 }
 
 async fn store_secret(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args: &Value) -> Value {
-    if !s.mcp_allow_store {
+    if !s.mcp_allow_store() {
         return tool_text(
             "store_secret is disabled; ask the user to run `usk add <name>`",
             true,
@@ -700,7 +702,8 @@ async fn store_secret(s: &Arc<AppState>, caller: &str, dir: Option<&str>, args: 
             if let Some(p) = &project {
                 let _ = v.attach_secret(&p.project_id, &id);
             }
-            let _ = v.audit(
+            s.audit_note(
+                &mut v,
                 kinds::SECRET_CREATED,
                 json!({ "id": id.to_hex(), "name": name, "provider": provider, "caller": caller, "project": project.map(|p| p.name) }),
             );
@@ -754,7 +757,7 @@ pub async fn handle_message(
         // Notification: nothing to answer.
         return None;
     };
-    if let Some(result) = static_result(method, s.mcp_allow_store) {
+    if let Some(result) = static_result(method, s.mcp_allow_store()) {
         return Some(rpc_result(id, result));
     }
     let result = match method {

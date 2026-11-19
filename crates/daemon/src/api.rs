@@ -22,7 +22,10 @@ use unseenkey_core::policy::{explain, Policy};
 use unseenkey_core::presets;
 use unseenkey_core::providers;
 use unseenkey_core::vault::HandleOptions;
-use unseenkey_core::vault::{NewSecret, SecretKind, SecretMeta, VaultError};
+use unseenkey_core::vault::{
+    NewSecret, OwnerSettings, SecretKind, SecretMeta, SettingsOrigin, VaultError,
+    MAX_IDLE_LOCK_MINUTES,
+};
 use zeroize::Zeroizing;
 
 /// JSON error body: `{ "error": code, "message": text }`.
@@ -44,6 +47,12 @@ impl ApiError {
             code,
             message: message.into(),
         }
+    }
+
+    /// 500 `audit_failure`: the audit log could not be written, and what was
+    /// asked for must not happen without a record.
+    pub fn audit_failure(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, "audit_failure", message)
     }
 }
 
@@ -130,19 +139,33 @@ pub struct Status {
     pub idle_lock_minutes: u64,
     /// Care level: `relaxed`, `balanced` or `strict`.
     pub care: &'static str,
+    /// Lock when the machine goes to sleep.
+    pub lock_on_sleep: bool,
+    /// Lock when the screen is locked.
+    pub lock_on_session_lock: bool,
+    /// Whether AI tools may add keys (MCP `store_secret`).
+    pub mcp_allow_store: bool,
+    /// Audit events that could not be written since the daemon started
+    /// (disk full, file locked or damaged). 0 is the healthy value.
+    pub audit_lost: u64,
 }
 
 /// `GET /v1/status`
 pub async fn status(State(s): State<Arc<AppState>>) -> ApiResult<Status> {
     let v = s.vault.lock().await;
+    let settings = s.settings();
     Ok(Json(Status {
         locked: v.is_locked(),
         vault_id: v.vault_id().to_hex(),
         version: env!("CARGO_PKG_VERSION"),
         uptime_s: s.started.elapsed().as_secs(),
         secrets: if v.is_locked() { None } else { Some(v.len()) },
-        idle_lock_minutes: s.idle_lock().as_secs() / 60,
-        care: s.care().as_str(),
+        idle_lock_minutes: settings.idle_lock_minutes,
+        care: settings.care.as_str(),
+        lock_on_sleep: settings.lock_on_sleep,
+        lock_on_session_lock: settings.lock_on_session_lock,
+        mcp_allow_store: settings.mcp_allow_store,
+        audit_lost: s.audit_lost(),
     }))
 }
 
@@ -154,6 +177,12 @@ pub struct PatchSettings {
     /// `relaxed`, `balanced` or `strict`; applied to every active handle whose
     /// policy Unseenkey handed out and nobody edited.
     pub care: Option<String>,
+    /// Lock when the machine goes to sleep.
+    pub lock_on_sleep: Option<bool>,
+    /// Lock when the screen is locked.
+    pub lock_on_session_lock: Option<bool>,
+    /// Let AI tools add keys they come across (MCP `store_secret`).
+    pub mcp_allow_store: Option<bool>,
 }
 
 /// Re-apply the care level to the handles that follow it. Handles made by AI
@@ -196,86 +225,131 @@ fn apply_care(v: &mut crate::state::DaemonVault, care: presets::Care) -> Result<
     Ok(targets.len())
 }
 
-/// `PATCH /v1/settings`: change the idle lock now and keep it in `config.toml`.
-/// Owner only: a longer idle lock or a looser care level widens what every
-/// tool may do.
+/// `PATCH /v1/settings`: change the owner's settings. They are written to
+/// the vault's own record and take effect at once. Owner only: a longer idle
+/// lock, a looser care level or a switch turned off widens what every tool
+/// may do. `config.toml` is not written and, once the vault has this record,
+/// no longer read for any of them.
 pub async fn patch_settings(
     State(s): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(p): Json<PatchSettings>,
 ) -> ApiResult<serde_json::Value> {
     require_owner(&s, &headers)?;
-    if let Some(m) = p.idle_lock_minutes {
-        if m > 24 * 60 {
-            return Err(ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "invalid",
-                "the idle lock is at most 1440 minutes (a day); 0 turns it off",
-            ));
-        }
-        crate::config::set_daemon_value(
-            &s.config_path,
-            "idle_lock_minutes",
-            toml::Value::Integer(m as i64),
-        )
-        .map_err(|e| {
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "config_error",
-                e.to_string(),
-            )
-        })?;
-        s.idle_lock_secs
-            .store(m * 60, std::sync::atomic::Ordering::Relaxed);
-        s.touch().await;
-        let mut v = s.vault.lock().await;
-        let _ = v.audit(
-            kinds::SETTINGS_CHANGED,
-            serde_json::json!({ "idle_lock_minutes": m }),
-        );
-        tracing::info!(minutes = m, "idle lock changed");
+    if p.idle_lock_minutes
+        .is_some_and(|m| m > MAX_IDLE_LOCK_MINUTES)
+    {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid",
+            "the idle lock is at most 1440 minutes (a day); 0 turns it off",
+        ));
     }
-    let mut applied = None;
-    if let Some(c) = p.care.as_deref() {
-        let care = presets::Care::parse(c).ok_or_else(|| {
+    let care = match p.care.as_deref() {
+        None => None,
+        Some(c) => Some(presets::Care::parse(c).ok_or_else(|| {
             ApiError::new(
                 StatusCode::BAD_REQUEST,
                 "invalid",
                 "care is relaxed, balanced or strict",
             )
-        })?;
-        crate::config::set_daemon_value(
-            &s.config_path,
-            "care",
-            toml::Value::String(care.as_str().into()),
-        )
-        .map_err(|e| {
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "config_error",
-                e.to_string(),
-            )
-        })?;
-        s.set_care(care);
-        let mut v = s.vault.lock().await;
-        let n = if v.is_locked() {
-            0
-        } else {
-            apply_care(&mut v, care)?
-        };
-        let _ = v.audit(
+        })?),
+    };
+    let mut v = s.vault.lock().await;
+    if v.is_locked() {
+        return Err(VaultError::Locked.into());
+    }
+    // Since the unlock, what is in force is what the vault holds.
+    let mut settings = s.settings();
+    let mut changed = serde_json::Map::new();
+    if let Some(m) = p.idle_lock_minutes {
+        settings.idle_lock_minutes = m;
+        changed.insert("idle_lock_minutes".into(), m.into());
+    }
+    if let Some(c) = care {
+        settings.care = c;
+        changed.insert("care".into(), c.as_str().into());
+    }
+    if let Some(on) = p.lock_on_sleep {
+        settings.lock_on_sleep = on;
+        changed.insert("lock_on_sleep".into(), on.into());
+    }
+    if let Some(on) = p.lock_on_session_lock {
+        settings.lock_on_session_lock = on;
+        changed.insert("lock_on_session_lock".into(), on.into());
+    }
+    if let Some(on) = p.mcp_allow_store {
+        settings.mcp_allow_store = on;
+        changed.insert("mcp_allow_store".into(), on.into());
+    }
+    let mut handles_updated = None;
+    if !changed.is_empty() {
+        // The record first: a setting that could not be kept is not applied.
+        v.set_owner_settings(&settings)?;
+        s.apply_settings(&settings);
+        if let Some(c) = care {
+            let n = apply_care(&mut v, c)?;
+            changed.insert("handles_updated".into(), n.into());
+            handles_updated = Some(n);
+        }
+        tracing::info!(changed = %serde_json::Value::Object(changed.clone()), "settings changed");
+        s.audit_note(
+            &mut v,
             kinds::SETTINGS_CHANGED,
-            serde_json::json!({ "care": care.as_str(), "handles_updated": n }),
+            serde_json::Value::Object(changed),
         );
-        tracing::info!(care = care.as_str(), handles = n, "care level changed");
-        applied = Some(n);
+    }
+    drop(v);
+    if p.idle_lock_minutes.is_some() {
+        s.touch().await;
     }
     Ok(Json(serde_json::json!({
         "ok": true,
-        "idle_lock_minutes": s.idle_lock().as_secs() / 60,
-        "care": s.care().as_str(),
-        "handles_updated": applied,
+        "idle_lock_minutes": settings.idle_lock_minutes,
+        "care": settings.care.as_str(),
+        "lock_on_sleep": settings.lock_on_sleep,
+        "lock_on_session_lock": settings.lock_on_session_lock,
+        "mcp_allow_store": settings.mcp_allow_store,
+        "handles_updated": handles_updated,
     })))
+}
+
+/// After an unlock: put the vault's own settings in force, whatever the
+/// daemon was started with (see [`unseenkey_core::vault::Vault::settle_owner_settings`]).
+fn settle_settings(s: &Arc<AppState>, v: &mut crate::state::DaemonVault) -> &'static str {
+    match v.settle_owner_settings(&s.seed_settings) {
+        Ok((settings, origin)) => {
+            s.apply_settings(&settings);
+            match origin {
+                SettingsOrigin::Stored => "stored",
+                SettingsOrigin::Adopted => {
+                    tracing::info!(
+                        ?settings,
+                        "this vault had no settings of its own; it now keeps the ones in force"
+                    );
+                    "adopted"
+                }
+                SettingsOrigin::Reset(reason) => {
+                    tracing::error!(
+                        reason,
+                        ?settings,
+                        "the vault's settings were missing or unreadable; the cautious values are in force (see the settings_tampered event)"
+                    );
+                    if let Err(e) = apply_care(v, settings.care) {
+                        tracing::warn!(error = %e.message, "could not re-apply the care level");
+                    }
+                    "reset"
+                }
+            }
+        }
+        Err(e) => {
+            // Nothing was read and nothing could be written (the log, most
+            // likely): not a reason to fall back on a file anyone can edit.
+            tracing::error!(error = %e, "the vault's settings could not be settled; the cautious values are in force until the next unlock");
+            s.apply_settings(&OwnerSettings::cautious());
+            "unsettled"
+        }
+    }
 }
 
 /// `POST /v1/unlock` body: either the password, or a device unlock method's
@@ -380,7 +454,12 @@ pub async fn unlock(
             "the audit log was cut short or rewritten while the vault was locked; see the audit_tampered event"
         );
     }
-    let _ = v.audit(kinds::UNLOCK, serde_json::json!({ "method": method }));
+    s.audit_note(
+        &mut v,
+        kinds::UNLOCK,
+        serde_json::json!({ "method": method }),
+    );
+    let settings = settle_settings(&s, &mut v);
     s.rebuild_scrubber(&v);
     // Per-minute and per-day windows live in memory; refill them from the log
     // so a restart does not hand a capped handle a fresh allowance.
@@ -388,7 +467,7 @@ pub async fn unlock(
     let recent = v.recent_uses(now_ms - 86_400_000);
     drop(v);
     match recent {
-        Ok(uses) => s.seed_usage(&uses, now_ms).await,
+        Ok(uses) => s.seed_usage(&uses, now_ms),
         Err(e) => tracing::warn!(error = %e, "could not rebuild usage windows from the audit log"),
     }
     s.emit(Event::Unlocked);
@@ -396,9 +475,13 @@ pub async fn unlock(
     // Unlocking proved the owner is here: the same call hands out the owner
     // token, so the client that unlocked needs no second prompt.
     let owner_token = s.issue_owner_token();
-    Ok(Json(
-        serde_json::json!({ "ok": true, "owner_token": owner_token }),
-    ))
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "owner_token": owner_token,
+        // `stored`, `adopted`, `reset` or `unsettled`: where the settings now
+        // in force came from.
+        "settings": settings,
+    })))
 }
 
 /// `POST /v1/confirm`: prove the owner is present without touching the lock
@@ -565,7 +648,8 @@ pub async fn unlock_methods_add(
     let kek = SecretBytes::from_slice(kek.as_slice());
     let mut v = s.vault.lock().await;
     let id = v.add_key_wrap(kind, label, *salt, &kek)?;
-    let _ = v.audit(
+    s.audit_note(
+        &mut v,
         kinds::UNLOCK_METHOD_ADDED,
         serde_json::json!({ "id": id.to_hex(), "kind": kind, "label": label }),
     );
@@ -573,11 +657,18 @@ pub async fn unlock_methods_add(
     Ok(Json(serde_json::json!({ "id": id.to_hex() })))
 }
 
-/// `DELETE /v1/unlock-methods/{id}` — remove a device unlock method (vault must be unlocked).
+/// `DELETE /v1/unlock-methods/{id}` — remove a device unlock method (vault must
+/// be unlocked). Owner only, like enrolling one: how the vault opens is the
+/// owner's to change.
 pub async fn unlock_methods_remove(
     State(s): State<Arc<AppState>>,
     Path(id): Path<String>,
+    headers: HeaderMap,
 ) -> ApiResult<serde_json::Value> {
+    if s.vault.lock().await.is_locked() {
+        return Err(VaultError::Locked.into());
+    }
+    require_owner(&s, &headers)?;
     let id = Id::from_hex(id.trim()).ok_or_else(|| {
         ApiError::new(
             StatusCode::NOT_FOUND,
@@ -587,7 +678,8 @@ pub async fn unlock_methods_remove(
     })?;
     let mut v = s.vault.lock().await;
     v.remove_key_wrap(&id)?;
-    let _ = v.audit(
+    s.audit_note(
+        &mut v,
         kinds::UNLOCK_METHOD_REMOVED,
         serde_json::json!({ "id": id.to_hex() }),
     );
@@ -902,7 +994,8 @@ pub async fn create_secret(
     let id = {
         let mut v = s.vault.lock().await;
         let id = v.add(new)?;
-        let _ = v.audit(
+        s.audit_note(
+            &mut v,
             kinds::SECRET_CREATED,
             serde_json::json!({ "id": id.to_hex(), "name": req.name.trim(), "provider": provider }),
         );
@@ -1155,8 +1248,13 @@ pub struct PatchSecret {
 /// `PATCH /v1/secrets/{ref}`. Changing where a secret may go (`upstreams`,
 /// `provider`), how it may leave the vault (`allow_injection`, `no_scrub`) or
 /// what its access tokens may do (`scope`) widens access and is owner only. So
-/// are its other `fields`: a token URL says where a client secret goes. A rename,
-/// tags, notes or a new value are not.
+/// are its other `fields`: a token URL says where a client secret goes.
+///
+/// What the secret is belongs to the owner too. A new `value` or `username`
+/// from a program that only read `daemon.token` would put somebody else's
+/// account behind the owner's handles, and the owner's data with it. A new
+/// `name` would make an approval prompt name the wrong key. Tags and notes are
+/// left to the session token.
 pub async fn patch_secret(
     State(s): State<Arc<AppState>>,
     Path(r): Path<String>,
@@ -1169,7 +1267,8 @@ pub async fn patch_secret(
         || p.provider.is_some()
         || p.scope.is_some()
         || !p.fields.is_empty();
-    if widens {
+    let replaces = p.value.is_some() || p.username.is_some() || p.name.is_some();
+    if widens || replaces {
         require_owner(&s, &headers)?;
     }
     if let Some(value) = p.value.as_mut() {
@@ -1407,7 +1506,8 @@ pub async fn patch_secret(
             }
         })?;
     }
-    let _ = v.audit(
+    s.audit_note(
+        &mut v,
         kinds::SECRET_UPDATED,
         serde_json::json!({ "id": id.to_hex(), "value_changed": p.value.is_some(), "scope": p.scope, "username_changed": p.username.is_some() }),
     );
@@ -1426,22 +1526,27 @@ pub async fn patch_secret(
     Ok(Json(v.get(&id)?.clone()))
 }
 
-/// `DELETE /v1/secrets/{ref}`
+/// `DELETE /v1/secrets/{ref}`. Owner only: the key is gone for good, and
+/// every handle for it with it.
 pub async fn delete_secret(
     State(s): State<Arc<AppState>>,
     Path(r): Path<String>,
+    headers: HeaderMap,
 ) -> ApiResult<serde_json::Value> {
+    require_owner(&s, &headers)?;
     let mut v = s.vault.lock().await;
     let id = resolve(&v, &r)?;
     s.retire(&v, &id);
     let revoked = v.delete(&id)?;
     for hid in &revoked {
-        let _ = v.audit(
+        s.audit_note(
+            &mut v,
             kinds::HANDLE_REVOKED,
             serde_json::json!({ "id": hid.to_hex(), "reason": "secret_deleted", "secret": id.to_hex() }),
         );
     }
-    let _ = v.audit(
+    s.audit_note(
+        &mut v,
         kinds::SECRET_DELETED,
         serde_json::json!({ "id": id.to_hex(), "handles_revoked": revoked.len() }),
     );
@@ -1503,10 +1608,12 @@ pub async fn reveal_secret(
     let mut v = s.vault.lock().await;
     let id = resolve(&v, &r)?;
     let revealed = v.reveal(&id)?;
-    let _ = v.audit(
+    // In the log before it leaves: no record, no value.
+    s.audit_must(
+        &mut v,
         kinds::REVEAL,
         serde_json::json!({ "id": id.to_hex(), "reason": req.reason.as_deref().unwrap_or("") }),
-    );
+    )?;
     s.emit(Event::Revealed { id: id.to_hex() });
     tracing::info!(secret = %id, reason = req.reason.as_deref().unwrap_or(""), "secret revealed");
     Ok(Json(RevealResponse {
@@ -1578,14 +1685,15 @@ pub async fn inject_secret(
         ));
     }
     let revealed = v.reveal(&id)?;
-    let _ = v.audit(
+    s.audit_must(
+        &mut v,
         kinds::INJECT,
         serde_json::json!({
             "id": id.to_hex(), "name": meta.name,
             "var": req.var.as_deref().unwrap_or(""),
             "command": req.command.as_deref().unwrap_or(""),
         }),
-    );
+    )?;
     tracing::info!(secret = %id, var = req.var.as_deref().unwrap_or(""), "secret injected into a process");
     Ok(Json(RevealResponse {
         value: text_or_hex(&revealed.value),
@@ -1843,7 +1951,8 @@ pub async fn create_handle(
         format.as_ref(),
         opts,
     )?;
-    let _ = v.audit(
+    s.audit_note(
+        &mut v,
         kinds::HANDLE_CREATED,
         serde_json::json!({
             "id": record.handle_id.to_hex(), "label": record.label, "secret": meta.name,
@@ -1948,14 +2057,16 @@ pub async fn patch_handle(
     };
     if let Some(policy) = policy {
         v.set_handle_policy(&id, policy)?;
-        let _ = v.audit(
+        s.audit_note(
+            &mut v,
             kinds::POLICY_CHANGED,
             serde_json::json!({ "id": id.to_hex() }),
         );
     }
     if let Some(r) = p.on_anomaly {
         v.set_handle_response(&id, r)?;
-        let _ = v.audit(
+        s.audit_note(
+            &mut v,
             kinds::POLICY_CHANGED,
             serde_json::json!({ "id": id.to_hex(), "on_anomaly": r.as_str() }),
         );
@@ -1977,7 +2088,8 @@ pub async fn resume_handle(
     let changed = v.resume_handle(&id)?;
     s.reset_denials(&id).await;
     if changed {
-        let _ = v.audit(
+        s.audit_note(
+            &mut v,
             kinds::HANDLE_RESUMED,
             serde_json::json!({ "id": id.to_hex() }),
         );
@@ -2004,7 +2116,8 @@ pub async fn forget_handle_rules(
     let id = resolve_handle(&v, &r)?;
     let removed = v.forget_rules(&id, rule.as_deref())?;
     if removed > 0 {
-        let _ = v.audit(
+        s.audit_note(
+            &mut v,
             kinds::APPROVAL_FORGOTTEN,
             serde_json::json!({ "id": id.to_hex(), "rule": rule, "removed": removed }),
         );
@@ -2020,7 +2133,8 @@ pub async fn revoke_handle(
     let mut v = s.vault.lock().await;
     let id = resolve_handle(&v, &r)?;
     v.revoke_handle(&id)?;
-    let _ = v.audit(
+    s.audit_note(
+        &mut v,
         kinds::HANDLE_REVOKED,
         serde_json::json!({ "id": id.to_hex() }),
     );
@@ -2188,7 +2302,7 @@ pub async fn callers_create(
     } else {
         (kinds::CALLER_REGISTERED, "registered")
     };
-    let _ = v.audit(kind, serde_json::json!({ "name": req.name }));
+    s.audit_note(&mut v, kind, serde_json::json!({ "name": req.name }));
     drop(v);
     s.emit(Event::CallerChanged {
         name: req.name.clone(),
@@ -2238,11 +2352,14 @@ pub async fn callers_remove(
     }
     // Removing only takes access away, so it works while locked too; the
     // audit entry is written when the vault is open to write it.
-    let _ = s
-        .vault
-        .lock()
-        .await
-        .audit(kinds::CALLER_REMOVED, serde_json::json!({ "name": name }));
+    {
+        let mut v = s.vault.lock().await;
+        s.audit_note(
+            &mut v,
+            kinds::CALLER_REMOVED,
+            serde_json::json!({ "name": name }),
+        );
+    }
     s.emit(Event::CallerChanged {
         name,
         change: "removed",

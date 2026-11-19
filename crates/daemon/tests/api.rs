@@ -553,10 +553,11 @@ abc
     r.shutdown().await;
 }
 
-/// The idle lock can be changed while the daemon runs, is kept in
-/// config.toml, and rejects nonsense.
+/// The idle lock can be changed while the daemon runs and rejects nonsense.
+/// It is kept in the vault, not in a file next to it (`tests/settings.rs`
+/// covers what survives a restart).
 #[tokio::test(flavor = "multi_thread")]
-async fn the_idle_lock_can_be_changed_and_is_saved() {
+async fn the_idle_lock_can_be_changed_and_rejects_nonsense() {
     let dir = tempfile::tempdir().unwrap();
     let r = start(dir.path(), false).await;
     let c = C::new(&r);
@@ -564,25 +565,24 @@ async fn the_idle_lock_can_be_changed_and_is_saved() {
     let (code, b) = c.patch("/v1/settings", json!({ "idle_lock_minutes": 5 }));
     assert_eq!(code, 200, "{b}");
     assert_eq!(c.get("/v1/status").1["idle_lock_minutes"], 5);
-    let saved = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
-    assert!(saved.contains("idle_lock_minutes = 5"), "{saved}");
-    // Other keys in the file survive.
-    std::fs::write(
-        dir.path().join("config.toml"),
-        format!("{saved}lock_on_sleep = false\n"),
-    )
-    .unwrap();
+    assert!(
+        !dir.path().join("config.toml").exists(),
+        "a changed setting writes no file next to the vault"
+    );
     assert_eq!(
         c.patch("/v1/settings", json!({ "idle_lock_minutes": 0 })).0,
         200
     );
-    let saved = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
-    assert!(
-        saved.contains("idle_lock_minutes = 0") && saved.contains("lock_on_sleep = false"),
-        "{saved}"
-    );
+    assert_eq!(c.get("/v1/status").1["idle_lock_minutes"], 0);
     let (code, e) = c.patch("/v1/settings", json!({ "idle_lock_minutes": 100000 }));
     assert_eq!(code, 400, "{e}");
+    assert_eq!(c.get("/v1/status").1["idle_lock_minutes"], 0);
+    let (code, e) = c.patch("/v1/settings", json!({ "care": "careless" }));
+    assert_eq!(code, 400, "{e}");
+    // Settings live in the vault: a locked one can neither show nor take them.
+    assert_eq!(c.post("/v1/lock", json!({})).0, 200);
+    let (code, e) = c.patch("/v1/settings", json!({ "idle_lock_minutes": 30 }));
+    assert_ne!(code, 200, "{e}");
     r.shutdown().await;
 }
 
@@ -716,6 +716,72 @@ async fn the_session_token_alone_cannot_reveal_approve_or_widen() {
     // Confirming needs an unlocked vault: unlocking is the confirmation then.
     assert_eq!(c.post("/v1/lock", json!({})).0, 200);
     assert_eq!(c.post("/v1/confirm", json!({ "password": PW })).0, 401);
+    r.shutdown().await;
+}
+
+/// Swapping a key for one's own sends the owner's data to another account;
+/// a rename makes an approval prompt name the wrong key; a delete loses the key
+/// and removing a device unlock takes a way in away. None of these is for a
+/// program that merely read `daemon.token`.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_session_token_alone_cannot_replace_rename_or_delete() {
+    use base64::Engine as _;
+    const KEY: &str = "sk_live_51Habcdefghijklmnop";
+    let dir = tempfile::tempdir().unwrap();
+    let r = start(dir.path(), false).await;
+    let c = C::new(&r);
+    assert_eq!(c.post("/v1/unlock", json!({ "password": PW })).0, 200);
+    let (code, _) = c.post("/v1/secrets", json!({ "name": "stripe", "value": KEY }));
+    assert_eq!(code, 201);
+    let (code, m) = c.post(
+        "/v1/unlock-methods",
+        json!({ "kind": "hello", "label": "this pc",
+            "salt": base64::engine::general_purpose::STANDARD.encode([1u8; 32]),
+            "kek": base64::engine::general_purpose::STANDARD.encode([2u8; 32]) }),
+    );
+    assert_eq!(code, 200, "{m}");
+    let method = m["id"].as_str().unwrap().to_string();
+
+    c.forget_owner();
+    for body in [
+        json!({ "value": "sk_live_51Hsomebodyelseskey0" }),
+        json!({ "username": "somebody-else" }),
+        json!({ "name": "stripe-test" }),
+    ] {
+        let (code, b) = c.patch("/v1/secrets/stripe", body.clone());
+        assert_eq!(code, 403, "{body}: {b}");
+        assert_eq!(b["error"], "owner_required", "{body}");
+    }
+    let (code, b) = c.delete("/v1/secrets/stripe");
+    assert_eq!((code, b["error"].as_str()), (403, Some("owner_required")));
+    let (code, b) = c.delete(&format!("/v1/unlock-methods/{method}"));
+    assert_eq!((code, b["error"].as_str()), (403, Some("owner_required")));
+    // Tags and notes change nothing about where a key goes or what it is.
+    let (code, b) = c.patch("/v1/secrets/stripe", json!({ "notes": "billing" }));
+    assert_eq!(code, 200, "{b}");
+
+    // Nothing above took effect.
+    let m = c.get("/v1/secrets/stripe").1;
+    assert_eq!(m["name"], "stripe");
+    assert_eq!(m["value_version"], 1);
+    assert_eq!(c.get("/v1/unlock-methods").1.as_array().unwrap().len(), 1);
+    assert_eq!(c.post("/v1/confirm", json!({ "password": PW })).0, 200);
+    assert_eq!(
+        c.post("/v1/secrets/stripe/reveal", json!({ "confirm": true }))
+            .1["value"],
+        KEY
+    );
+
+    // The owner can do all of it.
+    let (code, b) = c.patch(
+        "/v1/secrets/stripe",
+        json!({ "value": "sk_live_51Hrotatedkey0000000", "name": "stripe-live" }),
+    );
+    assert_eq!(code, 200, "{b}");
+    assert_eq!(b["value_version"], 2);
+    assert_eq!(c.delete(&format!("/v1/unlock-methods/{method}")).0, 200);
+    assert_eq!(c.delete("/v1/secrets/stripe-live").0, 200);
+    assert_eq!(c.get("/v1/secrets").1.as_array().unwrap().len(), 0);
     r.shutdown().await;
 }
 

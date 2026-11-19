@@ -1,4 +1,11 @@
 //! `config.toml` next to the vault file. Contains no secret material.
+//!
+//! Any program running as the user can edit this file, so it decides nothing
+//! about an unlocked vault. `listen` is read from it at every start. The care
+//! level, the lock settings and `[mcp] allow_store` are starting values only:
+//! they hold until the first unlock, and a vault that has no settings of its
+//! own takes them over once. After that the vault's record applies (see
+//! `unseenkey_core::vault::OwnerSettings`), and the daemon never writes here.
 
 use serde::Deserialize;
 use std::path::Path;
@@ -59,27 +66,6 @@ pub enum ConfigError {
     /// The file is not valid TOML for our schema.
     #[error("invalid config {0}: {1}")]
     Parse(String, String),
-}
-
-/// Set one `[daemon]` key in `config.toml`, keeping everything else in the file.
-pub fn set_daemon_value(path: &Path, key: &str, value: toml::Value) -> Result<(), ConfigError> {
-    let shown = path.display().to_string();
-    let mut doc: toml::Table = match std::fs::read_to_string(path) {
-        Ok(t) => {
-            toml::from_str(&t).map_err(|e| ConfigError::Parse(shown.clone(), e.to_string()))?
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
-        Err(e) => return Err(ConfigError::Io(shown, e)),
-    };
-    let daemon = doc
-        .entry("daemon")
-        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
-    if let toml::Value::Table(t) = daemon {
-        t.insert(key.to_string(), value);
-    }
-    let text = toml::to_string_pretty(&doc)
-        .map_err(|e| ConfigError::Parse(shown.clone(), e.to_string()))?;
-    std::fs::write(path, text).map_err(|e| ConfigError::Io(shown, e))
 }
 
 /// Load `path` if it exists; defaults otherwise.

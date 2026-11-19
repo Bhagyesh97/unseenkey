@@ -1,6 +1,27 @@
 # 12 — Testing and Security Assurance
 
-Security tests are acceptance criteria, not a later phase. Every invariant in [04](04-threat-model.md) has a named test here.
+Security tests are acceptance criteria, not a later phase. The tables below are the design: the layers and test names the project is aiming at. What exists today is in "As built" next; where the two differ, "As built" is the truth.
+
+## As built (0.1.10)
+
+**Runs on every push and pull request** (`ci.yml`, `desktop.yml`): `cargo fmt`, clippy with warnings as errors, the whole workspace test suite on Linux, macOS and Windows, the core crate built for wasm32, the Playwright browser-origin suite (`tests/browser/guard.spec.ts`), boto3 through the broker (`aws_interop`), and the plugin manifests. `supply-chain.yml` runs `cargo deny` and `cargo audit` on both lockfiles on every push and once a day. Dependabot opens weekly update pull requests.
+
+**The invariants of [04](04-threat-model.md) and the tests that hold them.** The names in the "Invariant tests" table further down are the design's names; these are the tests in the code.
+
+| Invariant | Tests today |
+|---|---|
+| INV-1 no plaintext at rest or in errors | `no_plaintext_at_rest`, `replaced_and_deleted_values_leave_nothing_behind` (core `vault.rs`); `a_failed_key_test_does_not_say_the_key` (daemon `keytest.rs`); `list_explain_and_call_api_never_expose_values` (`mcp.rs`). There is no test that renders every error variant, and none that forces a panic. |
+| INV-2 plaintext only to the upstream | `policy_and_host_lock_are_enforced`, `a_provider_key_cannot_take_the_generic_route`, `the_handle_never_travels_to_the_provider` (`broker.rs`); `a_key_goes_only_where_it_may`, `a_key_goes_only_to_the_owners_own_host` (`keytest.rs`); `host_locks_and_redirects` (`stress.rs`) |
+| INV-3 session token, and the owner for what matters | `token_required_and_no_cors_headers`, `the_session_token_alone_cannot_reveal_approve_or_widen`, `the_session_token_alone_cannot_replace_rename_or_delete`, `an_existing_ai_tool_cannot_be_taken_over_with_the_session_token` (`api.rs`); `other_fields_of_a_key_need_the_owner` (`keytest.rs`) |
+| INV-4 logged before the reply | `no_value_is_handed_out_when_it_cannot_be_logged`, `the_broker_stops_sending_while_the_log_is_broken` (`audit_failure.rs`); `a_request_cut_off_by_the_lock_is_in_the_log`, `a_caller_who_leaves_is_in_the_log` (`keytest.rs`) |
+| INV-5 default deny | `garbage_text_never_panics_and_never_allows`, `deny_rule_always_wins`, `unknown_methods_never_match` (core `policy_props.rs`, property tests); `unknown_field_is_an_error` (core `policy`) |
+| INV-6 browser origin rejected | `browser_origin_headers_are_rejected_on_every_route`, `host_header_must_match` (`api.rs`); `locked_vault_and_browser_origin_on_proxy_routes` (`broker.rs`); the Playwright suite |
+| INV-7 sync is ciphertext only | Nothing: there is no sync yet |
+| INV-8 revocation on the next request | `unknown_revoked_and_expired_handles` (`broker.rs`); `deleting_a_secret_revokes_its_handles` (core and daemon) |
+| INV-9 an unreadable response is refused | `compressed_responses_are_unpacked_and_scrubbed` (`broker.rs`), which ends on the refused case |
+| INV-10 a write erases what it replaces | `replaced_and_deleted_values_leave_nothing_behind` (core `vault.rs`) |
+
+**In the tables below but not built:** the fuzz targets (the policy parser and matcher have property tests instead), semgrep rules, `cargo vet`, the desktop end-to-end run, `criterion` and k6 (one overhead test exists, `broker_overhead_p99`), SDK clients other than boto3, and everything for the hosted broker and sync. Nothing here runs nightly except the dependency checks.
 
 ## Test layers
 
@@ -61,11 +82,19 @@ Scripted MCP client sessions with adversarial prompts:
 
 ## Supply chain and release assurance
 
-- Reproducible builds: two independent CI runners produce identical hashes for `usk`/`uskd`; mismatch blocks release.
-- cosign signatures and SLSA provenance attestations for all artifacts.
-- SBOM (CycloneDX) published per release.
-- Desktop: notarized (macOS), Authenticode EV (Windows); updater verifies Ed25519 signature on manifests.
-- Dependency policy: `cargo deny` bans wildcard versions, duplicate crypto crates, GPL-incompatible licences in Apache crates; every new dependency needs a one-line justification in the PR.
+What a release has today (0.1.10; the steps are in [13](13-operations.md), the commands for a user in the README under "Verify a download"):
+
+- Every CLI archive and the MCP bundle is signed by the release workflow through Sigstore (cosign, keyless). One `SHA256SUMS` lists every file on the release, installers and `latest.json` included, and is signed the same way; the job that writes it first checks each signed file against its signature.
+- An SBOM (CycloneDX) is published with each release.
+- The desktop updater accepts only bundles with a valid minisign (Ed25519) signature.
+- The release builds restore nothing from a cache, run with a read-only token except in the jobs that publish, use actions pinned to a commit, and refuse a tag that is not on `main`.
+- Dependency policy: `cargo deny` (advisories, licences, sources; wildcard versions banned in the workspace) and `cargo audit` on both lockfiles, on every push and daily.
+
+Not there yet, and not claimed anywhere else:
+
+- Reproducible builds. Nobody compares two independent builds, so a signature says which workflow built a file, not that the file matches the source.
+- SLSA provenance attestations.
+- Code-signed installers: no Authenticode on Windows and no notarization on macOS, so both systems warn on first launch.
 
 ## External assurance timeline
 

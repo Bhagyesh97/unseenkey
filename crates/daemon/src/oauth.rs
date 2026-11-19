@@ -486,7 +486,8 @@ async fn sign_in(
             match vault.update_value(&meta.secret_id, value, fields) {
                 Ok(v) => {
                     version = v;
-                    let _ = vault.audit(
+                    s.audit_note(
+                        &mut vault,
                         kinds::SECRET_UPDATED,
                         serde_json::json!({ "id": meta.secret_id.to_hex(), "value_changed": true, "reason": "oauth_rotation" }),
                     );

@@ -156,12 +156,14 @@ impl C {
         Self::call(req.send_json(body))
     }
     fn delete(&self, path: &str) -> (u16, Value) {
-        Self::call(
-            self.agent
-                .delete(&format!("{}{}", self.base, path))
-                .set("Authorization", &format!("Bearer {}", self.token))
-                .call(),
-        )
+        let mut req = self
+            .agent
+            .delete(&format!("{}{}", self.base, path))
+            .set("Authorization", &format!("Bearer {}", self.token));
+        if let Some(o) = self.owner.lock().unwrap().as_ref() {
+            req = req.set("X-Usk-Owner", o);
+        }
+        Self::call(req.call())
     }
     fn get(&self, path: &str) -> (u16, Value) {
         Self::call(

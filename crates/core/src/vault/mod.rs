@@ -26,12 +26,14 @@ mod ops;
 mod projects;
 pub mod records;
 pub mod recovery;
+mod settings;
 
 pub use crate::storage::KeyWrap;
 pub use ops::{HandleOptions, COUNTER_FLUSH_EVERY, THROTTLE_MS};
 pub use projects::ProjectChanges;
 pub use records::{SecretKind, SecretMeta};
 pub use recovery::RecoveryKit;
+pub use settings::{OwnerSettings, SettingsOrigin, MAX_IDLE_LOCK_MINUTES};
 
 /// Vault-level failures. Never carry secret material.
 #[derive(Debug, thiserror::Error)]
@@ -149,6 +151,10 @@ pub struct Vault<S: Storage, C: Clock> {
     projects: BTreeMap<Id, crate::projects::ProjectRecord>,
     /// What the keyed audit head said at the last unlock, if it was wrong.
     head_problem: Option<crate::audit::HeadStatus>,
+    /// Whether the audit log failed its check at the last unlock: a wrong
+    /// head, a broken chain or a missing row. Such a log cannot vouch for
+    /// what the vault never had.
+    log_broken: bool,
 }
 
 impl<S: Storage, C: Clock> core::fmt::Debug for Vault<S, C> {
@@ -194,6 +200,7 @@ impl<S: Storage, C: Clock> Vault<S, C> {
                 handle_counters_flushed: BTreeMap::new(),
                 projects: BTreeMap::new(),
                 head_problem: None,
+                log_broken: false,
             },
             kit,
         ))
@@ -216,6 +223,7 @@ impl<S: Storage, C: Clock> Vault<S, C> {
             handle_counters_flushed: BTreeMap::new(),
             projects: BTreeMap::new(),
             head_problem: None,
+            log_broken: false,
         })
     }
 
@@ -397,13 +405,16 @@ impl<S: Storage, C: Clock> Vault<S, C> {
         // append (the daemon's own `unlock` event, usually) replaces the head,
         // and with it the evidence that the log was cut while we were locked.
         self.head_problem = None;
-        let status = self.audit_verify()?.head;
+        let report = self.audit_verify()?;
+        let status = report.head;
+        self.log_broken = report.first_broken.is_some() || !report.contiguous;
         if matches!(
             status,
             crate::audit::HeadStatus::Forged
                 | crate::audit::HeadStatus::Removed
                 | crate::audit::HeadStatus::Mismatch { .. }
         ) {
+            self.log_broken = true;
             self.head_problem = Some(status);
             let (head_seq, last_seq) = match status {
                 crate::audit::HeadStatus::Mismatch { head_seq, last_seq } => {

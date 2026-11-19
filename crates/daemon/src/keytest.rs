@@ -143,7 +143,8 @@ async fn test_service_account(s: &Arc<AppState>, meta: &SecretMeta) -> Json<Test
     };
     {
         let mut v = s.vault.lock().await;
-        let _ = v.audit(
+        s.audit_note(
+            &mut v,
             kinds::KEY_TESTED,
             json!({ "id": meta.secret_id.to_hex(), "secret": meta.name, "provider": meta.provider, "ok": ok }),
         );
@@ -366,7 +367,8 @@ pub async fn test_secret(
     let (ok, status, message) = outcome;
     {
         let mut v = s.vault.lock().await;
-        let _ = v.audit(
+        s.audit_note(
+            &mut v,
             kinds::KEY_TESTED,
             json!({ "id": meta.secret_id.to_hex(), "secret": meta.name, "provider": preset.id, "host": host, "status": status, "ok": ok }),
         );

@@ -41,3 +41,5 @@ windows-sys = { version = "0.61", features = [
 [dev-dependencies]
 tempfile = { workspace = true }
 ureq = { workspace = true }
+# Tests reach into the vault file to make the audit log fail.
+rusqlite = { workspace = true }

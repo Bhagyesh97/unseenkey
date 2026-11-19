@@ -1,10 +1,12 @@
 [package]
 name = "unseenkey-desktop"
-version = "0.1.9"
+version = "0.1.10"
 description = "Unseenkey desktop: vault, handles, approvals and audit for people who own the keys."
 edition = "2021"
 license = "Apache-2.0"
 rust-version = "1.85"
+# An application, never a crate on crates.io.
+publish = false
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
