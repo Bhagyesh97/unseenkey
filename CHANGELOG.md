@@ -2,7 +2,7 @@
 
 The top section of this file becomes the release notes when a `v*` tag is pushed.
 
-## 0.1.10 — 2026-11-17
+## 0.1.10 — 2026-11-19
 
 Security fixes, for every earlier version. They come from a review of the whole project; nothing here was reported from outside. Please update. **After updating, run `usk daemon restart`:** the background service keeps running the old code until it restarts.
 
