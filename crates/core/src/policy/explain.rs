@@ -57,7 +57,7 @@ fn thousands(n: u64) -> String {
 fn date_words(ms: i64) -> String {
     match jiff::Timestamp::from_millisecond(ms) {
         Ok(ts) => {
-            let z = ts.to_zoned(jiff::tz::TimeZone::UTC);
+            let z = ts.to_zoned_datetime(jiff::tz::TimeZone::UTC);
             format!("{} {} {} (UTC)", z.day(), month_name(z.month()), z.year())
         }
         Err(_) => "an invalid date".into(),
