@@ -64,7 +64,7 @@ base64 = "0.23"
 percent-encoding = "2"
 
 # time zones for policy schedules (bundled tzdb so behaviour is identical on every OS)
-jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
+jiff = { version = "1.0", default-features = false, features = ["std", "tzdb-bundle-always"] }
 
 # dev
 tempfile = "3"
