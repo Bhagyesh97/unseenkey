@@ -90,6 +90,43 @@ fn hkdf_sha256_rfc5869_case1() {
     assert_eq!(okm.expose(), h(&v.okm_hex).as_slice());
 }
 
+/// RFC 5869 Appendix A, test case 3: zero-length salt and info. Every subkey in
+/// a vault is derived with an empty salt, so this is the path stored data
+/// depends on.
+#[test]
+fn hkdf_sha256_rfc5869_case3_empty_salt() {
+    let okm = kdf::hkdf_sha256(&SecretBytes::new(h(&"0b".repeat(22))), &[], &[], 42).unwrap();
+    assert_eq!(
+        okm.expose(),
+        h("8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8")
+            .as_slice()
+    );
+}
+
+/// The subkeys a vault derives, pinned. The expected values come from an
+/// independent HKDF (Python's `hmac` and `hashlib`) over the key 00 01 .. 1f.
+/// If one of these changes, existing vaults stop opening.
+#[test]
+fn vault_subkeys_are_stable() {
+    let vk = SecretBytes::new((0u8..32).collect());
+    for (info, want) in [
+        (
+            &b"usk/audit-dek/v1"[..],
+            "6acc68d8842d8d17bdd6fa8ab6029d75927ef9d43b73013d5e73bbd3161d50ad",
+        ),
+        (
+            &b"usk/audit-head/v1"[..],
+            "d672e0058924aedf60bbc6e5d7018327745fb3687465b5599f1fc2164f33b0cf",
+        ),
+        (
+            &b"usk/kek/rec/v1"[..],
+            "77932d4b12c92427f54434e11a61b2e0c25a08fc747bc1316ae92584e639dd12",
+        ),
+    ] {
+        assert_eq!(kdf::subkey(&vk, info).expose(), h(want).as_slice());
+    }
+}
+
 #[derive(Deserialize)]
 struct Blake3Vector {
     input_len: usize,
