@@ -56,7 +56,7 @@ clap = { version = "4", features = ["derive", "env"] }
 rpassword = "7"
 dirs = "7"
 # Loopback only: no TLS feature, so no second crypto stack (rustls/ring) in the tree.
-ureq = { version = "2", default-features = false, features = ["json"] }
+ureq = { version = "3", default-features = false, features = ["json"] }
 
 # broker: scrubbing and encodings
 aho-corasick = "1"
