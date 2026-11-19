@@ -14,7 +14,6 @@ crate-type = ["rlib"]
 default = ["std", "sqlite"]
 std = [
   "argon2/std",
-  "hkdf/std",
   "blake3/std",
   "ed25519-dalek/std",
   "serde_json/std",
