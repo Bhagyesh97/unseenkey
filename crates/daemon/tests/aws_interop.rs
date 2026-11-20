@@ -95,25 +95,28 @@ async fn boto3_through_the_broker_verifies_with_botocore() {
     .unwrap();
     let base = format!("http://{}", daemon.addr);
     let token = daemon.token().to_string();
-    let agent = ureq::AgentBuilder::new()
+    let agent = ureq::Agent::config_builder()
         .max_idle_connections(0)
-        .timeout_read(Duration::from_secs(20))
-        .timeout_write(Duration::from_secs(20))
-        .build();
+        .timeout_per_read(Some(Duration::from_secs(20)))
+        .timeout_per_write(Some(Duration::from_secs(20)))
+        .http_status_as_error(false)
+        .build()
+        .new_agent();
     // The owner token from the unlock, as the CLI and app send it: naming a
     // policy for a handle is owner-only.
     let owner = std::cell::RefCell::new(None::<String>);
     let mgmt = |path: &str, body: Value| -> Value {
         let mut req = agent
             .post(&format!("{base}{path}"))
-            .set("Authorization", &format!("Bearer {token}"));
+            .header("Authorization", &format!("Bearer {token}"));
         if let Some(o) = owner.borrow().as_ref() {
-            req = req.set("X-Usk-Owner", o);
+            req = req.header("X-Usk-Owner", o);
         }
         let v: Value = req
             .send_json(body)
             .unwrap_or_else(|e| panic!("{path}: {e}"))
-            .into_json()
+            .into_body()
+            .read_json()
             .unwrap();
         if path == "/v1/unlock" {
             *owner.borrow_mut() = v["owner_token"].as_str().map(str::to_string);
@@ -159,7 +162,8 @@ async fn boto3_through_the_broker_verifies_with_botocore() {
         .get(&format!("http://127.0.0.1:{}/__stats", ports[HOSTS[0]]))
         .call()
         .unwrap()
-        .into_json()
+        .into_body()
+        .read_json()
         .unwrap();
     println!(
         "client: {stdout}\nverifier: ok={} failed={}",
@@ -204,10 +208,11 @@ async fn boto3_through_the_broker_verifies_with_botocore() {
         .contains(handle["handle"].as_str().unwrap()));
     let audit: Value = agent
         .get(&format!("{base}/v1/audit?since=1&kind=use&limit=100"))
-        .set("Authorization", &format!("Bearer {token}"))
+        .header("Authorization", &format!("Bearer {token}"))
         .call()
         .unwrap()
-        .into_json()
+        .into_body()
+        .read_json()
         .unwrap();
     let actions: Vec<String> = audit
         .as_array()

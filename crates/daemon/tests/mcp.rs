@@ -61,18 +61,11 @@ struct Env {
     agent: ureq::Agent,
 }
 
-fn call(r: Result<ureq::Response, ureq::Error>) -> (u16, Value) {
+fn call(r: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> (u16, Value) {
     match r {
         Ok(resp) => {
-            let code = resp.status();
-            let text = resp.into_string().unwrap_or_default();
-            (
-                code,
-                serde_json::from_str(&text).unwrap_or(Value::String(text)),
-            )
-        }
-        Err(ureq::Error::Status(code, resp)) => {
-            let text = resp.into_string().unwrap_or_default();
+            let code = resp.status().as_u16();
+            let text = resp.into_body().read_to_string().unwrap_or_default();
             (
                 code,
                 serde_json::from_str(&text).unwrap_or(Value::String(text)),
@@ -84,16 +77,20 @@ fn call(r: Result<ureq::Response, ureq::Error>) -> (u16, Value) {
 
 impl Env {
     fn mgmt(&self, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
-        let mut req = self
-            .agent
-            .request(method, &format!("{}{}", self.base, path))
-            .set("Authorization", &format!("Bearer {}", self.session));
+        let mut req = ureq::http::Request::builder()
+            .method(method)
+            .uri(format!("{}{}", self.base, path))
+            .header("Authorization", &format!("Bearer {}", self.session));
         if let Some(o) = self.owner.lock().unwrap().as_ref() {
-            req = req.set("X-Usk-Owner", o);
+            req = req.header("X-Usk-Owner", o);
         }
         let (code, v) = call(match body {
-            Some(b) => req.send_json(b),
-            None => req.call(),
+            Some(b) => self.agent.run(
+                req.header("Content-Type", "application/json")
+                    .body(b.to_string())
+                    .unwrap(),
+            ),
+            None => self.agent.run(req.body(()).unwrap()),
         });
         if code == 200 && path == "/v1/unlock" {
             *self.owner.lock().unwrap() = v["owner_token"].as_str().map(str::to_string);
@@ -104,9 +101,9 @@ impl Env {
         call(
             self.agent
                 .post(&format!("{}/mcp", self.base))
-                .set("Authorization", &format!("Bearer {token}"))
-                .set("Content-Type", "application/json")
-                .send_string(&msg.to_string()),
+                .header("Authorization", &format!("Bearer {token}"))
+                .header("Content-Type", "application/json")
+                .send(&msg.to_string()),
         )
     }
     fn tool(&self, name: &str, args: Value) -> Value {
@@ -170,12 +167,14 @@ care = \"strict\"
         session: daemon.token().to_string(),
         owner: std::sync::Mutex::new(None),
         mcp_token: String::new(),
-        agent: ureq::AgentBuilder::new()
+        agent: ureq::Agent::config_builder()
             .max_idle_connections(0)
-            .timeout_read(Duration::from_secs(20))
-            .timeout_write(Duration::from_secs(20))
-            .redirects(0)
-            .build(),
+            .timeout_per_read(Some(Duration::from_secs(20)))
+            .timeout_per_write(Some(Duration::from_secs(20)))
+            .max_redirects(0)
+            .http_status_as_error(false)
+            .build()
+            .new_agent(),
         _daemon: daemon,
     };
     assert_eq!(
@@ -243,11 +242,7 @@ async fn handshake_tools_and_auth() {
     );
     assert_eq!(v["error"]["code"], -32601);
     // Auth: no token, bad token, and a GET are refused; the session token works as `local`.
-    let (code, _) = call(
-        env.agent
-            .post(&format!("{}/mcp", env.base))
-            .send_string("{}"),
-    );
+    let (code, _) = call(env.agent.post(&format!("{}/mcp", env.base)).send("{}"));
     assert_eq!(code, 401);
     assert_eq!(
         env.rpc(
@@ -268,7 +263,7 @@ async fn handshake_tools_and_auth() {
     let (code, _) = call(
         env.agent
             .get(&format!("{}/mcp", env.base))
-            .set("Authorization", &format!("Bearer {}", env.mcp_token))
+            .header("Authorization", &format!("Bearer {}", env.mcp_token))
             .call(),
     );
     assert_eq!(code, 405);
@@ -276,9 +271,9 @@ async fn handshake_tools_and_auth() {
     let (code, v) = call(
         env.agent
             .post(&format!("{}/mcp", env.base))
-            .set("Origin", "https://evil.example")
-            .set("Authorization", &format!("Bearer {}", env.mcp_token))
-            .send_string("{}"),
+            .header("Origin", "https://evil.example")
+            .header("Authorization", &format!("Bearer {}", env.mcp_token))
+            .send("{}"),
     );
     assert_eq!(code, 403, "{v}");
     env.mgmt("POST", "/v1/shutdown", Some(json!({})));
@@ -649,13 +644,13 @@ impl Env {
         let (code, v) = call(
             self.agent
                 .post(&format!("{}/mcp", self.base))
-                .set("Authorization", &format!("Bearer {}", self.mcp_token))
-                .set("Content-Type", "application/json")
-                .set(
+                .header("Authorization", &format!("Bearer {}", self.mcp_token))
+                .header("Content-Type", "application/json")
+                .header(
                     unseenkey_daemon::mcp::PROJECT_DIR_HEADER,
                     &unseenkey_core::projects::encode_dir(dir),
                 )
-                .send_string(
+                .send(
                     &json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": args } })
                         .to_string(),
                 ),

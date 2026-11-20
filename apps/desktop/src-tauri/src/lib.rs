@@ -539,17 +539,18 @@ fn event_pump(app: AppHandle, paths: VaultPaths) {
         };
         let url = format!("{}/v1/events", c.base_url());
         let token = std::fs::read_to_string(&paths.token).unwrap_or_default();
-        let resp = ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(2))
+        let resp = ureq::Agent::config_builder()
+            .timeout_connect(Some(Duration::from_secs(2)))
             .build()
+            .new_agent()
             .get(&url)
-            .set("Authorization", &format!("Bearer {}", token.trim()))
+            .header("Authorization", format!("Bearer {}", token.trim()))
             .call();
         let Ok(resp) = resp else {
             std::thread::sleep(Duration::from_secs(3));
             continue;
         };
-        let reader = std::io::BufReader::new(resp.into_reader());
+        let reader = std::io::BufReader::new(resp.into_body().into_reader());
         use std::io::BufRead;
         for line in reader.lines() {
             let Ok(line) = line else { break };

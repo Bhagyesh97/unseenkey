@@ -45,10 +45,12 @@ struct Env {
     agent: ureq::Agent,
 }
 
-fn read(r: Result<ureq::Response, ureq::Error>) -> (u16, Value) {
+fn read(r: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> (u16, Value) {
     let (code, text) = match r {
-        Ok(resp) => (resp.status(), resp.into_string().unwrap_or_default()),
-        Err(ureq::Error::Status(code, resp)) => (code, resp.into_string().unwrap_or_default()),
+        Ok(resp) => (
+            resp.status().as_u16(),
+            resp.into_body().read_to_string().unwrap_or_default(),
+        ),
         Err(e) => panic!("transport: {e}"),
     };
     (
@@ -59,14 +61,18 @@ fn read(r: Result<ureq::Response, ureq::Error>) -> (u16, Value) {
 
 impl Env {
     fn mgmt(&self, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
-        let req = self
-            .agent
-            .request(method, &format!("{}{}", self.base, path))
-            .set("Authorization", &format!("Bearer {}", self.token))
-            .set("X-Usk-Owner", &self.owner);
+        let req = ureq::http::Request::builder()
+            .method(method)
+            .uri(format!("{}{}", self.base, path))
+            .header("Authorization", &format!("Bearer {}", self.token))
+            .header("X-Usk-Owner", &self.owner);
         read(match body {
-            Some(b) => req.send_json(b),
-            None => req.call(),
+            Some(b) => self.agent.run(
+                req.header("Content-Type", "application/json")
+                    .body(b.to_string())
+                    .unwrap(),
+            ),
+            None => self.agent.run(req.body(()).unwrap()),
         })
     }
 
@@ -157,12 +163,14 @@ async fn start(vault: &Path, with: Start) -> Env {
         base: format!("http://{}", daemon.addr),
         token: daemon.token().to_string(),
         owner: String::new(),
-        agent: ureq::AgentBuilder::new()
+        agent: ureq::Agent::config_builder()
             .max_idle_connections(0)
-            .timeout_read(Duration::from_secs(20))
-            .timeout_write(Duration::from_secs(20))
-            .redirects(0)
-            .build(),
+            .timeout_per_read(Some(Duration::from_secs(20)))
+            .timeout_per_write(Some(Duration::from_secs(20)))
+            .max_redirects(0)
+            .http_status_as_error(false)
+            .build()
+            .new_agent(),
         daemon,
     }
 }
@@ -280,8 +288,8 @@ async fn a_changed_setting_is_kept_in_the_vault() {
     // Only the owner: the session token alone is not enough.
     let (code, e) = read(
         env.agent
-            .request("PATCH", &format!("{}/v1/settings", env.base))
-            .set("Authorization", &format!("Bearer {}", env.token))
+            .patch(&format!("{}/v1/settings", env.base))
+            .header("Authorization", &format!("Bearer {}", env.token))
             .send_json(json!({ "lock_on_sleep": false })),
     );
     assert_eq!(code, 403, "{e}");

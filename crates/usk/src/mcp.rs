@@ -921,12 +921,15 @@ pub fn bridge(paths: &VaultPaths, client: &str) -> Result<(), CliError> {
     let mut token = read_token(paths, client);
     let mut url: Option<String> = None;
     let dir = client_dir().map(|d| unseenkey_core::projects::encode_dir(&d));
-    // Long enough for an approval to be answered; read and write timeouts
-    // rather than a deadline, see `Client`.
-    let agent = ureq::AgentBuilder::new()
-        .timeout_read(std::time::Duration::from_secs(600))
-        .timeout_write(std::time::Duration::from_secs(600))
-        .build();
+    // Long enough for an approval to be answered; a timeout per read and per
+    // write rather than a deadline, see `Client`. A refusal is a reply to
+    // pass on, not an error.
+    let agent = ureq::Agent::config_builder()
+        .timeout_per_read(Some(std::time::Duration::from_secs(600)))
+        .timeout_per_write(Some(std::time::Duration::from_secs(600)))
+        .http_status_as_error(false)
+        .build()
+        .new_agent();
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
@@ -978,15 +981,14 @@ pub fn bridge(paths: &VaultPaths, client: &str) -> Result<(), CliError> {
             }
             let mut req = agent
                 .post(url.as_deref().unwrap_or_default())
-                .set("Authorization", &format!("Bearer {tok}"))
-                .set("Content-Type", "application/json");
+                .header("Authorization", format!("Bearer {tok}"))
+                .header("Content-Type", "application/json");
             if let Some(d) = &dir {
-                req = req.set(unseenkey_daemon::mcp::PROJECT_DIR_HEADER, d);
+                req = req.header(unseenkey_daemon::mcp::PROJECT_DIR_HEADER, d.as_str());
             }
-            out = match req.send_string(line) {
+            out = match req.send(line) {
                 Ok(r) if r.status() == 202 => None,
-                Ok(r) => Some(r.into_string().unwrap_or_default()),
-                Err(ureq::Error::Status(401, _)) => {
+                Ok(r) if r.status() == 401 => {
                     // Kept if the second try is refused as well.
                     out = req_id.clone().map(|id| {
                         json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32000, "message": format!("Unseenkey refused this AI tool's token. Ask the user to run `{cmd} mcp install {client}`.") } }).to_string()
@@ -994,7 +996,7 @@ pub fn bridge(paths: &VaultPaths, client: &str) -> Result<(), CliError> {
                     token = None;
                     continue;
                 }
-                Err(ureq::Error::Status(_, r)) => Some(r.into_string().unwrap_or_default()),
+                Ok(r) => Some(r.into_body().read_to_string().unwrap_or_default()),
                 Err(e) => {
                     // The daemon may have restarted on another port.
                     url = None;

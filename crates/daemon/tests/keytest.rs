@@ -121,13 +121,12 @@ struct C {
 }
 
 impl C {
-    fn call(r: Result<ureq::Response, ureq::Error>) -> (u16, Value) {
+    fn call(r: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> (u16, Value) {
         match r {
             Ok(resp) => {
-                let code = resp.status();
-                (code, resp.into_json().unwrap_or(Value::Null))
+                let code = resp.status().as_u16();
+                (code, resp.into_body().read_json().unwrap_or(Value::Null))
             }
-            Err(ureq::Error::Status(code, resp)) => (code, resp.into_json().unwrap_or(Value::Null)),
             Err(e) => panic!("transport: {e}"),
         }
     }
@@ -135,9 +134,9 @@ impl C {
         let mut req = self
             .agent
             .post(&format!("{}{}", self.base, path))
-            .set("Authorization", &format!("Bearer {}", self.token));
+            .header("Authorization", &format!("Bearer {}", self.token));
         if let Some(o) = self.owner.lock().unwrap().as_ref() {
-            req = req.set("X-Usk-Owner", o);
+            req = req.header("X-Usk-Owner", o);
         }
         let (code, v) = Self::call(req.send_json(body));
         if code == 200 && path == "/v1/unlock" {
@@ -148,10 +147,10 @@ impl C {
     fn patch(&self, path: &str, body: Value) -> (u16, Value) {
         let mut req = self
             .agent
-            .request("PATCH", &format!("{}{}", self.base, path))
-            .set("Authorization", &format!("Bearer {}", self.token));
+            .patch(&format!("{}{}", self.base, path))
+            .header("Authorization", &format!("Bearer {}", self.token));
         if let Some(o) = self.owner.lock().unwrap().as_ref() {
-            req = req.set("X-Usk-Owner", o);
+            req = req.header("X-Usk-Owner", o);
         }
         Self::call(req.send_json(body))
     }
@@ -159,9 +158,9 @@ impl C {
         let mut req = self
             .agent
             .delete(&format!("{}{}", self.base, path))
-            .set("Authorization", &format!("Bearer {}", self.token));
+            .header("Authorization", &format!("Bearer {}", self.token));
         if let Some(o) = self.owner.lock().unwrap().as_ref() {
-            req = req.set("X-Usk-Owner", o);
+            req = req.header("X-Usk-Owner", o);
         }
         Self::call(req.call())
     }
@@ -169,7 +168,7 @@ impl C {
         Self::call(
             self.agent
                 .get(&format!("{}{}", self.base, path))
-                .set("Authorization", &format!("Bearer {}", self.token))
+                .header("Authorization", &format!("Bearer {}", self.token))
                 .call(),
         )
     }
@@ -224,11 +223,13 @@ async fn setup() -> (tempfile::TempDir, Running, C) {
         base: format!("http://{}", r.addr),
         token: r.token().to_string(),
         owner: std::sync::Mutex::new(None),
-        agent: ureq::AgentBuilder::new()
+        agent: ureq::Agent::config_builder()
             .max_idle_connections(0)
-            .timeout_read(Duration::from_secs(20))
-            .timeout_write(Duration::from_secs(20))
-            .build(),
+            .timeout_per_read(Some(Duration::from_secs(20)))
+            .timeout_per_write(Some(Duration::from_secs(20)))
+            .http_status_as_error(false)
+            .build()
+            .new_agent(),
     };
     assert_eq!(c.post("/v1/unlock", json!({ "password": PW })).0, 200);
     (dir, r, c)
@@ -370,7 +371,7 @@ async fn a_key_in_two_parts() {
         C::call(
             c.agent
                 .get(&format!("{}/p/twilio{path}", c.base))
-                .set("Authorization", &sdk)
+                .header("Authorization", &sdk)
                 .call(),
         )
     };
@@ -510,9 +511,9 @@ async fn a_key_goes_only_to_the_owners_own_host() {
         let mut req = c
             .agent
             .get(&format!("{}/p/supabase/rest/v1/items", c.base))
-            .set("Authorization", &format!("Bearer {handle}"));
+            .header("Authorization", &format!("Bearer {handle}"));
         if let Some(u) = upstream {
-            req = req.set("X-Usk-Upstream", u);
+            req = req.header("X-Usk-Upstream", u);
         }
         C::call(req.call())
     };
@@ -640,11 +641,11 @@ async fn a_pair_pasted_the_wrong_way_round() {
     let (code, b) = C::call(
         c.agent
             .post(&format!("{}/p/twilio/2010-04-01/Accounts.json", c.base))
-            .set(
+            .header(
                 "Authorization",
                 &format!("Bearer {}", h["handle"].as_str().unwrap()),
             )
-            .send_string("note=unknown-shape-part-one"),
+            .send("note=unknown-shape-part-one"),
     );
     assert_eq!(
         (code, b["error"].as_str()),
@@ -695,10 +696,11 @@ async fn a_replaced_key_stays_guarded() {
     let body = c
         .agent
         .get(&format!("{}/p/twilio/2010-04-01/old.json", c.base))
-        .set("Authorization", &handle)
+        .header("Authorization", &handle)
         .call()
         .unwrap()
-        .into_string()
+        .into_body()
+        .read_to_string()
         .unwrap();
     assert!(!body.contains(OLD_TOKEN), "{body}");
     assert!(
@@ -716,13 +718,14 @@ async fn a_replaced_key_stays_guarded() {
     let body = c
         .agent
         .get(&format!("{}/p/twilio/2010-04-01/old.json", c.base))
-        .set(
+        .header(
             "Authorization",
             &format!("Bearer {}", h["handle"].as_str().unwrap()),
         )
         .call()
         .unwrap()
-        .into_string()
+        .into_body()
+        .read_to_string()
         .unwrap();
     assert!(!body.contains(TWILIO_TOKEN), "{body}");
     assert!(!body.contains(OLD_TOKEN), "{body}");
@@ -744,7 +747,7 @@ async fn a_request_cut_off_by_the_lock_is_in_the_log() {
             C::call(
                 c.agent
                     .get(&format!("{}/p/twilio/2010-04-01/slow.json", c.base))
-                    .set("Authorization", &handle)
+                    .header("Authorization", &handle)
                     .call(),
             )
         });
@@ -787,13 +790,15 @@ async fn a_caller_who_leaves_is_in_the_log() {
     assert_eq!(code, 201, "{b}");
     let (_, h) = c.post("/v1/handles", json!({ "secret": "twilio", "label": "a" }));
     let handle = format!("Bearer {}", h["handle"].as_str().unwrap());
-    let impatient = ureq::AgentBuilder::new()
+    let impatient = ureq::Agent::config_builder()
         .max_idle_connections(0)
-        .timeout_read(Duration::from_millis(300))
-        .build();
+        .timeout_per_read(Some(Duration::from_millis(300)))
+        .http_status_as_error(false)
+        .build()
+        .new_agent();
     assert!(impatient
         .get(&format!("{}/p/twilio/2010-04-01/slow.json", c.base))
-        .set("Authorization", &handle)
+        .header("Authorization", &handle)
         .call()
         .is_err());
     // The call took effect or not; either way the log tells of it, once.
@@ -930,7 +935,7 @@ async fn putting_a_pair_right_afterwards() {
                 "{}/p/twilio/2010-04-01/Accounts/ACabcdefabcdefabcdefabcdefabcdefab.json",
                 c.base
             ))
-            .set(
+            .header(
                 "Authorization",
                 &format!("Bearer {}", h["handle"].as_str().unwrap()),
             )
@@ -953,7 +958,7 @@ async fn a_slow_request_does_not_hold_up_a_stop() {
     let url = format!("{}/p/twilio/2010-04-01/hangs.json", c.base);
     let agent = c.agent.clone();
     std::thread::spawn(move || {
-        let _ = agent.get(&url).set("Authorization", &handle).call();
+        let _ = agent.get(&url).header("Authorization", &handle).call();
     });
     tokio::time::sleep(Duration::from_millis(400)).await;
     let t0 = std::time::Instant::now();
@@ -968,9 +973,9 @@ async fn a_key_goes_only_where_it_may() {
         let mut req = c
             .agent
             .get(&format!("{}{path}", c.base))
-            .set("Authorization", &format!("Bearer {handle}"));
+            .header("Authorization", &format!("Bearer {handle}"));
         if let Some(u) = upstream {
-            req = req.set("X-Usk-Upstream", u);
+            req = req.header("X-Usk-Upstream", u);
         }
         C::call(req.call())
     };
@@ -1032,9 +1037,9 @@ async fn a_key_goes_only_where_it_may() {
     let (code, b) = C::call(
         c.agent
             .post(&format!("{}/p/xai/v1/models", c.base))
-            .set("Authorization", &format!("Bearer {xai}"))
-            .set("X-Usk-Note", scope)
-            .send_string(scope),
+            .header("Authorization", &format!("Bearer {xai}"))
+            .header("X-Usk-Note", scope)
+            .send(scope),
     );
     assert_ne!(b["error"].as_str(), Some("egress_blocked"), "{code} {b}");
 
@@ -1071,7 +1076,7 @@ async fn a_custom_scheme_works_through_the_broker() {
     let (code, body) = C::call(
         c.agent
             .get(&format!("{}/p/deepgram/v1/projects", c.base))
-            .set("Authorization", &format!("Token {handle}"))
+            .header("Authorization", &format!("Token {handle}"))
             .call(),
     );
     assert_eq!(code, 200, "{body}");
@@ -1167,11 +1172,10 @@ async fn twilio_read_only_keeps_accounts_and_keys_out_in_every_form() {
         let answer = c
             .agent
             .get(&format!("{base}/p/twilio{path}"))
-            .set("Authorization", &format!("Bearer {handle}"))
+            .header("Authorization", &format!("Bearer {handle}"))
             .call();
         match answer {
-            Ok(a) => a.status(),
-            Err(ureq::Error::Status(code, _)) => code,
+            Ok(a) => a.status().as_u16(),
             Err(e) => panic!("transport: {e}"),
         }
     };
