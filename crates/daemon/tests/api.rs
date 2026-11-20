@@ -38,6 +38,27 @@ async fn start(dir: &std::path::Path, write_files: bool) -> Running {
     .unwrap()
 }
 
+/// A request and the agent that will run it. ureq decides from the method
+/// whether a request may carry a body, and these tests choose the method at
+/// run time, so the request is built from the `http` types.
+struct Req<'a>(&'a ureq::Agent, ureq::http::request::Builder);
+
+impl Req<'_> {
+    fn header(self, name: &str, value: &str) -> Self {
+        Req(self.0, self.1.header(name, value))
+    }
+    fn call(self) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
+        self.0.run(self.1.body(())?)
+    }
+    fn send_json(self, body: Value) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
+        self.0.run(
+            self.1
+                .header("Content-Type", "application/json")
+                .body(body.to_string())?,
+        )
+    }
+}
+
 struct C {
     base: String,
     token: String,
@@ -52,26 +73,29 @@ impl C {
             base: format!("http://{}", r.addr),
             token: r.token().to_string(),
             owner: std::sync::Mutex::new(None),
-            agent: ureq::AgentBuilder::new().max_idle_connections(0).build(),
+            agent: ureq::Agent::config_builder()
+                .max_idle_connections(0)
+                .http_status_as_error(false)
+                .build()
+                .new_agent(),
         }
     }
-    fn req(&self, method: &str, path: &str) -> ureq::Request {
-        let mut r = self
-            .agent
-            .request(method, &format!("{}{}", self.base, path))
-            .set("Authorization", &format!("Bearer {}", self.token));
+    fn req(&self, method: &str, path: &str) -> Req<'_> {
+        let mut r = ureq::http::Request::builder()
+            .method(method)
+            .uri(format!("{}{}", self.base, path))
+            .header("Authorization", &format!("Bearer {}", self.token));
         if let Some(o) = self.owner.lock().unwrap().as_ref() {
-            r = r.set("X-Usk-Owner", o);
+            r = r.header("X-Usk-Owner", o);
         }
-        r
+        Req(&self.agent, r)
     }
-    fn status_of(r: Result<ureq::Response, ureq::Error>) -> (u16, Value) {
+    fn status_of(r: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> (u16, Value) {
         match r {
             Ok(resp) => {
-                let code = resp.status();
-                (code, resp.into_json().unwrap_or(Value::Null))
+                let code = resp.status().as_u16();
+                (code, resp.into_body().read_json().unwrap_or(Value::Null))
             }
-            Err(ureq::Error::Status(code, resp)) => (code, resp.into_json().unwrap_or(Value::Null)),
             Err(e) => panic!("transport error: {e}"),
         }
     }
@@ -112,19 +136,19 @@ async fn browser_origin_headers_are_rejected_on_every_route() {
     ];
     for route in routes {
         for (h, v) in markers {
-            let (code, body) = C::status_of(c.req("GET", route).set(h, v).call());
+            let (code, body) = C::status_of(c.req("GET", route).header(h, v).call());
             assert_eq!(code, 403, "{route} with {h}");
             assert_eq!(body["error"], "browser_origin_rejected", "{route} with {h}");
         }
         // Node's fetch (undici) sends `sec-fetch-mode: cors` on its own; that is an
         // SDK, not a browser, and must pass. Browsers always add Sec-Fetch-Site too.
-        let (code, _) = C::status_of(c.req("GET", route).set("Sec-Fetch-Mode", "cors").call());
+        let (code, _) = C::status_of(c.req("GET", route).header("Sec-Fetch-Mode", "cors").call());
         assert_ne!(
             code, 403,
             "{route}: sec-fetch-mode alone must not be treated as a browser"
         );
         // Even a valid token does not help a browser.
-        let (code, _) = C::status_of(c.req("POST", route).set("Origin", "null").call());
+        let (code, _) = C::status_of(c.req("POST", route).header("Origin", "null").call());
         assert_eq!(code, 403);
     }
     // Sanity: without markers the same routes work / 404 normally.
@@ -170,12 +194,18 @@ async fn token_required_and_no_cors_headers() {
     let dir = tempfile::tempdir().unwrap();
     let r = start(dir.path(), false).await;
     let base = format!("http://{}", r.addr);
-    let (code, body) = C::status_of(ureq::get(&format!("{base}/v1/status")).call());
+    // The shared agent turns a refusal into an error without its body.
+    let plain = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .new_agent();
+    let (code, body) = C::status_of(plain.get(&format!("{base}/v1/status")).call());
     assert_eq!(code, 401);
     assert_eq!(body["error"], "unauthorized");
     let (code, _) = C::status_of(
-        ureq::get(&format!("{base}/v1/status"))
-            .set(
+        plain
+            .get(&format!("{base}/v1/status"))
+            .header(
                 "Authorization",
                 "Bearer usk_s_00000000000000000000000000000000",
             )
@@ -183,7 +213,7 @@ async fn token_required_and_no_cors_headers() {
     );
     assert_eq!(code, 401);
     let resp = ureq::get(&format!("{base}/healthz")).call().unwrap();
-    assert!(resp.header("access-control-allow-origin").is_none());
+    assert!(resp.headers().get("access-control-allow-origin").is_none());
     r.shutdown().await;
 }
 
@@ -862,9 +892,9 @@ async fn an_existing_ai_tool_cannot_be_taken_over_with_the_session_token() {
         C::status_of(
             c.agent
                 .post(&format!("{}/mcp", c.base))
-                .set("Authorization", &format!("Bearer {token}"))
-                .set("Content-Type", "application/json")
-                .send_string(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#),
+                .header("Authorization", &format!("Bearer {token}"))
+                .header("Content-Type", "application/json")
+                .send(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#),
         )
         .0
     };

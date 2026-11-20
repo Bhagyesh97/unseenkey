@@ -103,6 +103,24 @@ async fn mock_upstream() -> SocketAddr {
     addr
 }
 
+/// A request and the agent that will run it. ureq decides from the method
+/// whether a request may carry a body, and these tests choose the method at
+/// run time, so the request is built from the `http` types.
+struct Req<'a>(&'a ureq::Agent, ureq::http::request::Builder);
+
+impl Req<'_> {
+    fn call(self) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
+        self.0.run(self.1.body(())?)
+    }
+    fn send_json(self, body: Value) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
+        self.0.run(
+            self.1
+                .header("Content-Type", "application/json")
+                .body(body.to_string())?,
+        )
+    }
+}
+
 struct Env {
     daemon: Running,
     base: String,
@@ -113,38 +131,32 @@ struct Env {
 }
 
 impl Env {
-    fn mgmt(&self, method: &str, path: &str) -> ureq::Request {
-        let mut r = self
-            .agent
-            .request(method, &format!("{}{}", self.base, path))
-            .set("Authorization", &format!("Bearer {}", self.token));
+    fn mgmt(&self, method: &str, path: &str) -> Req<'_> {
+        let mut r = ureq::http::Request::builder()
+            .method(method)
+            .uri(format!("{}{}", self.base, path))
+            .header("Authorization", &format!("Bearer {}", self.token));
         if let Some(o) = self.owner.lock().unwrap().as_ref() {
-            r = r.set("X-Usk-Owner", o);
+            r = r.header("X-Usk-Owner", o);
         }
-        r
+        Req(&self.agent, r)
     }
-    fn call(r: Result<ureq::Response, ureq::Error>) -> (u16, Value, Vec<(String, String)>) {
+    fn call(
+        r: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+    ) -> (u16, Value, Vec<(String, String)>) {
         match r {
             Ok(resp) => {
-                let code = resp.status();
+                let code = resp.status().as_u16();
                 let hdrs = resp
-                    .headers_names()
-                    .into_iter()
-                    .map(|n| (n.clone(), resp.header(&n).unwrap_or("").to_string()))
+                    .headers()
+                    .iter()
+                    .map(|(n, v)| (n.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
                     .collect();
-                let body = resp.into_string().unwrap_or_default();
+                let body = resp.into_body().read_to_string().unwrap_or_default();
                 (
                     code,
                     serde_json::from_str(&body).unwrap_or(Value::String(body)),
                     hdrs,
-                )
-            }
-            Err(ureq::Error::Status(code, resp)) => {
-                let body = resp.into_string().unwrap_or_default();
-                (
-                    code,
-                    serde_json::from_str(&body).unwrap_or(Value::String(body)),
-                    vec![],
                 )
             }
             Err(e) => panic!("transport: {e}"),
@@ -169,13 +181,17 @@ impl Env {
         auth: (&str, &str),
         body: Option<Value>,
     ) -> (u16, Value, Vec<(String, String)>) {
-        let req = self
-            .agent
-            .request(method, &format!("{}{}", self.base, path))
-            .set(auth.0, auth.1);
+        let req = ureq::http::Request::builder()
+            .method(method)
+            .uri(format!("{}{}", self.base, path))
+            .header(auth.0, auth.1);
         Self::call(match body {
-            Some(b) => req.send_json(b),
-            None => req.call(),
+            Some(b) => self.agent.run(
+                req.header("Content-Type", "application/json")
+                    .body(b.to_string())
+                    .unwrap(),
+            ),
+            None => self.agent.run(req.body(()).unwrap()),
         })
     }
 }
@@ -216,12 +232,14 @@ async fn setup() -> Env {
         token: daemon.token().to_string(),
         owner: std::sync::Mutex::new(None),
         // No client-side redirects: the broker must return upstream 3xx untouched.
-        agent: ureq::AgentBuilder::new()
+        agent: ureq::Agent::config_builder()
             .max_idle_connections(0)
-            .timeout_read(Duration::from_secs(10))
-            .timeout_write(Duration::from_secs(10))
-            .redirects(0)
-            .build(),
+            .timeout_per_read(Some(Duration::from_secs(10)))
+            .timeout_per_write(Some(Duration::from_secs(10)))
+            .max_redirects(0)
+            .http_status_as_error(false)
+            .build()
+            .new_agent(),
         daemon,
         mock,
     };
@@ -349,9 +367,9 @@ async fn policy_and_host_lock_are_enforced() {
     // Generic route with an arbitrary upstream is also refused for this secret.
     let (code, body, _) = Env::call(
         env.agent
-            .request("GET", &format!("{}/p/generic/v1/x", env.base))
-            .set("X-Usk-Handle", &handle)
-            .set("X-Usk-Upstream", "https://evil.example")
+            .get(&format!("{}/p/generic/v1/x", env.base))
+            .header("X-Usk-Handle", &handle)
+            .header("X-Usk-Upstream", "https://evil.example")
             .call(),
     );
     assert_eq!(code, 403, "{body}");
@@ -385,7 +403,7 @@ async fn unknown_revoked_and_expired_handles() {
     assert_eq!(code, 401, "{body}");
     let (code, body, _) = Env::call(
         env.agent
-            .request("GET", &format!("{}/p/openai/v1/models", env.base))
+            .get(&format!("{}/p/openai/v1/models", env.base))
             .call(),
     );
     assert_eq!(code, 401, "{body}");
@@ -461,9 +479,9 @@ async fn egress_guard_blocks_other_secrets_in_requests() {
     // In a header as well.
     let (code, body, _) = Env::call(
         env.agent
-            .request("GET", &format!("{}/p/openai/v1/models", env.base))
-            .set("Authorization", &auth)
-            .set("X-Debug", STRIPE_KEY)
+            .get(&format!("{}/p/openai/v1/models", env.base))
+            .header("Authorization", &auth)
+            .header("X-Debug", STRIPE_KEY)
             .call(),
     );
     assert_eq!(code, 403, "{body}");
@@ -495,12 +513,12 @@ async fn responses_are_scrubbed_including_streams() {
     // SSE stream.
     let resp = env
         .agent
-        .request("POST", &format!("{}/p/openai/stream", env.base))
-        .set("Authorization", &auth)
-        .call()
+        .post(&format!("{}/p/openai/stream", env.base))
+        .header("Authorization", &auth)
+        .send_empty()
         .unwrap();
-    assert_eq!(resp.status(), 200);
-    let text = resp.into_string().unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    let text = resp.into_body().read_to_string().unwrap();
     assert!(text.contains("data: {\"delta\":\"Hello\"}"), "{text}");
     assert!(text.contains("[REDACTED:usk:openai]"), "{text}");
     assert!(!text.contains(OPENAI_KEY));
@@ -531,14 +549,14 @@ async fn generic_template_route_and_rate_limits() {
     let call = || {
         Env::call(
             env.agent
-                .request("POST", &format!("{}/p/generic/api/v2/things", env.base))
-                .set("X-Usk-Handle", &handle)
-                .set(
+                .post(&format!("{}/p/generic/api/v2/things", env.base))
+                .header("X-Usk-Handle", &handle)
+                .header(
                     "X-Usk-Upstream",
                     &format!("http://127.0.0.1:{}", env.mock.port()),
                 )
-                .set("X-Api-Token", "{{usk:example}}")
-                .send_string("{\"key\":\"{{usk:example}}\"}"),
+                .header("X-Api-Token", "{{usk:example}}")
+                .send("{\"key\":\"{{usk:example}}\"}"),
         )
     };
     let (code, body, _) = call();
@@ -565,13 +583,13 @@ async fn generic_template_route_and_rate_limits() {
     let handle2 = h2["handle"].as_str().unwrap().to_string();
     let (code, body, _) = Env::call(
         env.agent
-            .request("GET", &format!("{}/p/generic/x", env.base))
-            .set("X-Usk-Handle", &handle2)
-            .set(
+            .get(&format!("{}/p/generic/x", env.base))
+            .header("X-Usk-Handle", &handle2)
+            .header(
                 "X-Usk-Upstream",
                 &format!("http://127.0.0.1:{}", env.mock.port()),
             )
-            .set("X-Other", "{{usk:stripe-live}}")
+            .header("X-Other", "{{usk:stripe-live}}")
             .call(),
     );
     assert_eq!(code, 403, "{body}");
@@ -591,15 +609,12 @@ async fn a_provider_key_cannot_take_the_generic_route() {
     let generic = |path: &str, header: Option<&str>, body: &str| {
         let mut req = env
             .agent
-            .request(
-                "POST",
-                &format!("{}/p/generic/@api.openai.com{path}", env.base),
-            )
-            .set("X-Usk-Handle", &handle);
+            .post(&format!("{}/p/generic/@api.openai.com{path}", env.base))
+            .header("X-Usk-Handle", &handle);
         if let Some(h) = header {
-            req = req.set("X-Anything", h);
+            req = req.header("X-Anything", h);
         }
-        Env::call(req.send_string(body))
+        Env::call(req.send(body))
     };
     for (what, path, header, body) in [
         (
@@ -766,9 +781,9 @@ async fn a_request_that_is_not_sent_does_not_count() {
     for _ in 0..5 {
         let (code, body, _) = Env::call(
             env.agent
-                .request("GET", &format!("{}/p/openai/v1/models", env.base))
-                .set("Authorization", &auth)
-                .set("X-Debug", STRIPE_KEY)
+                .get(&format!("{}/p/openai/v1/models", env.base))
+                .header("Authorization", &auth)
+                .header("X-Debug", STRIPE_KEY)
                 .call(),
         );
         assert_eq!(code, 403, "{body}");
@@ -792,9 +807,9 @@ async fn locked_vault_and_browser_origin_on_proxy_routes() {
     let auth = format!("Bearer {handle}");
     let (code, body, _) = Env::call(
         env.agent
-            .request("GET", &format!("{}/p/openai/v1/models", env.base))
-            .set("Authorization", &auth)
-            .set("Origin", "https://evil.example")
+            .get(&format!("{}/p/openai/v1/models", env.base))
+            .header("Authorization", &auth)
+            .header("Origin", "https://evil.example")
             .call(),
     );
     assert_eq!(code, 403, "{body}");
@@ -908,13 +923,13 @@ async fn template_mode_fills_a_bearer_authorization_header_and_refuses_unfillabl
     // there); with a placeholder it is the caller's instruction and survives.
     let (code, body, _) = Env::call(
         env.agent
-            .request("GET", &format!("{}/p/generic/api/me", env.base))
-            .set("X-Usk-Handle", &handle)
-            .set(
+            .get(&format!("{}/p/generic/api/me", env.base))
+            .header("X-Usk-Handle", &handle)
+            .header(
                 "X-Usk-Upstream",
                 &format!("http://127.0.0.1:{}", env.mock.port()),
             )
-            .set("Authorization", "Bearer {{usk:hosted}}")
+            .header("Authorization", "Bearer {{usk:hosted}}")
             .call(),
     );
     assert_eq!(code, 200, "{body}");
@@ -925,13 +940,13 @@ async fn template_mode_fills_a_bearer_authorization_header_and_refuses_unfillabl
     // Without a placeholder the strip still applies: an attached credential never goes upstream.
     let (code, body, _) = Env::call(
         env.agent
-            .request("GET", &format!("{}/p/generic/api/me", env.base))
-            .set("X-Usk-Handle", &handle)
-            .set(
+            .get(&format!("{}/p/generic/api/me", env.base))
+            .header("X-Usk-Handle", &handle)
+            .header(
                 "X-Usk-Upstream",
                 &format!("http://127.0.0.1:{}", env.mock.port()),
             )
-            .set("Authorization", "Bearer something-the-sdk-attached")
+            .header("Authorization", "Bearer something-the-sdk-attached")
             .call(),
     );
     assert_eq!(code, 200, "{body}");
@@ -943,13 +958,13 @@ async fn template_mode_fills_a_bearer_authorization_header_and_refuses_unfillabl
     let (handle_p, _) = create_handle(&env, "pasted", "tmpl-pasted", None);
     let (code, body, _) = Env::call(
         env.agent
-            .request("GET", &format!("{}/p/generic/api/me", env.base))
-            .set("X-Usk-Handle", &handle_p)
-            .set(
+            .get(&format!("{}/p/generic/api/me", env.base))
+            .header("X-Usk-Handle", &handle_p)
+            .header(
                 "X-Usk-Upstream",
                 &format!("http://127.0.0.1:{}", env.mock.port()),
             )
-            .set("Authorization", "Bearer {{usk:pasted}}")
+            .header("Authorization", "Bearer {{usk:pasted}}")
             .call(),
     );
     assert_eq!(code, 200, "{body}");
@@ -959,13 +974,13 @@ async fn template_mode_fills_a_bearer_authorization_header_and_refuses_unfillabl
     let (handle2, _) = create_handle(&env, "ragged", "tmpl-ragged", None);
     let (code, body, _) = Env::call(
         env.agent
-            .request("GET", &format!("{}/p/generic/api/me", env.base))
-            .set("X-Usk-Handle", &handle2)
-            .set(
+            .get(&format!("{}/p/generic/api/me", env.base))
+            .header("X-Usk-Handle", &handle2)
+            .header(
                 "X-Usk-Upstream",
                 &format!("http://127.0.0.1:{}", env.mock.port()),
             )
-            .set("Authorization", "Bearer {{usk:ragged}}")
+            .header("Authorization", "Bearer {{usk:ragged}}")
             .call(),
     );
     assert_eq!(code, 400, "{body}");
@@ -977,12 +992,12 @@ async fn template_mode_fills_a_bearer_authorization_header_and_refuses_unfillabl
     // No handle at all on the generic route: the message says how to send one.
     let (code, body, _) = Env::call(
         env.agent
-            .request("GET", &format!("{}/p/generic/api/me", env.base))
-            .set(
+            .get(&format!("{}/p/generic/api/me", env.base))
+            .header(
                 "X-Usk-Upstream",
                 &format!("http://127.0.0.1:{}", env.mock.port()),
             )
-            .set("Authorization", "Bearer {{usk:hosted}}")
+            .header("Authorization", "Bearer {{usk:hosted}}")
             .call(),
     );
     assert_eq!(code, 401, "{body}");
@@ -993,10 +1008,10 @@ async fn template_mode_fills_a_bearer_authorization_header_and_refuses_unfillabl
     // A host the secret is not locked to: the refusal names the fix.
     let (code, body, _) = Env::call(
         env.agent
-            .request("GET", &format!("{}/p/generic/api/me", env.base))
-            .set("X-Usk-Handle", &handle)
-            .set("X-Usk-Upstream", "https://elsewhere.example")
-            .set("Authorization", "Bearer {{usk:hosted}}")
+            .get(&format!("{}/p/generic/api/me", env.base))
+            .header("X-Usk-Handle", &handle)
+            .header("X-Usk-Upstream", "https://elsewhere.example")
+            .header("Authorization", "Bearer {{usk:hosted}}")
             .call(),
     );
     assert_eq!(code, 403, "{body}");
@@ -1128,12 +1143,14 @@ async fn compressed_responses_are_unpacked_and_scrubbed() {
         base: format!("http://{}", daemon.addr),
         token: daemon.token().to_string(),
         owner: std::sync::Mutex::new(None),
-        agent: ureq::AgentBuilder::new()
+        agent: ureq::Agent::config_builder()
             .max_idle_connections(0)
-            .timeout_read(Duration::from_secs(10))
-            .timeout_write(Duration::from_secs(10))
-            .redirects(0)
-            .build(),
+            .timeout_per_read(Some(Duration::from_secs(10)))
+            .timeout_per_write(Some(Duration::from_secs(10)))
+            .max_redirects(0)
+            .http_status_as_error(false)
+            .build()
+            .new_agent(),
         daemon,
         mock,
     };
@@ -1152,17 +1169,17 @@ async fn compressed_responses_are_unpacked_and_scrubbed() {
     let r = env
         .agent
         .get(&format!("{}/p/openai/v1/models", env.base))
-        .set("Authorization", &format!("Bearer {handle}"))
-        .set("Accept-Encoding", "gzip, deflate, br")
+        .header("Authorization", &format!("Bearer {handle}"))
+        .header("Accept-Encoding", "gzip, deflate, br")
         .call()
         .unwrap();
     assert_eq!(r.status(), 200);
     assert!(
-        r.header("content-encoding").is_none(),
+        r.headers().get("content-encoding").is_none(),
         "the caller gets plain bytes, not a compressed stream it has to trust"
     );
     let mut body = Vec::new();
-    std::io::Read::read_to_end(&mut r.into_reader(), &mut body).unwrap();
+    std::io::Read::read_to_end(&mut r.into_body().into_reader(), &mut body).unwrap();
     let text = String::from_utf8(body).unwrap();
     assert!(
         !text.contains(OPENAI_KEY),
@@ -1224,7 +1241,7 @@ async fn the_handle_never_travels_to_the_provider() {
         .call()
         .unwrap();
     assert_eq!(r.status(), 200);
-    let body: Value = r.into_json().unwrap();
+    let body: Value = r.into_body().read_json().unwrap();
     assert_eq!(body["query"], "other=1", "{body}");
     assert!(!body.to_string().contains(&handle), "{body}");
     env.daemon.shutdown().await;

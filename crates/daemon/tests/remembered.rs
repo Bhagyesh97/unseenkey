@@ -31,32 +31,37 @@ impl C {
             base: format!("http://{}", r.addr),
             token: r.token().to_string(),
             owner: std::sync::Mutex::new(None),
-            agent: ureq::AgentBuilder::new()
+            agent: ureq::Agent::config_builder()
                 .max_idle_connections(0)
-                .timeout_read(Duration::from_secs(20))
-                .timeout_write(Duration::from_secs(20))
-                .redirects(0)
-                .build(),
+                .timeout_per_read(Some(Duration::from_secs(20)))
+                .timeout_per_write(Some(Duration::from_secs(20)))
+                .max_redirects(0)
+                .http_status_as_error(false)
+                .build()
+                .new_agent(),
         })
     }
     fn mgmt(&self, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
-        let mut req = self
-            .agent
-            .request(method, &format!("{}{}", self.base, path))
-            .set("Authorization", &format!("Bearer {}", self.token));
+        let mut req = ureq::http::Request::builder()
+            .method(method)
+            .uri(format!("{}{}", self.base, path))
+            .header("Authorization", &format!("Bearer {}", self.token));
         if let Some(o) = self.owner.lock().unwrap().as_ref() {
-            req = req.set("X-Usk-Owner", o);
+            req = req.header("X-Usk-Owner", o);
         }
         let r = match body {
-            Some(b) => req.send_json(b),
-            None => req.call(),
+            Some(b) => self.agent.run(
+                req.header("Content-Type", "application/json")
+                    .body(b.to_string())
+                    .unwrap(),
+            ),
+            None => self.agent.run(req.body(()).unwrap()),
         };
         let (code, v) = match r {
             Ok(resp) => {
-                let code = resp.status();
-                (code, resp.into_json().unwrap_or(Value::Null))
+                let code = resp.status().as_u16();
+                (code, resp.into_body().read_json().unwrap_or(Value::Null))
             }
-            Err(ureq::Error::Status(code, resp)) => (code, resp.into_json().unwrap_or(Value::Null)),
             Err(e) => panic!("transport: {e}"),
         };
         if code == 200 && path == "/v1/unlock" {
@@ -66,17 +71,19 @@ impl C {
     }
     /// A brokered call with the handle; returns the status.
     fn brokered(&self, handle: &str, method: &str, path: &str) -> (u16, Value) {
-        let r = self
-            .agent
-            .request(method, &format!("{}/p/stripe{}", self.base, path))
-            .set("Authorization", &format!("Bearer {handle}"))
-            .send_string("");
+        let r = self.agent.run(
+            ureq::http::Request::builder()
+                .method(method)
+                .uri(format!("{}/p/stripe{}", self.base, path))
+                .header("Authorization", format!("Bearer {handle}"))
+                .body("")
+                .unwrap(),
+        );
         match r {
             Ok(resp) => {
-                let code = resp.status();
-                (code, resp.into_json().unwrap_or(Value::Null))
+                let code = resp.status().as_u16();
+                (code, resp.into_body().read_json().unwrap_or(Value::Null))
             }
-            Err(ureq::Error::Status(code, resp)) => (code, resp.into_json().unwrap_or(Value::Null)),
             Err(e) => panic!("transport: {e}"),
         }
     }

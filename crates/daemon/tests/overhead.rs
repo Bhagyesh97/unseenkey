@@ -92,19 +92,31 @@ async fn broker_overhead_p99() {
     .unwrap();
     let base = format!("http://{}", daemon.addr);
     let token = daemon.token().to_string();
-    let agent = ureq::AgentBuilder::new()
-        .timeout_read(Duration::from_secs(10))
-        .timeout_write(Duration::from_secs(10))
-        .build();
+    let agent = ureq::Agent::config_builder()
+        .timeout_per_read(Some(Duration::from_secs(10)))
+        .timeout_per_write(Some(Duration::from_secs(10)))
+        .http_status_as_error(false)
+        .build()
+        .new_agent();
     let owner = std::cell::RefCell::new(None::<String>);
     let mgmt = |method: &str, path: &str, body: Value| -> Value {
-        let mut req = agent
-            .request(method, &format!("{base}{path}"))
-            .set("Authorization", &format!("Bearer {token}"));
+        let mut req = ureq::http::Request::builder()
+            .method(method)
+            .uri(format!("{base}{path}"))
+            .header("Authorization", &format!("Bearer {token}"));
         if let Some(o) = owner.borrow().as_ref() {
-            req = req.set("X-Usk-Owner", o);
+            req = req.header("X-Usk-Owner", o);
         }
-        let v: Value = req.send_json(body).unwrap().into_json().unwrap();
+        let v: Value = agent
+            .run(
+                req.header("Content-Type", "application/json")
+                    .body(body.to_string())
+                    .unwrap(),
+            )
+            .unwrap()
+            .into_body()
+            .read_json()
+            .unwrap();
         if path == "/v1/unlock" {
             *owner.borrow_mut() = v["owner_token"].as_str().map(str::to_string);
         }
@@ -124,23 +136,29 @@ async fn broker_overhead_p99() {
     let handle = created["handle"].as_str().unwrap().to_string();
 
     // Same request, two routes, one keep-alive agent each.
-    let direct_agent = ureq::AgentBuilder::new().build();
+    let direct_agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .new_agent();
     let direct_url = format!("http://{mock}/v1/models");
     let direct = measure(|| {
         let r = direct_agent.get(&direct_url).call().unwrap();
         assert_eq!(r.status(), 200);
-        r.into_string().unwrap();
+        r.into_body().read_to_string().unwrap();
     });
-    let broker_agent = ureq::AgentBuilder::new().build();
+    let broker_agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .new_agent();
     let broker_url = format!("{base}/p/openai/v1/models");
     let brokered = measure(|| {
         let r = broker_agent
             .get(&broker_url)
-            .set("Authorization", &format!("Bearer {handle}"))
+            .header("Authorization", &format!("Bearer {handle}"))
             .call()
             .unwrap();
         assert_eq!(r.status(), 200);
-        r.into_string().unwrap();
+        r.into_body().read_to_string().unwrap();
     });
 
     let (d50, d95, d99) = (

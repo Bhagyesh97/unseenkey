@@ -1,6 +1,7 @@
 //! HTTP client for the local daemon.
 
 use crate::io::{self as uio, CliError, EXIT_LOCKED};
+use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use serde_json::Value;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -68,6 +69,46 @@ pub struct Client {
     agent: ureq::Agent,
 }
 
+type Response = ureq::http::Response<ureq::Body>;
+
+/// The reply's JSON, whatever its size, as before: ureq 3 stops at 10 MB
+/// unless told otherwise, and a long audit log from the local daemon may be
+/// larger than that.
+fn read_json(resp: Response) -> Result<Value, ureq::Error> {
+    resp.into_body()
+        .into_with_config()
+        .limit(u64::MAX)
+        .read_json()
+}
+
+/// What may not stand as it is in a path, and in a query. These are the URL
+/// standard's sets, which ureq 2 applied by itself; `#` is added because
+/// nothing here has a fragment, so one in a name belongs to the name.
+const PATH_UNSAFE: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'<')
+    .add(b'>')
+    .add(b'`')
+    .add(b'{')
+    .add(b'}');
+const QUERY_UNSAFE: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'#').add(b'<').add(b'>');
+
+/// A path as the commands write it (`/v1/handles/stripe env`) in the form a
+/// request line takes. Names with spaces or other such characters are
+/// ordinary, and what is already encoded stays as it is.
+fn wire_path(path: &str) -> String {
+    match path.split_once('?') {
+        Some((p, q)) => format!(
+            "{}?{}",
+            utf8_percent_encode(p, PATH_UNSAFE),
+            utf8_percent_encode(q, QUERY_UNSAFE)
+        ),
+        None => utf8_percent_encode(path, PATH_UNSAFE).to_string(),
+    }
+}
+
 impl Client {
     fn from_files(paths: &VaultPaths) -> Option<Self> {
         let addr = std::fs::read_to_string(&paths.addr).ok()?;
@@ -85,16 +126,20 @@ impl Client {
         // One connection per request: pooling a kept-alive connection to the
         // daemon buys nothing on loopback and turns a server-side close into
         // a spurious "connection aborted" on the next command.
-        // Read and write timeouts, not `timeout()`: an overall deadline makes
-        // ureq set the socket timeout again before every read, and macOS
-        // refuses that (EINVAL, "Invalid argument") once the daemon has closed
-        // its side, failing a reply that already arrived.
-        let agent = ureq::AgentBuilder::new()
+        // A timeout per read and per write, not an overall deadline: a
+        // deadline makes ureq set the socket timeout again before every read
+        // (what is left of it), and macOS refuses that (EINVAL, "Invalid
+        // argument") once the daemon has closed its side, failing a reply
+        // that already arrived. A fixed value is set once.
+        // A refusal is a reply to read, not an error: `handle` wants its body.
+        let agent = ureq::Agent::config_builder()
             .max_idle_connections(0)
-            .timeout_connect(Duration::from_secs(3))
-            .timeout_read(Duration::from_secs(30))
-            .timeout_write(Duration::from_secs(30))
-            .build();
+            .timeout_connect(Some(Duration::from_secs(3)))
+            .timeout_per_read(Some(Duration::from_secs(30)))
+            .timeout_per_write(Some(Duration::from_secs(30)))
+            .http_status_as_error(false)
+            .build()
+            .new_agent();
         let c = Self {
             base: format!("http://{addr}"),
             token: token.trim().to_string(),
@@ -107,9 +152,9 @@ impl Client {
         // still the dead daemon's; an unauthenticated probe would hand that
         // token to the first request (a 401 on the first unlock). Treat a
         // refused token as "not ready" so `connect` keeps waiting.
-        match c.request("GET", "/v1/status").call() {
+        match c.send("GET", "/v1/status", None) {
             Ok(r) if r.status() == 200 => {
-                let status: Value = r.into_json().unwrap_or(Value::Null);
+                let status: Value = read_json(r).unwrap_or(Value::Null);
                 if let Some(daemon) = status["version"].as_str() {
                     if let Some(words) = version_warning(daemon, env!("CARGO_PKG_VERSION")) {
                         if !VERSION_WARNING_DONE.swap(true, Ordering::Relaxed) {
@@ -150,29 +195,45 @@ impl Client {
         Self::from_files(paths)
     }
 
-    fn request(&self, method: &str, path: &str) -> ureq::Request {
-        let mut r = self
-            .agent
-            .request(method, &format!("{}{}", self.base, path))
-            .set("Authorization", &format!("Bearer {}", self.token));
+    /// One request to the daemon, with the session token and, when this
+    /// client holds one, the owner token. ureq decides from the method whether
+    /// a request may carry a body, so the request is built from the `http`
+    /// types and run as it is.
+    fn send(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+    ) -> Result<Response, ureq::Error> {
+        let mut req = ureq::http::Request::builder()
+            .method(method)
+            .uri(format!("{}{}", self.base, wire_path(path)))
+            .header("Authorization", format!("Bearer {}", self.token));
         if let Some(o) = self
             .owner
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
         {
-            r = r.set(unseenkey_daemon::token::OWNER_HEADER, o);
+            req = req.header(unseenkey_daemon::token::OWNER_HEADER, o.as_str());
         }
-        r
+        match body {
+            Some(v) => self.agent.run(
+                req.header("Content-Type", "application/json")
+                    .body(v.to_string())?,
+            ),
+            None => self.agent.run(req.body(())?),
+        }
     }
 
-    fn handle(r: Result<ureq::Response, ureq::Error>) -> Result<Value, CliError> {
+    fn handle(r: Result<Response, ureq::Error>) -> Result<Value, CliError> {
         match r {
-            Ok(resp) => resp
-                .into_json()
-                .map_err(|e| CliError::general(format!("bad response: {e}"))),
-            Err(ureq::Error::Status(code, resp)) => {
-                let body: Value = resp.into_json().unwrap_or(Value::Null);
+            Ok(resp) if resp.status().as_u16() < 400 => {
+                read_json(resp).map_err(|e| CliError::general(format!("bad response: {e}")))
+            }
+            Ok(resp) => {
+                let code = resp.status().as_u16();
+                let body: Value = read_json(resp).unwrap_or(Value::Null);
                 let err = body["error"].as_str().unwrap_or("error").to_string();
                 // Not every refusal comes with words: the size limit answers with none.
                 let msg = match (body["message"].as_str(), code) {
@@ -196,19 +257,19 @@ impl Client {
 
     /// GET.
     pub fn get(&self, path: &str) -> Result<Value, CliError> {
-        Self::handle(self.request("GET", path).call())
+        Self::handle(self.send("GET", path, None))
     }
     /// POST JSON.
     pub fn post(&self, path: &str, body: Value) -> Result<Value, CliError> {
-        Self::handle(self.request("POST", path).send_json(body))
+        Self::handle(self.send("POST", path, Some(&body)))
     }
     /// PATCH JSON.
     pub fn patch(&self, path: &str, body: Value) -> Result<Value, CliError> {
-        Self::handle(self.request("PATCH", path).send_json(body))
+        Self::handle(self.send("PATCH", path, Some(&body)))
     }
     /// DELETE.
     pub fn delete(&self, path: &str) -> Result<Value, CliError> {
-        Self::handle(self.request("DELETE", path).call())
+        Self::handle(self.send("DELETE", path, None))
     }
 
     /// `http://127.0.0.1:<port>` of the connected daemon.
@@ -220,9 +281,9 @@ impl Client {
     pub fn mcp_token_works(&self, token: &str) -> bool {
         self.agent
             .post(&format!("{}/mcp", self.base))
-            .set("Authorization", &format!("Bearer {token}"))
-            .set("Content-Type", "application/json")
-            .send_string(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json")
+            .send(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
             .is_ok_and(|r| r.status() == 200)
     }
 
@@ -336,5 +397,30 @@ impl Client {
             "wrong_password",
             "not confirmed",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wire_path;
+
+    #[test]
+    fn a_name_with_a_space_makes_a_valid_request_path() {
+        assert_eq!(
+            wire_path("/v1/handles/stripe env"),
+            "/v1/handles/stripe%20env"
+        );
+        assert_eq!(wire_path("/v1/secrets/a#b/test"), "/v1/secrets/a%23b/test");
+        assert_eq!(wire_path("/v1/secrets/caf\u{e9}"), "/v1/secrets/caf%C3%A9");
+        // A query keeps its shape, and what is encoded already is left alone.
+        assert_eq!(
+            wire_path("/v1/audit?kind=use&secret=my key"),
+            "/v1/audit?kind=use&secret=my%20key"
+        );
+        assert_eq!(wire_path("/v1/secrets/a%20b"), "/v1/secrets/a%20b");
+        for p in ["/v1/handles/stripe env", "/v1/audit?secret=my key"] {
+            let uri = format!("http://127.0.0.1:1{}", wire_path(p));
+            assert!(uri.parse::<ureq::http::Uri>().is_ok(), "{uri}");
+        }
     }
 }

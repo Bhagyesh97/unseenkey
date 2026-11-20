@@ -190,30 +190,29 @@ struct Env {
     _dir: tempfile::TempDir,
 }
 
-fn outcome(r: Result<ureq::Response, ureq::Error>) -> (u16, String) {
+fn outcome(r: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> (u16, String) {
     match r {
         Ok(resp) => {
-            let code = resp.status();
-            (code, resp.into_string().unwrap_or_default())
+            let code = resp.status().as_u16();
+            (code, resp.into_body().read_to_string().unwrap_or_default())
         }
-        Err(ureq::Error::Status(code, resp)) => (code, resp.into_string().unwrap_or_default()),
         Err(e) => (0, format!("transport: {e}")),
     }
 }
 
 impl Env {
     fn mgmt(&self, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
-        let mut req = self
-            .agent
-            .request(method, &format!("{}{}", self.base, path))
-            .set("Authorization", &format!("Bearer {}", self.token))
-            .set("Content-Type", "application/json");
+        let mut req = ureq::http::Request::builder()
+            .method(method)
+            .uri(format!("{}{}", self.base, path))
+            .header("Authorization", &format!("Bearer {}", self.token))
+            .header("Content-Type", "application/json");
         if let Some(o) = self.owner.lock().unwrap().as_ref() {
-            req = req.set("X-Usk-Owner", o);
+            req = req.header("X-Usk-Owner", o);
         }
         let (code, text) = outcome(match body {
-            Some(b) => req.send_string(&b.to_string()),
-            None => req.call(),
+            Some(b) => self.agent.run(req.body(b.to_string()).unwrap()),
+            None => self.agent.run(req.body(()).unwrap()),
         });
         let v: Value = serde_json::from_str(&text).unwrap_or(Value::String(text));
         if code == 200 && path == "/v1/unlock" {
@@ -241,7 +240,7 @@ impl Env {
         outcome(
             self.agent
                 .get(&format!("{}{path}", self.base))
-                .set("Authorization", authorization)
+                .header("Authorization", authorization)
                 .call(),
         )
     }
@@ -322,11 +321,13 @@ async fn setup(extra_hosts: &[&str]) -> Env {
         base: format!("http://{}", daemon.addr),
         token: daemon.token().to_string(),
         owner: Mutex::new(None),
-        agent: ureq::AgentBuilder::new()
-            .timeout_read(Duration::from_secs(60))
-            .timeout_write(Duration::from_secs(60))
-            .redirects(0)
-            .build(),
+        agent: ureq::Agent::config_builder()
+            .timeout_per_read(Some(Duration::from_secs(60)))
+            .timeout_per_write(Some(Duration::from_secs(60)))
+            .max_redirects(0)
+            .http_status_as_error(false)
+            .build()
+            .new_agent(),
         mock: m,
         daemon,
         _dir: dir,
@@ -378,10 +379,12 @@ fn callers(
             .map(|t| {
                 let (start, call, check) = (&start, &call, &check);
                 sc.spawn(move || {
-                    let agent = ureq::AgentBuilder::new()
-                        .timeout_read(Duration::from_secs(60))
-                        .redirects(0)
-                        .build();
+                    let agent = ureq::Agent::config_builder()
+                        .timeout_per_read(Some(Duration::from_secs(60)))
+                        .max_redirects(0)
+                        .http_status_as_error(false)
+                        .build()
+                        .new_agent();
                     start.wait();
                     (0..each)
                         .map(|i| {
@@ -485,7 +488,7 @@ async fn a_two_part_key_under_load() {
             100,
             |agent, tid, _| {
                 let auth = if tid % 2 == 0 { &bearer } else { &sdk };
-                outcome(agent.get(&url).set("Authorization", auth).call())
+                outcome(agent.get(&url).header("Authorization", auth).call())
             },
             |code, body| {
                 assert_eq!(code, 200, "{body}");
@@ -545,7 +548,7 @@ async fn replacing_a_key_during_traffic_never_mixes_the_parts() {
             let mut t = callers(
                 32,
                 150,
-                |agent, _, _| outcome(agent.get(&url).set("Authorization", &handle).call()),
+                |agent, _, _| outcome(agent.get(&url).header("Authorization", &handle).call()),
                 |code, body| {
                     assert_eq!(code, 200, "{body}");
                     if body.contains(&pa[6..]) || body.contains(&pb[6..]) {
@@ -583,7 +586,7 @@ async fn a_service_account_signs_in_once_however_many_callers() {
         let handle = format!("Bearer {}", e.handle("gsc", None));
         let url = format!("{}/p/generic/@{API}/v1/things", e.base);
         let call = |agent: &ureq::Agent, _: usize, _: usize| {
-            outcome(agent.get(&url).set("Authorization", &handle).call())
+            outcome(agent.get(&url).header("Authorization", &handle).call())
         };
         let clean = |code: u16, body: &str| {
             assert_eq!(code, 200, "{body}");
@@ -681,7 +684,7 @@ async fn locking_during_traffic() {
                 200,
                 |agent, tid, _| {
                     let (u, h) = if tid % 2 == 0 { (&ut, &ht) } else { (&ug, &hg) };
-                    outcome(agent.get(u).set("Authorization", h).call())
+                    outcome(agent.get(u).header("Authorization", h).call())
                 },
                 |code, body| {
                     assert!(code != 0 && code < 500, "{code} {body}");
@@ -896,10 +899,10 @@ async fn a_key_file_does_not_hold_back_a_stream() {
         let resp = e
             .agent
             .get(&format!("{}/p/plivo/sse", e.base))
-            .set("Authorization", &handle)
+            .header("Authorization", &handle)
             .call()
             .unwrap();
-        let mut reader = resp.into_reader();
+        let mut reader = resp.into_body().into_reader();
         let mut buf = [0u8; 4096];
         let (mut first, mut total) = (None, 0);
         loop {
@@ -971,8 +974,8 @@ async fn host_locks_and_redirects() {
             let (code, body) = outcome(
                 e.agent
                     .get(&format!("{}/p/jira/rest/api/3/myself", e.base))
-                    .set("Authorization", &handle)
-                    .set("X-Usk-Upstream", host)
+                    .header("Authorization", &handle)
+                    .header("X-Usk-Upstream", host)
                     .call(),
             );
             println!("jira -> header {host:<42} {code}");
@@ -987,15 +990,22 @@ async fn host_locks_and_redirects() {
         }
         // A provider's redirect is passed on, not followed with the key.
         let before = e.seen();
-        let r = ureq::AgentBuilder::new()
-            .redirects(0)
+        let r = ureq::Agent::config_builder()
+            .max_redirects(0)
+            .http_status_as_error(false)
             .build()
+            .new_agent()
             .get(&format!("{}/p/jira/@site.atlassian.net/redirect", e.base))
-            .set("Authorization", &handle)
+            .header("Authorization", &handle)
             .call();
         let (code, loc) = match r {
-            Ok(resp) => (resp.status(), resp.header("location").map(str::to_string)),
-            Err(ureq::Error::Status(c, resp)) => (c, resp.header("location").map(str::to_string)),
+            Ok(resp) => (
+                resp.status().as_u16(),
+                resp.headers()
+                    .get("location")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string),
+            ),
             Err(x) => panic!("{x}"),
         };
         println!("redirect: {code} {loc:?}");
@@ -1320,9 +1330,9 @@ async fn ai_tools_in_parallel() {
                 outcome(
                     agent
                         .post(&url)
-                        .set("Authorization", &format!("Bearer {token}"))
-                        .set("Content-Type", "application/json")
-                        .send_string(
+                        .header("Authorization", &format!("Bearer {token}"))
+                        .header("Content-Type", "application/json")
+                        .send(
                             &json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": args } }).to_string(),
                         ),
                 )
@@ -1339,9 +1349,9 @@ async fn ai_tools_in_parallel() {
         let (_, body) = outcome(
             e.agent
                 .post(&url)
-                .set("Authorization", &format!("Bearer {token}"))
-                .set("Content-Type", "application/json")
-                .send_string(
+                .header("Authorization", &format!("Bearer {token}"))
+                .header("Content-Type", "application/json")
+                .send(
                     &json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "list_secrets", "arguments": {} } }).to_string(),
                 ),
         );
@@ -1405,16 +1415,18 @@ async fn a_long_mixed_run() {
                     .map(|tid| {
                         let (ut, ug, ht, hg, start) = (&ut, &ug, &ht, &hg, &start);
                         sc.spawn(move || {
-                            let agent = ureq::AgentBuilder::new()
-                                .timeout_read(Duration::from_secs(60))
-                                .build();
+                            let agent = ureq::Agent::config_builder()
+                                .timeout_per_read(Some(Duration::from_secs(60)))
+                                .http_status_as_error(false)
+                                .build()
+                                .new_agent();
                             start.wait();
                             let (mut m, mut b) = (Vec::new(), 0usize);
                             while Instant::now() < until {
                                 let (u, h) = if tid % 2 == 0 { (ut, ht) } else { (ug, hg) };
                                 let t0 = Instant::now();
                                 let (code, _) =
-                                    outcome(agent.get(u).set("Authorization", h).call());
+                                    outcome(agent.get(u).header("Authorization", h).call());
                                 m.push(t0.elapsed().as_micros());
                                 if code != 200 {
                                     b += 1;
