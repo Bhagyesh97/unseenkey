@@ -2,6 +2,14 @@
 
 The top section of this file becomes the release notes when a `v*` tag is pushed.
 
+## 0.1.11 — unreleased
+
+Maintenance. Nothing changes in what the vault stores or in how a key is used.
+
+- A name containing `#` now reaches the service whole. Before, `usk handle show` and the other commands that put a name in a request cut it at the `#`.
+- Dependencies brought up to date: `ureq` 3, `jiff` 1.0, `hmac` 0.13 with `sha2` 0.11 and `hkdf` 0.13, `rusqlite` 0.43, `base64` 0.23, Vite 8 and TypeScript 7. Tests now pin the keys a vault derives, so an update that changed them would fail before it shipped.
+- The release is built with newer versions of the signing and packaging actions (`cosign-installer` 4, `tauri-action` 1). The app's updater now downloads through `api.github.com`.
+
 ## 0.1.10 — 2026-11-19
 
 Security fixes, for every earlier version. They come from a review of the whole project; nothing here was reported from outside. Please update. **After updating, run `usk daemon restart`:** the background service keeps running the old code until it restarts.
