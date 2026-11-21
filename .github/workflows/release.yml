@@ -177,11 +177,14 @@ jobs:
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
       # SHA256SUMS is not made here: the `checksums` job writes it at the end,
       # over these files and the desktop installers together.
+      # One Sigstore bundle per file (signature, certificate and log entry
+      # together). cosign 3 writes nothing else: the separate .sig and .pem
+      # files of 0.1.10 and earlier are gone.
       - name: sign (keyless, Sigstore)
         run: |
           cd dist
           for f in *.tar.gz *.zip *.mcpb; do
-            cosign sign-blob --yes --output-signature "$f.sig" --output-certificate "$f.pem" "$f"
+            cosign sign-blob --yes --bundle "$f.sigstore.json" "$f"
           done
           ls -la
       - name: SBOM (from Cargo.lock and package-lock.json)
@@ -327,10 +330,11 @@ jobs:
           while IFS=$'\t' read -r id name; do
             case "$name" in
               # An earlier attempt's list: replaced below.
-              SHA256SUMS | SHA256SUMS.sig | SHA256SUMS.pem)
+              SHA256SUMS | SHA256SUMS.sigstore.json)
                 gh api -X DELETE "$api/assets/$id" < /dev/null
                 ;;
-              *.sig | *.pem)
+              # Sigstore bundles, and the updater's minisign .sig files.
+              *.sigstore.json | *.sig)
                 gh api -H "Accept: application/octet-stream" "$api/assets/$id" < /dev/null > "signatures/$name"
                 ;;
               *)
@@ -344,11 +348,10 @@ jobs:
         run: |
           set -euo pipefail
           checked=0
-          for pem in signatures/*.pem; do
-            name=$(basename "$pem" .pem)
+          for bundle in signatures/*.sigstore.json; do
+            name=$(basename "$bundle" .sigstore.json)
             cosign verify-blob \
-              --certificate "$pem" \
-              --signature "signatures/$name.sig" \
+              --bundle "$bundle" \
               --certificate-identity "https://github.com/${GITHUB_WORKFLOW_REF}" \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com \
               "files/$name"
@@ -366,8 +369,8 @@ jobs:
           set -euo pipefail
           (cd files && sha256sum -- * > ../SHA256SUMS)
           cat SHA256SUMS
-          cosign sign-blob --yes --output-signature SHA256SUMS.sig --output-certificate SHA256SUMS.pem SHA256SUMS
-          for f in SHA256SUMS SHA256SUMS.sig SHA256SUMS.pem; do
+          cosign sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
+          for f in SHA256SUMS SHA256SUMS.sigstore.json; do
             curl --fail-with-body --silent --show-error -X POST \
               -H "Authorization: Bearer ${GH_TOKEN}" \
               -H "Accept: application/vnd.github+json" \
