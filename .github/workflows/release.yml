@@ -174,7 +174,7 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
       # SHA256SUMS is not made here: the `checksums` job writes it at the end,
       # over these files and the desktop installers together.
       - name: sign (keyless, Sigstore)
@@ -280,7 +280,7 @@ jobs:
           echo "${{ secrets.WINDOWS_CERTIFICATE }}" | base64 -d > "$RUNNER_TEMP/cert.pfx"
           echo "TAURI_WINDOWS_SIGN_PFX=$RUNNER_TEMP/cert.pfx" >> "$GITHUB_ENV"
           echo "TAURI_WINDOWS_SIGN_PFX_PASSWORD=${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}" >> "$GITHUB_ENV"
-      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
+      - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -291,7 +291,7 @@ jobs:
           releaseId: ${{ needs.release.outputs.release_id }}
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
-          includeUpdaterJson: true
+          uploadUpdaterJson: true
           args: ${{ matrix.args }}
 
   checksums:
@@ -313,7 +313,7 @@ jobs:
       contents: write # attach SHA256SUMS to the draft
       id-token: write # Sigstore keyless signing
     steps:
-      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
       - name: download every file on the draft
         shell: bash
         env:
