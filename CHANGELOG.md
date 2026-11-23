@@ -2,7 +2,7 @@
 
 The top section of this file becomes the release notes when a `v*` tag is pushed.
 
-## 0.1.11 — unreleased
+## 0.1.11 — 2026-11-23
 
 Maintenance. Nothing changes in what the vault stores or in how a key is used.
 
