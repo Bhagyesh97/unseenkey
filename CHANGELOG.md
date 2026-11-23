@@ -2,12 +2,13 @@
 
 The top section of this file becomes the release notes when a `v*` tag is pushed.
 
-## 0.1.11 — unreleased
+## 0.1.11 — 2026-11-23
 
 Maintenance. Nothing changes in what the vault stores or in how a key is used.
 
 - A name containing `#` now reaches the service whole. Before, `usk handle show` and the other commands that put a name in a request cut it at the `#`.
 - Dependencies brought up to date: `ureq` 3, `jiff` 1.0, `hmac` 0.13 with `sha2` 0.11 and `hkdf` 0.13, `rusqlite` 0.43, `base64` 0.23, Vite 8 and TypeScript 7. Tests now pin the keys a vault derives, so an update that changed them would fail before it shipped.
+- `url` 2.5.9 and `cookie` 0.18.3, for two advisories published on those libraries (RUSTSEC-2026-0592 and RUSTSEC-2026-0594). Both come in through other libraries; this is the update the advisories ask for, not a fix for a known way to misuse Unseenkey.
 - The release is built with newer versions of the signing and packaging actions (`cosign-installer` 4, `tauri-action` 1). The app's updater now downloads through `api.github.com`.
 - **A signature is now one file.** `SHA256SUMS.sigstore.json` takes the place of `SHA256SUMS.sig` and `SHA256SUMS.pem`, and each CLI archive has a `.sigstore.json` beside it. The README's "Verify a download" has the new command.
 
