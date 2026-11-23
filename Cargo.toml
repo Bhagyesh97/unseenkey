@@ -15,7 +15,7 @@ rust-version = "1.85"
 [workspace.dependencies]
 # crypto (RustCrypto + friends); versions pinned to a mutually compatible set
 argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
-chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc"] }
 hkdf = "0.13"
 sha2 = { version = "0.11", default-features = false }
 # HMAC-SHA256 for AWS SigV4 (already in the tree through hkdf).
