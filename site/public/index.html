@@ -51,7 +51,7 @@
         "url": "https://unseenkey.com/",
         "description": "A local vault and policy broker that lets AI agents, scripts and hired developers use your API keys without ever seeing them.",
         "applicationCategory": "SecurityApplication",
-        "softwareVersion": "0.1.10",
+        "softwareVersion": "0.1.11",
         "operatingSystem": "Windows, macOS, Linux",
         "license": "https://www.apache.org/licenses/LICENSE-2.0",
         "downloadUrl": "https://github.com/Bhagyesh97/unseenkey/releases/latest",
@@ -98,7 +98,7 @@
   <section class="hero">
     <div class="wrap hero-grid">
       <div class="hero-copy">
-        <a class="badge" href="https://github.com/Bhagyesh97/unseenkey/releases/latest"><b>v0.1.10</b> · open source · Windows, macOS, Linux</a>
+        <a class="badge" href="https://github.com/Bhagyesh97/unseenkey/releases/latest"><b>v0.1.11</b> · open source · Windows, macOS, Linux</a>
         <h1>Your AI <em>uses</em> your API keys. It never <em>sees</em> them.</h1>
         <p class="lead">Unseenkey keeps your keys in an encrypted vault on your own machine and gives Claude Code, Cursor, your scripts and the people you hire a <strong>handle</strong> instead. A handle works only through Unseenkey, within rules you set, and every call is logged.</p>
         <p class="lead strong">A leaked handle costs you nothing. A leaked key costs you until you notice.</p>
@@ -441,9 +441,10 @@ cargo install --locked --git https://github.com/Bhagyesh97/unseenkey usk</pre>
         <p class="fine">Installers for Windows (MSI, EXE), macOS (DMG) and Linux (deb, rpm, AppImage), and CLI archives for every platform. Claude Desktop users can install the <code>.mcpb</code> bundle from the same page; the server is also in the <a href="https://registry.modelcontextprotocol.io/v0/servers?search=io.github.Bhagyesh97/unseenkey">MCP registry</a> as <code>io.github.Bhagyesh97/unseenkey</code>. The installers are not yet code-signed, so Windows SmartScreen and macOS Gatekeeper warn on first launch.</p>
       </div>
       <div data-reveal>
-        <h2>Eleven releases in four weeks</h2>
+        <h2>Twelve releases in five weeks</h2>
         <p class="sub">Built in the open since 30 September. <a href="https://github.com/Bhagyesh97/unseenkey/blob/main/CHANGELOG.md">Full changelog</a>.</p>
         <ol class="releases">
+          <li><b>0.1.11</b><time>24 Nov</time><span>Maintenance: dependencies brought up to date, two of them for published advisories, and a name containing # now reaches the service whole. A release signature is now one Sigstore bundle file.</span></li>
           <li><b>0.1.10</b><time>19 Nov</time><span>Security fixes from a review of the whole project: a provider's key could be read back through the generic route; replacing, renaming or deleting a key now needs the owner; limits hold when requests arrive together. Every release file is on one signed list of checksums.</span></li>
           <li><b>0.1.9</b><time>11 Nov</time><span>Security fixes: a handle could reach another host on wildcard keys, and <code>..</code> could get past policies. Google service account keys, keys in two parts, 73 providers, <code>usk passwd</code>.</span></li>
           <li><b>0.1.8</b><time>1 Nov</time><span>The desktop app shows update progress and errors, and checks for updates while it runs in the tray.</span></li>
