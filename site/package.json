@@ -10,7 +10,7 @@
     "animejs": "^4.5.0",
     "esbuild": "^0.28.2",
     "three": "^0.187.0",
-    "wrangler": "^4.163.0"
+    "wrangler": "^4.167.0"
   },
   "overrides": {
     "undici": "7.30.1"
